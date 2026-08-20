@@ -32,23 +32,29 @@ binding = "THREADS_DB_INR"
 database_name = "inr-ticket-threads"
 database_id = "1327b88e-ceda-405d-94ff-8a7ea7da269d"
 
-# === PKR（真实值，从 PKR 项目原始 wrangler.toml 抄）===
-[[r2_buckets]]
-binding = "SCREENSHOTS_BUCKET_PKR"
-bucket_name = "pkr-issuescreenshot"
+# === PKR（暂时注释掉 —— 2026-08-20：这两个 ID 是原 PKR 项目账号下的
+# 真实 ID，但当前部署用的是新 Cloudflare 账号，这个账号下还没有对应的
+# namespace/bucket，直接留着会导致部署报错。等你把 PKR 的 KV
+# namespace 和 R2 bucket 移到这个新账号后，把下面取消注释、把 id 换成
+# 新账号里的真实 ID 即可 —— resolveThreadsKv() 在绑定缺失时会优雅返回
+# null，PKR 功能会正常显示"该国存储未绑定"而不是让别的国家一起崩掉，
+# 所以先注释掉不会影响 INR 现在能正常工作。）===
+# [[r2_buckets]]
+# binding = "SCREENSHOTS_BUCKET_PKR"
+# bucket_name = "pkr-issuescreenshot"
+#
+# [[kv_namespaces]]
+# binding = "THREADS_KV_PKR"
+# id = "c8ca68f7781a4f1b88d0997af023aec7"
 
-[[kv_namespaces]]
-binding = "THREADS_KV_PKR"
-id = "c8ca68f7781a4f1b88d0997af023aec7"
-
-# === PHP（真实值，从 PHP 项目原始 wrangler.toml 抄）===
-[[r2_buckets]]
-binding = "SCREENSHOTS_BUCKET_PHP"
-bucket_name = "php-issuescreenshot"
-
-[[kv_namespaces]]
-binding = "THREADS_KV_PHP"
-id = "0e6719a9def74126ad2071feb919d625"
+# === PHP（暂时注释掉，原因同上 PKR ===
+# [[r2_buckets]]
+# binding = "SCREENSHOTS_BUCKET_PHP"
+# bucket_name = "php-issuescreenshot"
+#
+# [[kv_namespaces]]
+# binding = "THREADS_KV_PHP"
+# id = "0e6719a9def74126ad2071feb919d625"
 
 [vars]
 # Bot Token 走 Cloudflare 加密 secret（不进这个文件/git），部署后要在
