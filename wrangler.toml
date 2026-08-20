@@ -1,0 +1,69 @@
+name = "hub-merged"
+pages_build_output_dir = "public"
+
+# 三国合并（2026-08-20）—— 真实的绑定配置，不是补丁说明。下面每一个
+# id / bucket_name / database_id 都是从三份原始 wrangler.toml 里原样
+# 抄过来的真实值，不是占位符（除了 ACCOUNTS_KV，这是全新概念，见下）。
+
+# === 全局共享（不按国家拆分）===
+# 账号/办公室/session/在线状态 —— 见 functions/_shared/countries.js
+# 顶部的架构说明：账号要能同时属于多个国家，不能被拆进某一国的 KV 里。
+# ⚠️ 这是全新的 namespace，三份原项目都没有，需要你们在 Cloudflare
+# 控制台手动创建一个新的 KV namespace，把这行的 id 换成真实创建出来的
+# ID（`wrangler kv namespace create ACCOUNTS_KV` 或在控制台里建）。
+# 创建后，还需要把三国现有账号数据合并迁移进来（见
+# functions/api/admin/migrate-countries.js 文件头部的说明——迁移脚本
+# 只管补字段，不管三国账号库的实际合并去重，那一步要人工做）。
+[[kv_namespaces]]
+binding = "ACCOUNTS_KV"
+id = "REPLACE_WITH_A_NEW_KV_NAMESPACE_ID_YOU_CREATE"
+
+# === INR（真实值，从 INR 项目原始 wrangler.toml 抄）===
+[[r2_buckets]]
+binding = "SCREENSHOTS_BUCKET_INR"
+bucket_name = "inr-issuescreenshot"
+
+[[kv_namespaces]]
+binding = "THREADS_KV_INR"
+id = "4821238464004b8289e4ded5a467d582"
+
+[[d1_databases]]
+binding = "THREADS_DB_INR"
+database_name = "inr-ticket-threads"
+database_id = "1327b88e-ceda-405d-94ff-8a7ea7da269d"
+
+# === PKR（真实值，从 PKR 项目原始 wrangler.toml 抄）===
+[[r2_buckets]]
+binding = "SCREENSHOTS_BUCKET_PKR"
+bucket_name = "pkr-issuescreenshot"
+
+[[kv_namespaces]]
+binding = "THREADS_KV_PKR"
+id = "c8ca68f7781a4f1b88d0997af023aec7"
+
+# === PHP（真实值，从 PHP 项目原始 wrangler.toml 抄）===
+[[r2_buckets]]
+binding = "SCREENSHOTS_BUCKET_PHP"
+bucket_name = "php-issuescreenshot"
+
+[[kv_namespaces]]
+binding = "THREADS_KV_PHP"
+id = "0e6719a9def74126ad2071feb919d625"
+
+[vars]
+# Bot Token 走 Cloudflare 加密 secret（不进这个文件/git），部署后要在
+# Cloudflare 控制台 Settings → Environment variables 分别设置：
+#   TELEGRAM_BOT_TOKEN_INR
+#   TELEGRAM_BOT_TOKEN_PKR
+#   TELEGRAM_BOT_TOKEN_PHP
+# （PKR 现在这三个的值大概率还是空的——PKR 项目本来就是"群组还没配好"
+# 的占位符状态，这个不是我漏填，是原项目就这样）
+
+# Google Sheets 服务账号——如果三国原本用同一个服务账号，这里继续只
+# 设一份即可：
+# GOOGLE_SERVICE_ACCOUNT_EMAIL = "..."
+# GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY = "..."
+
+# 依然需要在 Cloudflare 控制台把 Build command 设成 "npm install"
+# （telegramImageCompress.js 的 @cf-wasm/photon 依赖），这个和合并
+# 无关，PKR 原项目本来就需要这一步。
