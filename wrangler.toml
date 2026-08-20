@@ -8,15 +8,26 @@ pages_build_output_dir = "public"
 # === 全局共享（不按国家拆分）===
 # 账号/办公室/session/在线状态 —— 见 functions/_shared/countries.js
 # 顶部的架构说明：账号要能同时属于多个国家，不能被拆进某一国的 KV 里。
-# ⚠️ 这是全新的 namespace，三份原项目都没有，需要你们在 Cloudflare
-# 控制台手动创建一个新的 KV namespace，把这行的 id 换成真实创建出来的
-# ID（`wrangler kv namespace create ACCOUNTS_KV` 或在控制台里建）。
-# 创建后，还需要把三国现有账号数据合并迁移进来（见
-# functions/api/admin/migrate-countries.js 文件头部的说明——迁移脚本
-# 只管补字段，不管三国账号库的实际合并去重，那一步要人工做）。
+#
+# ⚠️ 临时方案（2026-08-20）—— 暂时借用 INR 的 THREADS_KV_INR namespace
+# （inr-ticket-threads，id 4821238464004b8289e4ded5a467d582）当
+# ACCOUNTS_KV 用，不是新建的独立 namespace。这是业务方明确确认过的临时
+# 决定：核对过两边用到的 KV key 前缀（账号侧 account:/office:/
+# offices-index/accounts-index/activitylog:/presence:current:/
+# presence:daily:/promo-code-sheet:/blocked-ips/pending-ips/
+# ip-access-log/route:_security:alerts，工单侧 thread:/msgid:/
+# mention-registry:/deposit-sheet:/deposit-backup:/issue-sheet:/
+# announcements/route:<brandId>:<moduleId> 等），没有任何一个前缀会
+# 撞车，混用不会导致数据互相覆盖。
+# 但账号密码哈希/session token 这些"全局"数据目前是先寄存在这个本来是
+# "INR 工单专用"的 namespace 里 —— 等以后建了真正独立的 ACCOUNTS_KV，
+# 需要手动把 account:*/office:*/offices-index/accounts-index/
+# activitylog:*/presence:*/promo-code-sheet:*/blocked-ips/pending-ips/
+# ip-access-log/route:_security:alerts 这些 key 导出来搬过去（
+# `wrangler kv key list` + 逐个 `get`/`put`），不会自动发生。
 [[kv_namespaces]]
 binding = "ACCOUNTS_KV"
-id = "REPLACE_WITH_A_NEW_KV_NAMESPACE_ID_YOU_CREATE"
+id = "4821238464004b8289e4ded5a467d582"
 
 # === INR（真实值，从 INR 项目原始 wrangler.toml 抄）===
 [[r2_buckets]]
