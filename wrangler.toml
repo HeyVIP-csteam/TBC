@@ -9,6 +9,18 @@ pages_build_output_dir = "public"
 # 里原样搬过来（INR/PKR/PHP 各自现有的 bucket_name 和 KV namespace id 不要改，
 # 直接照抄，这样合并后读到的还是原来那些真实数据，不会变成空的新命名空间）。
 
+# === 全局共享（不按国家拆分）===
+# 账号/办公室/session/在线状态——见 functions/_shared/countries.js 顶部的
+# 架构说明：账号要能同时属于多个国家，所以不能被拆进某一国的 KV 里。
+[[kv_namespaces]]
+binding = "ACCOUNTS_KV"
+id = "REPLACE_WITH_A_NEW_KV_NAMESPACE_ID"    # 这是全新的 namespace，三份原项目都没有，
+                                               # 需要新建一个，然后把三国现有账号数据
+                                               # 迁移进来（不是从某一国的 THREADS_KV
+                                               # 直接改名字了事——三国现有账号数据要
+                                               # 合并去重，同名账号需要你们人工确认
+                                               # 是不是同一个人）
+
 # === INR ===
 [[r2_buckets]]
 binding = "SCREENSHOTS_BUCKET_INR"
