@@ -43,7 +43,7 @@
  * at submission time.
  */
 import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, requestIP } from "../../_shared/accounts.js";
-import { getAllRouteOverrides, saveRouteOverride, deleteRouteOverride, getRouteOverride } from "../../_shared/routes.js";
+import { getAllRouteOverrides, saveRouteOverride, deleteRouteOverride, getSecurityAlertsRoute, saveSecurityAlertsRoute, deleteSecurityAlertsRoute } from "../../_shared/routes.js";
 import { BRANDS, MODULE_META } from "../../_shared/routing.js";
 import { logActivity } from "../../_shared/activityLog.js";
 
@@ -59,7 +59,6 @@ export async function onRequestGet(context) {
 }
 
 async function handleGet({ request, env }) {
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
   // Base auth floor lowered to Senior (this section used to be
   // SuperAdmin-only at the auth layer too) — actual visibility is now
   // decided by canSeeAdminSection below, same as every other section.
@@ -73,7 +72,7 @@ async function handleGet({ request, env }) {
   const moduleIds = Object.keys(MODULE_META);
   const overrides = await getAllRouteOverrides(env, brandIds, moduleIds);
 
-  const brands = brandIds.map((id) => ({ id, name: BRANDS[id].name }));
+  const brands = brandIds.map((id) => ({ id, name: BRANDS[id].name, country: BRANDS[id].country }));
   const modules = moduleIds.map((id) => ({ id, name: MODULE_META[id].name, emoji: MODULE_META[id].emoji }));
 
   const routes = {};
@@ -90,7 +89,7 @@ async function handleGet({ request, env }) {
     }
   }
 
-  const securityOverride = await getRouteOverride(env, SECURITY_BRAND_ID, SECURITY_MODULE_ID);
+  const securityOverride = await getSecurityAlertsRoute(env);
   const securityAlerts = securityOverride
     ? { chatId: securityOverride.chatId, topicId: securityOverride.topicId, isOverride: true }
     : { chatId: env.SECURITY_ALERTS_CHAT_ID || "", topicId: env.SECURITY_ALERTS_TOPIC_ID || null, isOverride: false };
@@ -107,7 +106,6 @@ export async function onRequestPost(context) {
 }
 
 async function handlePost({ request, env, waitUntil }) {
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
   const auth = await authenticateStaff(request, env, ROLE_RANK.senior);
   if (!auth.ok) return json({ ok: false, error: "Not authorized." }, 401);
   if (!canEditAdminSection(auth.account, "tgRoutes")) {
@@ -136,7 +134,9 @@ async function handlePost({ request, env, waitUntil }) {
 
   if (body.action === "save") {
     try {
-      const saved = await saveRouteOverride(env, brandId, moduleId, { chatId: body.chatId, topicId: body.topicId });
+      const saved = isSecurityRow
+        ? await saveSecurityAlertsRoute(env, { chatId: body.chatId, topicId: body.topicId })
+        : await saveRouteOverride(env, brandId, moduleId, { chatId: body.chatId, topicId: body.topicId });
       const label = isSecurityRow ? "Security Alerts" : `${BRANDS[brandId]?.name || brandId} / ${MODULE_META[moduleId]?.name || moduleId}`;
       log({ action: "TG Route Changed", detail: `${label} → chat ${body.chatId}${body.topicId ? `, topic ${body.topicId}` : ""}` });
       return json({ ok: true, route: { ...saved, isOverride: true } });
@@ -146,7 +146,8 @@ async function handlePost({ request, env, waitUntil }) {
   }
 
   if (body.action === "reset") {
-    await deleteRouteOverride(env, brandId, moduleId);
+    if (isSecurityRow) await deleteSecurityAlertsRoute(env);
+    else await deleteRouteOverride(env, brandId, moduleId);
     const label = isSecurityRow ? "Security Alerts" : `${BRANDS[brandId]?.name || brandId} / ${MODULE_META[moduleId]?.name || moduleId}`;
     log({ action: "TG Route Reset", detail: `${label} reverted to default` });
     if (isSecurityRow) {

@@ -16,7 +16,15 @@
  */
 import { listDeletions } from "../_shared/threads.js";
 import { authenticateAdmin } from "../_shared/accounts.js";
+import { resolveAllowedCountries } from "../_shared/countryAccess.js";
+import { COUNTRIES, COUNTRY_CODES } from "../_shared/countries.js";
 
+// MERGED — same "query every allowed country's own KV in parallel, tag
+// + merge" shape as functions/api/threads.js (the reference
+// implementation). Deletion log entries live in the same per-country
+// KV as the tickets they're about, so there's no separate country
+// resolution question here — it's exactly the countries the admin is
+// allowed to see, same as the ticket list itself.
 export async function onRequestGet(context) {
   try {
     return await handleGet(context);
@@ -26,10 +34,25 @@ export async function onRequestGet(context) {
 }
 
 async function handleGet({ request, env }) {
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
   const auth = await authenticateAdmin(request, env);
   if (!auth.ok) return json({ ok: false, error: "Admin login required." }, 401);
-  const entries = await listDeletions(env);
+
+  const allowedCountries = resolveAllowedCountries(auth.account, COUNTRY_CODES);
+  if (allowedCountries.length === 0) return json({ ok: true, entries: [] });
+
+  const perCountry = await Promise.all(
+    allowedCountries.map(async (country) => {
+      const kv = env[COUNTRIES[country].threadsKvBinding];
+      if (!kv) return [];
+      const entries = await listDeletions(kv);
+      return entries.map((e) => ({ ...e, country }));
+    })
+  );
+
+  // Newest first, same ordering listDeletions() already returns within
+  // one country — re-sort after merging since interleaving three
+  // already-sorted lists doesn't keep the combined list sorted.
+  const entries = perCountry.flat().sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0));
   return json({ ok: true, entries });
 }
 

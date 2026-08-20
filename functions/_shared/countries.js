@@ -92,3 +92,19 @@ export function getCountryConfig(code) {
   if (!c) throw new Error(`Unknown country code: ${code}`);
   return c;
 }
+
+// Resolves a country's own THREADS_KV binding straight from `env`, given
+// a country code. Returns null (not a throw) when the binding genuinely
+// isn't set up yet in this environment — e.g. THREADS_KV_PHP before that
+// namespace exists in wrangler.toml/dashboard — since that's an expected,
+// recoverable state during rollout (see README-MERGE.md's "still to do"
+// list), not a bug, and every caller already has to handle "this
+// country's storage isn't ready" as a normal case (skip it / 500 just
+// that country / etc.) rather than crashing the whole request.
+// Unlike getCountryConfig(), an UNKNOWN country code still throws here —
+// that one really is a bug (a typo'd code, or code that forgot to
+// validate against isValidCountry() first), not a rollout gap.
+export function resolveThreadsKv(env, code) {
+  const { threadsKvBinding } = getCountryConfig(code);
+  return env[threadsKvBinding] || null;
+}

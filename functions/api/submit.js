@@ -7,6 +7,7 @@ import { getRouteOverride } from "../_shared/routes.js";
 import { getIssueSheetOverride, resolveWriteTab, promotionModuleId } from "../_shared/issueSubmissionSheets.js";
 import { resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY, buildTicketMessage, buildTitleAndSummary } from "../_shared/messageBuilders.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
+import { resolveThreadsKv } from "../_shared/countries.js";
 
 const VALID_MODULES = Object.keys(MODULE_META);
 
@@ -97,9 +98,18 @@ async function handleSubmit({ request, env, waitUntil }) {
   // button synchronously on click, the realistic remaining race window is
   // extremely small — this closes the actual failure mode you were
   // hitting, not a theoretical one.
-  if (idempotencyKey && env.THREADS_KV) {
+  // MERGED — three separate per-country KV namespaces now exist (see
+  // _shared/countries.js) instead of one global env.THREADS_KV, which no
+  // longer exists as a binding at all post-merge. Resolved once, right
+  // after brand (and therefore brand.country) is known, and reused for
+  // both the idempotency dedupe cache below and the real createThread()
+  // call further down — both belong in the SAME country's storage as
+  // the ticket itself.
+  const kv = resolveThreadsKv(env, brand.country);
+
+  if (idempotencyKey && kv) {
     const dedupeKey = `submit_dedupe:${idempotencyKey}`;
-    const already = await env.THREADS_KV.get(dedupeKey);
+    const already = await kv.get(dedupeKey);
     if (already) {
       return new Response(already, { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -107,7 +117,7 @@ async function handleSubmit({ request, env, waitUntil }) {
     // sees SOMETHING rather than racing straight through too — overwritten
     // with the real response (see the `return` at the very end of this
     // function) once the actual Telegram/Sheet/thread work is done.
-    await env.THREADS_KV.put(dedupeKey, JSON.stringify({ ok: true, duplicate: true, note: "Original submission was still processing — this is not a second ticket." }), { expirationTtl: 60 });
+    await kv.put(dedupeKey, JSON.stringify({ ok: true, duplicate: true, note: "Original submission was still processing — this is not a second ticket." }), { expirationTtl: 60 });
   }
 
   // 三国合并（2026-08-20）—— 按品牌所属国家选对应的 Bot Token，
@@ -271,12 +281,13 @@ async function handleSubmit({ request, env, waitUntil }) {
 
   // 2c. Create a TG Reply Threads record so agent replies to this exact
   //     Telegram message can be tracked in the dashboard. Optional feature —
-  //     skipped silently until THREADS_KV is bound (see wrangler.toml).
+  //     skipped silently until this brand's country's THREADS_KV_<CODE>
+  //     is bound (see wrangler.toml).
   let threadId = null;
-  if (env.THREADS_KV) {
+  if (kv) {
     try {
       const { title, summary } = buildTitleAndSummary({ meta, brand, fieldMap, fields });
-      const thread = await createThread(env, {
+      const thread = await createThread(kv, {
         module: moduleId,
         moduleName: meta.name,
         icon: meta.emoji,
@@ -316,6 +327,7 @@ async function handleSubmit({ request, env, waitUntil }) {
     ok: true,
     telegramMessageId: tgResult.messageId,
     threadId,
+    country: brand.country,
     sheetAttempted,
     sheetLogged,
     sheetError,
@@ -329,8 +341,8 @@ async function handleSubmit({ request, env, waitUntil }) {
   // instead of silently creating a second one. Longer TTL than the
   // placeholder's 60s — 10 minutes is generous enough to cover any
   // realistically-delayed retransmit while not lingering in KV forever.
-  if (idempotencyKey && env.THREADS_KV) {
-    await env.THREADS_KV.put(`submit_dedupe:${idempotencyKey}`, JSON.stringify(finalResponse), { expirationTtl: 600 });
+  if (idempotencyKey && kv) {
+    await kv.put(`submit_dedupe:${idempotencyKey}`, JSON.stringify(finalResponse), { expirationTtl: 600 });
   }
   return json(finalResponse);
 }

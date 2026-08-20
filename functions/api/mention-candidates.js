@@ -13,8 +13,14 @@
  * see.
  */
 import { getMentionCandidates } from "../_shared/threads.js";
-import { verifyRequest } from "../_shared/accounts.js";
+import { verifyRequest, canSeeCountry } from "../_shared/accounts.js";
+import { getBrandCountry } from "../_shared/routing.js";
+import { resolveThreadsKv } from "../_shared/countries.js";
 
+// MERGED — brandId already implies which country's KV to search
+// (getBrandCountry() reads it straight off routing.js's BRANDS entry),
+// so unlike threads.js/deletion-log.js there's no fan-out here: a
+// single brand only ever lives in one country's storage.
 export async function onRequestGet(context) {
   try {
     return await handleGet(context);
@@ -24,7 +30,6 @@ export async function onRequestGet(context) {
 }
 
 async function handleGet({ request, env }) {
-  if (!env.THREADS_KV) return json({ ok: true, candidates: [] });
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
 
@@ -33,7 +38,13 @@ async function handleGet({ request, env }) {
   const moduleId = url.searchParams.get("module") || "";
   if (!brandId || !moduleId) return json({ ok: true, candidates: [] });
 
-  const candidates = await getMentionCandidates(env, brandId, moduleId);
+  const country = getBrandCountry(brandId);
+  if (!country || !canSeeCountry(account, country)) return json({ ok: true, candidates: [] });
+
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return json({ ok: true, candidates: [] });
+
+  const candidates = await getMentionCandidates(kv, brandId, moduleId);
   return json({ ok: true, candidates });
 }
 

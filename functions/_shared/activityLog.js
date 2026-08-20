@@ -43,9 +43,22 @@ function clip(str, max) {
  * should invoke this via waitUntil() (see the `log()` helper pattern used
  * in every instrumented endpoint) so it doesn't add latency either.
  */
-export async function logActivity(kv, { category, action, agent, detail, ip }) {
+/**
+ * Fire-and-forget log write. NEVER throws, NEVER lets a logging failure
+ * take down the real business operation that triggered it — callers
+ * should invoke this via waitUntil() (see the `log()` helper pattern used
+ * in every instrumented endpoint) so it doesn't add latency either.
+ *
+ * MERGED (2026-08-20) — the audit trail is global, not per-country (see
+ * the architecture note in _shared/countries.js), so this reads/writes
+ * env.ACCOUNTS_KV now instead of the old single env.THREADS_KV. Takes
+ * `env` (not a raw KV namespace) — matches every one of this project's
+ * ~20 call sites, which already all pass `env` unchanged from before the
+ * merge; only this file's internals needed to change.
+ */
+export async function logActivity(env, { category, action, agent, detail, ip }) {
   try {
-    if (!kv?.THREADS_KV) return;
+    if (!env?.ACCOUNTS_KV) return;
     const ts = Date.now();
     const entry = {
       ts,
@@ -56,7 +69,7 @@ export async function logActivity(kv, { category, action, agent, detail, ip }) {
       ip: clip(ip || "unknown", 60),
     };
     const key = `${PREFIX}${ts}:${Math.random().toString(36).slice(2, 8)}`;
-    await kv.put(key, "1", { metadata: entry });
+    await env.ACCOUNTS_KV.put(key, "1", { metadata: entry });
   } catch {
     // A logging failure must never propagate to the caller's real action.
   }
@@ -67,9 +80,14 @@ export async function logActivity(kv, { category, action, agent, detail, ip }) {
  * (metadata included, no per-entry `get()`), stopping at SAFETY_SCAN_CAP
  * keys scanned regardless of `limit` — a defensive ceiling, not something
  * normal usage should ever hit at 90-day retention.
+ *
+ * MERGED — same env.ACCOUNTS_KV switch as logActivity() above; still
+ * takes `env`, not a raw KV namespace (functions/api/admin/activity-
+ * logs.js calls this as `listActivityLog(env, ...)`).
  */
-export async function listActivityLog(kv, { limit = 1000 } = {}) {
-  if (!kv?.THREADS_KV) return [];
+export async function listActivityLog(env, { limit = 1000 } = {}) {
+  if (!env?.ACCOUNTS_KV) return [];
+  const kv = env.ACCOUNTS_KV;
   const all = [];
   let cursor;
   do {

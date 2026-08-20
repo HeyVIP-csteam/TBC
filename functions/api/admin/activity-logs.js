@@ -37,7 +37,7 @@ async function handleGet({ request, env }) {
     return json({ ok: false, error: "You don't have access to Activity Logs." }, 403);
   }
 
-  const entries = await listActivityLog(env.ACCOUNTS_KV, { limit: 1000 });
+  const entries = await listActivityLog(env, { limit: 1000 });
   const visible = entries.filter((e) => e.country === undefined || canSeeCountry(auth.account, e.country));
 
   return json({ ok: true, entries: visible });

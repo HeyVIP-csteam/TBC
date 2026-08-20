@@ -53,20 +53,35 @@ import {
   updateRootText, updateThreadDetails, markRootRecalled, editMessageInThread, removeMessageFromThread,
   logDeletion,
 } from "../../_shared/threads.js";
-import { verifyRequest, canSeeBrand, requestIP } from "../../_shared/accounts.js";
-import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE } from "../../_shared/routing.js";
+import { verifyRequest, canSeeBrand, canSeeCountry, requestIP } from "../../_shared/accounts.js";
+import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken } from "../../_shared/routing.js";
+import { isValidCountry, resolveThreadsKv } from "../../_shared/countries.js";
 import { updateRowByColumns } from "../../_shared/googleSheets.js";
 import { buildTicketMessage, buildTitleAndSummary, resolveColumnValues } from "../../_shared/messageBuilders.js";
 import { compressImageForTelegram } from "../../_shared/telegramImageCompress.js";
 import { logActivity } from "../../_shared/activityLog.js";
 
+// MERGED — a single thread id no longer identifies which country's KV
+// to look in on its own (three separate namespaces now exist, see
+// _shared/countries.js). GET /api/threads already tags every thread
+// with its `country` when listing them, so the dashboard always has it
+// on hand and passes it back here as `?country=` (GET) or `country` in
+// the POST body — same shape as the existing `id`. An unknown/omitted
+// country is treated as "not found" rather than guessing or scanning
+// all three namespaces (scanning would be an easy way to accidentally
+// leak "this id exists in a country you can't see" via timing/behavior
+// differences, and silently guessing wrong could edit/delete the wrong
+// record if ids ever collided across countries).
 export async function onRequestGet({ request, env, params }) {
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
-  const thread = await getThread(env, params.id);
+  const country = (new URL(request.url).searchParams.get("country") || "").toUpperCase();
+  if (!isValidCountry(country) || !canSeeCountry(account, country)) return json({ ok: false, error: "Not found." }, 404);
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+  const thread = await getThread(kv, params.id);
   if (!thread || thread.deleted || !canSeeBrand(account, thread.brand)) return json({ ok: false, error: "Not found." }, 404);
-  return json({ ok: true, thread });
+  return json({ ok: true, thread: { ...thread, country } });
 }
 
 // Top-level safety net — same reasoning as submit.js: everything below
@@ -86,7 +101,6 @@ export async function onRequestPost(context) {
 }
 
 async function handleThreadAction({ request, env, params, waitUntil }) {
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
 
@@ -103,18 +117,43 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     return json({ ok: false, error: "Invalid JSON body." }, 400);
   }
 
-  const { action } = body || {};
+  const { action, country: countryRaw } = body || {};
   const id = params.id;
+
+  // See the comment on onRequestGet above — every mutating action needs
+  // the same country resolution, just read from the body instead of the
+  // query string (POST already has a JSON body for `action` etc.).
+  const country = (typeof countryRaw === "string" ? countryRaw : "").toUpperCase();
+  if (!isValidCountry(country) || !canSeeCountry(account, country)) {
+    return json({ ok: false, error: "Not found." }, 404);
+  }
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+
+  // MERGED — resolved once per request from the thread's own country
+  // rather than the old single env.TELEGRAM_BOT_TOKEN (that binding no
+  // longer exists post-merge, see wrangler.toml/countries.js). Every
+  // action below that talks to Telegram (reply/editRoot/recallRoot/
+  // editReply/recallReply) reuses this same token — a country missing
+  // its TELEGRAM_BOT_TOKEN_<CODE> secret (e.g. PKR/PHP before their
+  // groups are configured, per routing.js's own notes) fails that
+  // specific action with a clear message instead of throwing.
+  let botToken = null;
+  try {
+    botToken = resolveBotToken(env, country);
+  } catch {
+    botToken = null;
+  }
 
   // Every action operates on an existing thread the account must be
   // allowed to see — check once up front instead of in every branch.
-  const existingThread = await getThread(env, id);
+  const existingThread = await getThread(kv, id);
   if (!existingThread || existingThread.deleted || !canSeeBrand(account, existingThread.brand)) {
     return json({ ok: false, error: "Not found." }, 404);
   }
 
   if (action === "solve" || action === "unsolve") {
-    const thread = await setSolved(env, id, action === "solve");
+    const thread = await setSolved(kv, id, action === "solve");
     if (!thread) return json({ ok: false, error: "Not found." }, 404);
     // "Solved" was removed from the audit trail (2026-08) — same reasoning
     // as "Ticket Created" and "Reply Sent" above: it's a routine, very
@@ -130,9 +169,9 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
 
   if (action === "delete") {
     const before = existingThread;
-    const thread = await softDeleteThread(env, id);
+    const thread = await softDeleteThread(kv, id);
     if (!thread) return json({ ok: false, error: "Not found." }, 404);
-    await logDeletion(env, {
+    await logDeletion(kv, {
       type: "delete-thread",
       threadId: id,
       threadTitle: before?.title || thread.title,
@@ -155,7 +194,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const replyToMessageId = body.replyToMessageId || null;
     if (!text && !attachments.length) return json({ ok: false, error: "Reply text is empty." }, 400);
     if (attachments.length > 10) return json({ ok: false, error: "Telegram allows at most 10 attachments in one message — trim your selection and send the rest separately." }, 400);
-    if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "Server is missing TELEGRAM_BOT_TOKEN." }, 500);
+    if (!botToken) return json({ ok: false, error: `Server is missing the ${country} Telegram bot token.` }, 500);
 
     const thread = existingThread;
 
@@ -165,13 +204,13 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     let attachmentNames = [];
     try {
       if (attachments.length) {
-        const sent = await sendTelegramReplyAttachments(env, thread, text, attachments, replyToMessageId);
+        const sent = await sendTelegramReplyAttachments(botToken, thread, text, attachments, replyToMessageId);
         messageId = sent.messageId;
         messageIds = sent.messageIds;
         attachmentFileIds = sent.attachmentFileIds;
         attachmentNames = sent.attachmentNames;
       } else {
-        messageId = await sendTelegramText(env, thread, text, replyToMessageId);
+        messageId = await sendTelegramText(botToken, thread, text, replyToMessageId);
         messageIds = [messageId];
       }
     } catch (e) {
@@ -200,7 +239,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     // new attachmentFileIds/attachmentNames (arrays) — just [0] of the
     // array — so nothing else in this project that might still read the
     // singular fields breaks.
-    const updated = await appendMessage(env, id, {
+    const updated = await appendMessage(kv, id, {
       from: account.username,
       handle: null,
       text: text || (attachments.length > 1 ? `📎 ${attachments.length} attachments` : `📎 ${attachments[0]?.name || "attachment"}`),
@@ -228,7 +267,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   if (action === "editRoot") {
     const text = (body.text || "").trim();
     if (!text) return json({ ok: false, error: "New text is empty." }, 400);
-    if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "Server is missing TELEGRAM_BOT_TOKEN." }, 500);
+    if (!botToken) return json({ ok: false, error: `Server is missing the ${country} Telegram bot token.` }, 500);
 
     const thread = existingThread;
     if (thread.rootRecalled) return json({ ok: false, error: "This ticket's original message was already recalled — nothing to edit." }, 400);
@@ -237,10 +276,10 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const payload = { chat_id: thread.chatId, message_id: thread.rootMessageId, parse_mode: "HTML" };
     if (thread.hasMedia) payload.caption = text; else payload.text = text;
 
-    const tg = await callTelegram(env, method, payload);
+    const tg = await callTelegram(botToken, method, payload);
     if (!tg.ok) return json({ ok: false, error: telegramEditError(tg) }, 502);
 
-    const updated = await updateRootText(env, id, text);
+    const updated = await updateRootText(kv, id, text);
     logThread({ action: "Ticket Edited", detail: `"${thread.title || id}" (${thread.brand}): ${thread.rootText || "(no text)"} → ${text}` });
     return json({ ok: true, thread: updated });
   }
@@ -261,7 +300,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     if (!Array.isArray(fields) || !fieldMap || typeof fieldMap !== "object") {
       return json({ ok: false, error: "Missing fields or fieldMap." }, 400);
     }
-    if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "Server is missing TELEGRAM_BOT_TOKEN." }, 500);
+    if (!botToken) return json({ ok: false, error: `Server is missing the ${country} Telegram bot token.` }, 500);
 
     const thread = existingThread;
     if (thread.rootRecalled) return json({ ok: false, error: "This ticket's original message was already recalled — nothing to edit." }, 400);
@@ -287,7 +326,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const payload = { chat_id: thread.chatId, message_id: thread.rootMessageId, parse_mode: "HTML" };
     if (thread.hasMedia) payload.caption = text; else payload.text = text;
 
-    const tg = await callTelegram(env, method, payload);
+    const tg = await callTelegram(botToken, method, payload);
     if (!tg.ok) return json({ ok: false, error: telegramEditError(tg) }, 502);
 
     // Sheet sync is best-effort/non-fatal, same reasoning as submit.js's
@@ -307,13 +346,13 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     }
 
     const { title, summary } = buildTitleAndSummary({ meta, brand, fieldMap, fields });
-    const updated = await updateThreadDetails(env, id, { fieldMap, rootText: text, title, summary });
+    const updated = await updateThreadDetails(kv, id, { fieldMap, rootText: text, title, summary });
     logThread({ action: "Ticket Edited", detail: `"${thread.title || id}" (${thread.brand}), field sync: ${thread.rootText || "(no text)"} → ${text}` });
     return json({ ok: true, thread: updated, sheetHasRef: !!thread.sheetRef, sheetSynced, sheetError });
   }
 
   if (action === "recallRoot") {
-    if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "Server is missing TELEGRAM_BOT_TOKEN." }, 500);
+    if (!botToken) return json({ ok: false, error: `Server is missing the ${country} Telegram bot token.` }, 500);
 
     const thread = existingThread;
     // A ticket sent as a multi-photo Telegram album has one message_id
@@ -327,12 +366,12 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     // while some photos remain) — an agent clicking Recall needs to
     // know if it didn't fully work.
     const idsToDelete = thread.rootMessageIds && thread.rootMessageIds.length ? thread.rootMessageIds : [thread.rootMessageId];
-    const results = await Promise.all(idsToDelete.map((mid) => callTelegram(env, "deleteMessage", { chat_id: thread.chatId, message_id: mid })));
+    const results = await Promise.all(idsToDelete.map((mid) => callTelegram(botToken, "deleteMessage", { chat_id: thread.chatId, message_id: mid })));
     const firstFailure = results.find((r) => !r.ok);
     if (firstFailure) return json({ ok: false, error: telegramDeleteError(firstFailure) }, 502);
 
-    const updated = await markRootRecalled(env, id);
-    await logDeletion(env, {
+    const updated = await markRootRecalled(kv, id);
+    await logDeletion(kv, {
       type: "recall-root",
       threadId: id,
       threadTitle: thread.title,
@@ -348,13 +387,13 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const text = (body.text || "").trim();
     const messageId = body.messageId;
     if (!text || !messageId) return json({ ok: false, error: "Missing text or messageId." }, 400);
-    if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "Server is missing TELEGRAM_BOT_TOKEN." }, 500);
+    if (!botToken) return json({ ok: false, error: `Server is missing the ${country} Telegram bot token.` }, 500);
 
-    const tg = await callTelegram(env, "editMessageText", { chat_id: existingThread.chatId, message_id: messageId, text, parse_mode: "HTML" });
+    const tg = await callTelegram(botToken, "editMessageText", { chat_id: existingThread.chatId, message_id: messageId, text, parse_mode: "HTML" });
     if (!tg.ok) return json({ ok: false, error: telegramEditError(tg) }, 502);
 
     const oldMsg = existingThread.messages.find((m) => m.self && m.messageId === messageId);
-    const updated = await editMessageInThread(env, id, messageId, text);
+    const updated = await editMessageInThread(kv, id, messageId, text);
     logThread({ action: "Reply Edited", detail: `"${existingThread.title || id}" (${existingThread.brand}): ${oldMsg?.text || "(no text)"} → ${text}` });
     return json({ ok: true, thread: updated });
   }
@@ -362,7 +401,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   if (action === "recallReply") {
     const messageId = body.messageId;
     if (!messageId) return json({ ok: false, error: "Missing messageId." }, 400);
-    if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "Server is missing TELEGRAM_BOT_TOKEN." }, 500);
+    if (!botToken) return json({ ok: false, error: `Server is missing the ${country} Telegram bot token.` }, 500);
 
     const thread = existingThread;
     const recalledMsg = thread.messages.find((m) => m.self && m.messageId === messageId);
@@ -371,12 +410,12 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     // ↩️ button references. Delete every id in the group, not just the
     // first, or the rest silently stay behind in the chat forever.
     const idsToDelete = recalledMsg?.messageIds && recalledMsg.messageIds.length ? recalledMsg.messageIds : [messageId];
-    const results = await Promise.all(idsToDelete.map((mid) => callTelegram(env, "deleteMessage", { chat_id: thread.chatId, message_id: mid })));
+    const results = await Promise.all(idsToDelete.map((mid) => callTelegram(botToken, "deleteMessage", { chat_id: thread.chatId, message_id: mid })));
     const firstFailure = results.find((r) => !r.ok);
     if (firstFailure) return json({ ok: false, error: telegramDeleteError(firstFailure) }, 502);
 
-    const updated = await removeMessageFromThread(env, id, messageId);
-    await logDeletion(env, {
+    const updated = await removeMessageFromThread(kv, id, messageId);
+    await logDeletion(kv, {
       type: "recall-reply",
       threadId: id,
       threadTitle: thread.title,
@@ -391,8 +430,8 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   return json({ ok: false, error: `Unknown action "${action}".` }, 400);
 }
 
-async function callTelegram(env, method, payload) {
-  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+async function callTelegram(botToken, method, payload) {
+  const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -400,10 +439,10 @@ async function callTelegram(env, method, payload) {
   return res.json();
 }
 
-async function sendTelegramText(env, thread, text, replyToMessageId) {
+async function sendTelegramText(botToken, thread, text, replyToMessageId) {
   const payload = { chat_id: thread.chatId, text, reply_to_message_id: replyToMessageId || thread.rootMessageId };
   if (thread.topicId) payload.message_thread_id = thread.topicId;
-  const data = await callTelegram(env, "sendMessage", payload);
+  const data = await callTelegram(botToken, "sendMessage", payload);
   if (!data.ok) throw new Error(data.description || "Telegram send failed.");
   return data.result.message_id;
 }
@@ -459,11 +498,11 @@ function dataUrlToBytes(dataUrl) {
 // Telegram call so it lands as a reply instead of a fresh message.
 // "Media album" covers photos AND videos together — Telegram allows
 // mixing those two in one sendMediaGroup call, just not documents.
-async function sendTelegramReplyAttachments(env, thread, text, attachments, replyToMessageId) {
+async function sendTelegramReplyAttachments(botToken, thread, text, attachments, replyToMessageId) {
   const replyId = replyToMessageId || thread.rootMessageId;
 
   if (attachments.length === 1) {
-    const { messageId, fileId, name } = await sendReplySingleWithCaption(env, thread, text, attachments[0], replyId);
+    const { messageId, fileId, name } = await sendReplySingleWithCaption(botToken, thread, text, attachments[0], replyId);
     return {
       messageId,
       messageIds: [messageId],
@@ -477,7 +516,7 @@ async function sendTelegramReplyAttachments(env, thread, text, attachments, repl
   // nothing here need sendDocument", not "is everything a photo".
   const allMedia = attachments.every((a) => attachmentKind(a.type, a.name) !== "document");
   if (allMedia) {
-    const sent = await sendReplyMediaGroup(env, thread, text, attachments, replyId);
+    const sent = await sendReplyMediaGroup(botToken, thread, text, attachments, replyId);
     return {
       messageId: sent[0].messageId,
       messageIds: sent.map((s) => s.messageId),
@@ -491,7 +530,7 @@ async function sendTelegramReplyAttachments(env, thread, text, attachments, repl
   // as one reply, not repeated noise on every attachment.
   const sent = [];
   for (let i = 0; i < attachments.length; i++) {
-    const result = await sendReplySingleWithCaption(env, thread, i === 0 ? text : "", attachments[i], replyId);
+    const result = await sendReplySingleWithCaption(botToken, thread, i === 0 ? text : "", attachments[i], replyId);
     sent.push(result);
   }
   return {
@@ -502,7 +541,7 @@ async function sendTelegramReplyAttachments(env, thread, text, attachments, repl
   };
 }
 
-async function sendReplySingleWithCaption(env, thread, text, attachment, replyId) {
+async function sendReplySingleWithCaption(botToken, thread, text, attachment, replyId) {
   let { name, type, dataUrl } = attachment;
   let bytes = dataUrlToBytes(dataUrl);
 
@@ -529,7 +568,7 @@ async function sendReplySingleWithCaption(env, thread, text, attachment, replyId
   form.append(field, blob, name || "attachment");
   if (text) form.append("caption", text);
 
-  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, { method: "POST", body: form });
+  const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, { method: "POST", body: form });
   const data = await res.json();
   if (!data.ok) {
     console.error(`[threads/[id].js] Reply attachment send failed (${method}): ${data.description || "unknown error"}`);
@@ -556,7 +595,7 @@ async function sendReplySingleWithCaption(env, thread, text, attachment, replyId
 // all-or-nothing multipart upload, caption goes on the first item only
 // (Telegram shows it as the whole album's caption regardless of which
 // item it's on). Photos and videos can be freely mixed within one album.
-async function sendReplyMediaGroup(env, thread, text, attachments, replyId) {
+async function sendReplyMediaGroup(botToken, thread, text, attachments, replyId) {
   const form = new FormData();
   form.append("chat_id", thread.chatId);
   if (thread.topicId) form.append("message_thread_id", String(thread.topicId));
@@ -586,7 +625,7 @@ async function sendReplyMediaGroup(env, thread, text, attachments, replyId) {
     form.append(`file${i}`, blob, name || `file${i}`);
   }
 
-  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMediaGroup`, { method: "POST", body: form });
+  const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMediaGroup`, { method: "POST", body: form });
   const data = await res.json();
   if (!data.ok) {
     console.error(`[threads/[id].js] Reply sendMediaGroup rejected by Telegram (${attachments.length} attachment(s)): ${data.description || "unknown error"}`);

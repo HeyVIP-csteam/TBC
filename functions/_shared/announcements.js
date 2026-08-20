@@ -111,8 +111,20 @@ export async function getActiveAnnouncements(kv) {
 export const ANNOUNCEMENT_TOPICS = ["Friendly reminder", "Game maintenance", "System maintenance", "Deposit / Withdraw Issues"];
 const DEFAULT_TOPIC = ANNOUNCEMENT_TOPICS[0];
 
-export async function saveAnnouncement(env, { id, text, topic, enabled, startAt, endAt }, actorUsername) {
-  const list = await readAll(env.THREADS_KV);
+// MERGED (2026-08-20) — completed. Was flagged as blocked alongside the
+// genuinely-blocked Sheet-routing files, but on inspection this isn't
+// actually tied to that decision: Announcements always had exactly one
+// admin page per project (no PHP-vs-INR/PKR multi-page split to
+// reconcile), same situation as routes.js/promoCodeSheet.js/
+// bettingResources.js's admin sides. Now takes `kv` directly (a specific
+// country's THREADS_KV_<CODE>), matching listAllAnnouncements/
+// getActiveAnnouncements/getAnnouncementSettings above — the caller
+// (admin/announcements.js) resolves which country's kv to pass in,
+// same "require an explicit country" pattern as admin/mention-
+// backfill.js and admin/betting-resources.js. `env` is still needed
+// here (not just `kv`) for the best-effort Sheet audit-log side-write.
+export async function saveAnnouncement(env, kv, { id, text, topic, enabled, startAt, endAt }, actorUsername) {
+  const list = await readAll(kv);
   const now = new Date().toISOString();
   const safeTopic = ANNOUNCEMENT_TOPICS.includes(topic) ? topic : DEFAULT_TOPIC;
   let saved;
@@ -124,16 +136,16 @@ export async function saveAnnouncement(env, { id, text, topic, enabled, startAt,
     saved = { id: newId(), text, topic: safeTopic, enabled: !!enabled, startAt: startAt || null, endAt: endAt || null, createdBy: actorUsername, createdAt: now, updatedBy: actorUsername, updatedAt: now };
     list.unshift(saved);
   }
-  await writeAll(env.THREADS_KV, list);
+  await writeAll(kv, list);
   await logToSheet(env, idx >= 0 ? "edited" : "created", saved, actorUsername);
   return saved;
 }
 
-export async function deleteAnnouncement(env, id, actorUsername) {
-  const list = await readAll(env.THREADS_KV);
+export async function deleteAnnouncement(env, kv, id, actorUsername) {
+  const list = await readAll(kv);
   const found = list.find((a) => a.id === id);
   if (!found) return false;
-  await writeAll(env.THREADS_KV, list.filter((a) => a.id !== id));
+  await writeAll(kv, list.filter((a) => a.id !== id));
   await logToSheet(env, "deleted", found, actorUsername);
   return true;
 }
@@ -144,9 +156,15 @@ export async function deleteAnnouncement(env, id, actorUsername) {
 // "settings" admin section) rather than the Announcement management page
 // (gated by "announcements") since it's closer in spirit to Maintenance/
 // Coming soon than to the announcements themselves.
-export async function getAnnouncementSettings(env) {
+// 三国合并（2026-08-20）—— 收 kv（不是整个 env），跟上面所有函数一致；
+// 具体存哪国由调用方（admin/announcement-settings.js）决定 —— 目前是
+// "每个国家自己一份轮播间隔设置"，是否应该改成全局唯一一份是产品判断，
+// 不是这次改动要决定的，见 functions/api/announcements.js 文件头的
+// 同一条备注。
+export async function getAnnouncementSettings(kv) {
   try {
-    const raw = await env.THREADS_KV.get(SETTINGS_KEY);
+    if (!kv) return { rotateIntervalMs: DEFAULT_ROTATE_MS };
+    const raw = await kv.get(SETTINGS_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     const ms = parsed && Number.isFinite(parsed.rotateIntervalMs) && parsed.rotateIntervalMs >= MIN_ROTATE_MS
       ? parsed.rotateIntervalMs
@@ -157,8 +175,8 @@ export async function getAnnouncementSettings(env) {
   }
 }
 
-export async function saveAnnouncementSettings(env, { rotateIntervalMs }) {
+export async function saveAnnouncementSettings(kv, { rotateIntervalMs }) {
   const ms = Math.max(MIN_ROTATE_MS, Math.round(Number(rotateIntervalMs) || DEFAULT_ROTATE_MS));
-  await env.THREADS_KV.put(SETTINGS_KEY, JSON.stringify({ rotateIntervalMs: ms }));
+  await kv.put(SETTINGS_KEY, JSON.stringify({ rotateIntervalMs: ms }));
   return { rotateIntervalMs: ms };
 }

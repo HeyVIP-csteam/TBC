@@ -45,14 +45,15 @@
  * addForwardedToLink()) — both rendered in threads.html as a small
  * clickable "↗️ Forwarded to/from ..." reference card.
  */
-import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, RECORD_TO_SHEET, SHEET_LAYOUT, PROMOTION_SHEET_CONFIG, SCREENSHOT_R2_ENABLED } from "../_shared/routing.js";
+import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, RECORD_TO_SHEET, SHEET_LAYOUT, PROMOTION_SHEET_CONFIG, SCREENSHOT_R2_ENABLED, resolveBotToken } from "../_shared/routing.js";
 import { appendRowByColumns, writeRowForDate } from "../_shared/googleSheets.js";
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
 import { getThread, createThread, addForwardedToLink } from "../_shared/threads.js";
-import { verifyRequest, canSeeBrand, canSeeModule } from "../_shared/accounts.js";
+import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry } from "../_shared/accounts.js";
 import { buildTicketMessage, buildTitleAndSummary, resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY } from "../_shared/messageBuilders.js";
 import { getRouteOverride } from "../_shared/routes.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
+import { isValidCountry, resolveThreadsKv } from "../_shared/countries.js";
 
 export async function onRequestPost(context) {
   try {
@@ -65,15 +66,38 @@ export async function onRequestPost(context) {
 async function handlePost({ request, env }) {
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
-  if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, error: "Server is missing TELEGRAM_BOT_TOKEN." }, 500);
 
   const body = await request.json().catch(() => null);
   if (!body) return json({ ok: false, error: "Invalid JSON body." }, 400);
-  const { sourceThreadId, targetModule: moduleId, fields, fieldMap, reporter, newAttachments } = body;
+  const { sourceThreadId, sourceCountry, targetModule: moduleId, fields, fieldMap, reporter, newAttachments } = body;
   if (!sourceThreadId || !moduleId || !Array.isArray(fields) || !fieldMap || typeof fieldMap !== "object" || !reporter) {
     return json({ ok: false, error: "Missing sourceThreadId, targetModule, fields, fieldMap, or reporter." }, 400);
   }
+
+  // MERGED — the source ticket lives in one specific country's KV (three
+  // separate namespaces now, see _shared/countries.js), and there's no
+  // way to know which one from sourceThreadId alone. GET /api/threads
+  // already tags every thread with its `country` when listing them, so
+  // threads.html has it on hand and sends it back as `sourceCountry` —
+  // same shape as the existing `sourceThreadId`. The FORWARDED-TO ticket
+  // always ends up in this SAME country's KV too (brand — and therefore
+  // country — carries over read-over from the source ticket unchanged,
+  // only the module/Topic changes; see below), so this one resolution
+  // covers the whole request.
+  const country = typeof sourceCountry === "string" ? sourceCountry.toUpperCase() : "";
+  if (!isValidCountry(country) || !canSeeCountry(account, country)) {
+    return json({ ok: false, error: "Source ticket not found." }, 404);
+  }
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+
+  let botToken = null;
+  try {
+    botToken = resolveBotToken(env, country);
+  } catch {
+    /* handled below via the null check */
+  }
+  if (!botToken) return json({ ok: false, error: `Server is missing the ${country} Telegram bot token.` }, 500);
 
   const meta = MODULE_META[moduleId];
   if (!meta) return json({ ok: false, error: `Unknown module "${moduleId}".` }, 400);
@@ -81,7 +105,7 @@ async function handlePost({ request, env }) {
     return json({ ok: false, error: `You don't have access to submit ${meta.name} tickets.` }, 403);
   }
 
-  const sourceThread = await getThread(env, sourceThreadId);
+  const sourceThread = await getThread(kv, sourceThreadId);
   if (!sourceThread) return json({ ok: false, error: "Source ticket not found." }, 404);
   if (sourceThread.module === moduleId) {
     return json({ ok: false, error: "This ticket is already in that Topic — nothing to forward." }, 400);
@@ -137,7 +161,7 @@ async function handlePost({ request, env }) {
     }
     for (const fid of fileIds) {
       try {
-        const { bytes, contentType, filePath } = await downloadTelegramFile(env.TELEGRAM_BOT_TOKEN, fid);
+        const { bytes, contentType, filePath } = await downloadTelegramFile(botToken, fid);
         const key = await uploadBytesToR2(env, { moduleId, brandId, name: filePath.split("/").pop(), type: contentType, bytes });
         r2Links.push(screenshotUrl(origin, key));
       } catch (e) {
@@ -162,7 +186,7 @@ async function handlePost({ request, env }) {
 
   let tgResult;
   try {
-    tgResult = await sendCombinedAttachments({ botToken: env.TELEGRAM_BOT_TOKEN, route, text, fileIds, newAttachments: newAttachments || [] });
+    tgResult = await sendCombinedAttachments({ botToken, route, text, fileIds, newAttachments: newAttachments || [] });
   } catch (e) {
     console.error(`[forward.js] Telegram send failed: ${String((e && e.message) || e)}`);
     return json({ ok: false, error: `Telegram send failed: ${String((e && e.message) || e)}` }, 502);
@@ -230,7 +254,7 @@ async function handlePost({ request, env }) {
 
   let newThread;
   try {
-    newThread = await createThread(env, {
+    newThread = await createThread(kv, {
       module: moduleId,
       moduleName: meta.name,
       icon: meta.emoji,
@@ -260,7 +284,7 @@ async function handlePost({ request, env }) {
   }
 
   try {
-    await addForwardedToLink(env, sourceThreadId, {
+    await addForwardedToLink(kv, sourceThreadId, {
       threadId: newThread.id,
       module: moduleId,
       moduleName: meta.name,
@@ -272,7 +296,7 @@ async function handlePost({ request, env }) {
     // only the backlink shown on the ORIGINAL ticket.
   }
 
-  return json({ ok: true, thread: newThread, sheetAttempted, sheetLogged, sheetError, r2Errors: r2Errors.length ? r2Errors : undefined });
+  return json({ ok: true, thread: { ...newThread, country }, sheetAttempted, sheetLogged, sheetError, r2Errors: r2Errors.length ? r2Errors : undefined });
 }
 
 // Reuses Telegram's own file_id(s) from the source ticket instead of

@@ -6,12 +6,20 @@
  * (that section only covers the announcements themselves, see
  * /api/admin/announcements.js).
  *
- *   GET  -> { ok: true, rotateIntervalMs }
- *   POST { rotateIntervalMs } -> { ok: true, rotateIntervalMs }
+ * MERGED — same explicit-`country` requirement as admin/announcements.js
+ * (see that file's header for why this isn't blocked on the Sheet-
+ * routing decision). rotateIntervalMs is currently stored per-country —
+ * see _shared/announcements.js's comment on getAnnouncementSettings()
+ * for the open product question of whether it should become one global
+ * setting instead; not decided here.
+ *
+ *   GET  ?country=INR -> { ok: true, country, rotateIntervalMs }
+ *   POST { country, rotateIntervalMs } -> { ok: true, country, rotateIntervalMs }
  */
-import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, requestIP } from "../../_shared/accounts.js";
+import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, canSeeCountry, requestIP } from "../../_shared/accounts.js";
 import { getAnnouncementSettings, saveAnnouncementSettings } from "../../_shared/announcements.js";
 import { logActivity } from "../../_shared/activityLog.js";
+import { isValidCountry, resolveThreadsKv } from "../../_shared/countries.js";
 
 export async function onRequestGet(context) {
   try {
@@ -22,15 +30,20 @@ export async function onRequestGet(context) {
 }
 
 async function handleGet({ request, env }) {
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
   const auth = await authenticateStaff(request, env, ROLE_RANK.senior);
   if (!auth.ok) return json({ ok: false, error: "Not authorized." }, 401);
   if (!canSeeAdminSection(auth.account, "settings")) {
     return json({ ok: false, error: "You don't have access to Settings." }, 403);
   }
 
-  const settings = await getAnnouncementSettings(env);
-  return json({ ok: true, ...settings });
+  const country = (new URL(request.url).searchParams.get("country") || "").toUpperCase();
+  if (!isValidCountry(country)) return json({ ok: false, error: "A valid `country` is required." }, 400);
+  if (!canSeeCountry(auth.account, country)) return json({ ok: false, error: "Not authorized for that country." }, 403);
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+
+  const settings = await getAnnouncementSettings(kv);
+  return json({ ok: true, country, ...settings });
 }
 
 export async function onRequestPost(context) {
@@ -42,7 +55,6 @@ export async function onRequestPost(context) {
 }
 
 async function handlePost({ request, env, waitUntil }) {
-  if (!env.THREADS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
   const auth = await authenticateStaff(request, env, ROLE_RANK.senior);
   if (!auth.ok) return json({ ok: false, error: "Not authorized." }, 401);
   if (!canEditAdminSection(auth.account, "settings")) {
@@ -56,16 +68,22 @@ async function handlePost({ request, env, waitUntil }) {
     return json({ ok: false, error: "Invalid JSON body." }, 400);
   }
 
+  const country = typeof body.country === "string" ? body.country.toUpperCase() : "";
+  if (!isValidCountry(country)) return json({ ok: false, error: "A valid `country` is required." }, 400);
+  if (!canSeeCountry(auth.account, country)) return json({ ok: false, error: "Not authorized for that country." }, 403);
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+
   const ms = Number(body.rotateIntervalMs);
   if (!Number.isFinite(ms) || ms < 1000) {
     return json({ ok: false, error: "Rotation interval must be at least 1 second." }, 400);
   }
 
-  const settings = await saveAnnouncementSettings(env, { rotateIntervalMs: ms });
+  const settings = await saveAnnouncementSettings(kv, { rotateIntervalMs: ms });
   const ip = requestIP(request);
-  const p = logActivity(env, { category: "Config", action: "Announcement Settings Changed", agent: auth.account?.username, ip, detail: `Rotation interval set to ${ms}ms` });
+  const p = logActivity(env, { category: "Config", action: "Announcement Settings Changed", agent: auth.account?.username, ip, detail: `[${country}] Rotation interval set to ${ms}ms` });
   if (waitUntil) waitUntil(p); else p.catch(() => {});
-  return json({ ok: true, ...settings });
+  return json({ ok: true, country, ...settings });
 }
 
 function json(obj, status = 200) {

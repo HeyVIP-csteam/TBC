@@ -4,14 +4,25 @@
  * KV-backed override for the ONE shared Google Sheet promo-search.js
  * reads from — same "hardcoded default in code, live override in KV"
  * layering as routes.js (TG Group/Channel) and depositSheets.js, just
- * with no brand dimension: unlike those, Promo Code Search is genuinely
- * one workbook shared across every team/brand (see promo-search.js's own
- * file header) — searched the exact same way no matter which brand is
- * selected on the Promo Code Search page. So there's a single override
- * slot, not one per brand.
+ * with no brand OR country dimension: unlike those, Promo Code Search
+ * is genuinely one workbook shared across every team/brand/country
+ * (see promo-search.js's own file header — its tabs are literally
+ * per-CURRENCY, not per-brand, and INR's own pre-merge PROJECT_STATUS
+ * confirmed this tool was deliberately left brand/country-unscoped).
+ * So there's a single override slot, global, not one per brand and
+ * NOT one per country.
  *
- * Stored in the same THREADS_KV namespace as everything else, under its
- * own single key:
+ * MERGED (2026-08-20) — this is NOT one of the files blocked on the
+ * "Sheet-routing admin page layout" decision (PHP one-page vs INR/PKR
+ * separate pages). That decision is specifically about the
+ * Deposit/Issue-Submission Sheet admin pages, where PHP genuinely has
+ * a different, simpler feature (plain form) instead of INR/PKR's
+ * investigation tool — a real product difference, not just a layout
+ * one. Promo Code Search has always been ONE shared cross-currency
+ * tool with exactly one admin panel in every original project; there's
+ * no PHP-vs-INR/PKR split to reconcile here. So — same reasoning as
+ * routes.js's Security Alerts row — this single global config now
+ * lives in the shared ACCOUNTS_KV, not any per-country THREADS_KV:
  *   promo-code-sheet:config  ->  { sheetId, tabNames: string[] }
  * Missing key = the hardcoded DEFAULT below (today's real sheet/tabs) —
  * turning this on with an empty KV changes nothing that already works,
@@ -60,22 +71,24 @@ function parseConfig(raw) {
 // the admin panel can show "custom" vs "default" the same way TG Group/
 // Channel and Deposit Sheet Link already do.
 export async function getPromoCodeSheet(env) {
-  if (!env.THREADS_KV) return { ...DEFAULT_PROMO_CODE_SHEET, isOverride: false };
-  const parsed = parseConfig(await env.THREADS_KV.get(KEY));
+  if (!env.ACCOUNTS_KV) return { ...DEFAULT_PROMO_CODE_SHEET, isOverride: false };
+  const parsed = parseConfig(await env.ACCOUNTS_KV.get(KEY));
   return parsed ? { ...parsed, isOverride: true } : { ...DEFAULT_PROMO_CODE_SHEET, isOverride: false };
 }
 
 export async function savePromoCodeSheet(env, { sheetUrlOrId, tabNames }) {
+  if (!env.ACCOUNTS_KV) throw new Error("ACCOUNTS_KV is not bound yet.");
   const sheetId = extractSheetId(sheetUrlOrId);
   if (!sheetId) throw new Error("Couldn't find a Sheet ID in that link — paste the full Google Sheets URL or just the ID.");
   const cleanTabs = String(tabNames || "").split(",").map((t) => t.trim()).filter(Boolean);
   if (!cleanTabs.length) throw new Error("At least one tab name is required.");
   const value = { sheetId, tabNames: cleanTabs };
-  await env.THREADS_KV.put(KEY, JSON.stringify(value));
+  await env.ACCOUNTS_KV.put(KEY, JSON.stringify(value));
   return { ...value, isOverride: true };
 }
 
 export async function resetPromoCodeSheet(env) {
-  await env.THREADS_KV.delete(KEY);
+  if (!env.ACCOUNTS_KV) return { ...DEFAULT_PROMO_CODE_SHEET, isOverride: false };
+  await env.ACCOUNTS_KV.delete(KEY);
   return { ...DEFAULT_PROMO_CODE_SHEET, isOverride: false };
 }

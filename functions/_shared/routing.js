@@ -791,6 +791,18 @@ export const SCREENSHOT_R2_ENABLED = {
 // ══════════════════════════════════════════════════════════════════
 import { getCountryConfig } from "./countries.js";
 
+// Every merged brand key already carries its own `country` (see the
+// BRANDS object above) — this is just a named lookup for call sites
+// that only have a brandId on hand (e.g. mention-candidates.js) and
+// need to know which country's KV/bot-token that brand belongs to,
+// without duplicating the `BRANDS[id]?.country` reach-in everywhere.
+// Returns null (not a throw) for an unknown brandId — callers treat
+// that as "nothing to show" rather than a server error, same as an
+// unknown brandId always has elsewhere in this file.
+export function getBrandCountry(brandId) {
+  return BRANDS[brandId]?.country || null;
+}
+
 export function resolveBotToken(env, country) {
   const { botTokenEnvVar } = getCountryConfig(country);
   const token = env[botTokenEnvVar];
