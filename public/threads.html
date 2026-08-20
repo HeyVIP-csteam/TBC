@@ -1,0 +1,2182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TG Reply Threads</title>
+<script src="/assets/theme.js?v=c61fb537"></script>
+<style>
+/* Inline placeholder canvas background — first thing the browser parses
+   in <head>, so it paints before any network request (external CSS, the
+   photo itself) resolves. Values are hard-coded here (can't use var()
+   yet — style.css may not have loaded) but are kept in exact sync with
+   the "real" html{}/html[data-theme=light]{} rule in style.css, so the
+   moment that stylesheet finishes loading there is zero visible change.
+   Must stay inline and first — an external <link> here would leave a
+   blank gap for a network round trip before anything paints. Only sets
+   background on <html>, never <body>: <body> has its own
+   theme-toggle transition, and animating from this photo to some other
+   background would try to interpolate image -> gradient, which browsers
+   can't do and would just look like a broken flash. */
+html {
+  background-color: #090c1c;
+  background-image:
+    linear-gradient(180deg, rgba(3,4,13,0.35) 0%, rgba(3,4,13,0.55) 55%, rgba(3,4,13,0.75) 100%),
+    url('/assets/img/bg-space.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+html[data-theme="light"] {
+  background-color: #dbe7fb;
+  background-image:
+    radial-gradient(900px 500px at 90% 0%, #eaf1ff 0%, transparent 55%),
+    linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
+}
+</style>
+<link rel="stylesheet" href="/assets/style.css?v=d90eceb8" />
+<link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
+<script src="/assets/toast.js?v=d9d84724"></script>
+<script src="/assets/starfield.js?v=b6e92821" defer></script>
+<script src="/assets/authguard.js?v=19b1b251"></script>
+<script src="/assets/presence-heartbeat.js?v=a0820d9b"></script>
+<script src="/assets/announcement-banner.js?v=26c15118" defer></script>
+<script src="/assets/schemas.js?v=189eea70"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/twemoji.min.js"></script>
+</head>
+<body class="threads-page">
+  <!-- Attachment lightbox — populated live by viewAttachment() below.
+       Fetches bytes on demand from /api/attachment/<fileId>, never a
+       stored copy — see that endpoint's own comment for why. -->
+  <div class="attach-lightbox" id="attachLightbox">
+    <button type="button" class="attach-lightbox-close" id="attachLightboxClose" title="Close">✕</button>
+    <div class="attach-lightbox-body" id="attachLightboxBody"></div>
+  </div>
+  <header class="topbar">
+    <div class="topbar-left">
+      <img src="/assets/img/logo.webp" alt="HeyVIP" class="logo-img" />
+      <span class="wordmark">PKR CS TEAM - TBC</span>
+    </div>
+    <div class="topbar-right">
+      <span class="clock" id="liveClock"></span>
+      <button class="theme-pill" id="themeToggle"></button>
+    </div>
+  </header>
+
+  <div class="threads-shell" id="threadsShell">
+    <aside class="sidebar" id="hubNavMount"></aside>
+    <div class="threads-content-col">
+      <nav class="brand-row" id="pageBrandRow"><div class="brand-row-track"></div></nav>
+      <div id="announcementBanner"></div>
+      <div class="threads-body-row">
+    <aside class="threads-sidebar">
+      <div class="threads-tabs" id="threadsTabs">
+        <button type="button" class="threads-tab tab-active" data-tab="active" id="tabActive">
+          <span class="threads-tab-label">Active</span>
+          <span class="threads-tab-count" id="activeCount">0</span>
+        </button>
+        <button type="button" class="threads-tab tab-solved" data-tab="solved" id="tabSolved">
+          <span class="threads-tab-label">Solved</span>
+          <span class="threads-tab-count" id="solvedCount">0</span>
+        </button>
+        <button type="button" class="threads-tab tab-recall" data-tab="recall" id="tabRecall" style="display:none;">
+          <span class="threads-tab-label">Recall</span>
+          <span class="threads-tab-count" id="recallCount">0</span>
+        </button>
+      </div>
+
+      <div class="all-threads-card">
+        <div class="all-threads-row">
+          <div class="all-threads-titles">
+            <div class="all-threads-title">All threads</div>
+            <div class="all-threads-sub" id="allThreadsSub">Active threads · 0 new replies</div>
+          </div>
+          <div class="all-threads-right">
+            <span class="all-threads-count" id="allThreadsCount">0</span>
+            <button type="button" class="bulk-cancel" id="selectToggleBtn">Select</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="threads-search">
+        <span>🔍</span>
+        <input type="text" id="threadSearch" placeholder="Search username, TID, UID..." autocomplete="off" />
+      </div>
+
+      <div class="bulk-action-bar" id="bulkActionBar" style="display:none;">
+        <label class="bulk-select-all"><input type="checkbox" id="tabSelectAll" />Select all</label>
+        <button type="button" class="bulk-action-btn" id="bulkReadBtn"></button>
+        <button type="button" class="bulk-action-btn" id="bulkSolveBtn"></button>
+      </div>
+
+      <div class="threads-section" id="activeSection" data-tab-panel="active">
+        <div class="thread-list" id="activeList"></div>
+      </div>
+
+      <div class="threads-section" id="solvedSection" data-tab-panel="solved" style="display:none;">
+        <div class="thread-list" id="solvedList"></div>
+      </div>
+
+      <div class="threads-section recall" id="recallSection" data-tab-panel="recall" style="display:none;">
+        <div class="thread-list" id="recallList"></div>
+      </div>
+    </aside>
+
+    <div class="threads-right-col">
+      <main class="threads-main" id="threadsMain">
+      <div class="threads-placeholder">Pick a thread on the left, or submit a form to start one.</div>
+    </main>
+    </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/hub-nav.js?v=b4fd698d"></script>
+  <script src="/assets/brand-row.js?v=ea371f55"></script>
+  <script>
+    window.HubNav.mount("hubNavMount", {});
+    window.BrandRow.mount("pageBrandRow");
+
+    // ---- Note on feedback (alert vs. the site-wide toast) --------------
+    // This page deliberately keeps native alert() for send/edit/recall/
+    // delete failures instead of the /assets/toast.js "click anywhere to
+    // dismiss" error toast used elsewhere in the app. Two reasons, both
+    // from feedback-toast-system-design.md's list of intentional
+    // exceptions, not an oversight:
+    //   1. Replying to a thread is the highest-frequency action in the
+    //      whole app (this is where agents spend most of their shift). A
+    //      toast that has to be clicked away every single time it fails
+    //      would be a constant tap-tax on exactly the busiest screen.
+    //   2. A few of these messages (the "Telegram updated but the Sheet
+    //      row couldn't be updated" ones) carry a real error string the
+    //      agent needs to read and act on, not just glance at — alert()
+    //      blocking until dismissed suits that better than a popup that
+    //      might get missed mid-scroll.
+    // Successful sends/edits/deletes aren't toasted either, since the
+    // change is already visible in the thread/list right away.
+    window.initThemeToggle();
+
+    window.initClock();
+
+    // ---- Auth ----------------------------------------------------------
+    // No session/token — see functions/_shared/accounts.js for why. We
+    // just keep the username+password the agent logged in with in
+    // localStorage and re-send them as headers on every request; the
+    // server re-verifies (password + office IP) every single time.
+    // Login itself, idle-timeout, and the actual auth headers are all
+    // handled by /assets/authguard.js (window.AgentAuth) before this page
+    // even renders — by the time this script runs, we're guaranteed to be
+    // logged in. authFetch here is just a short alias.
+    const authFetch = window.AgentAuth.authFetch;
+    const getAuth = window.AgentAuth.getAuth;
+
+    function bootDashboard() {
+      const auth = getAuth();
+      // Recall Chat History (the old hidden deletion-log dot) is a normal
+      // section now, but still admin-or-above only — the server 401s it
+      // for anyone else regardless, this just avoids showing a dead-end
+      // section to an agent/senior who'd get nothing useful out of it.
+      // Rank-based (not a literal "admin" string match) so SuperAdmin
+      // sees it too — matches functions/_shared/accounts.js ROLE_RANK.
+      // Includes "owner" (2026-07) for the same reason described in
+      // index.html's copy of this same constant — otherwise an Owner
+      // session would silently compute as rank 0 here via `?? 0` below.
+      const ROLE_RANK = { agent: 0, senior: 1, admin: 2, superadmin: 3, owner: 4 };
+      const isAdmin = (ROLE_RANK[auth.role] ?? 0) >= ROLE_RANK.admin;
+      // Only the TAB BUTTON's visibility is decided here — actual panel
+      // visibility (#recallSection's display) is entirely owned by
+      // switchTab() now (data-tab-panel), so this must never also poke
+      // that style directly or it'd show Recall's panel alongside
+      // whichever tab is actually selected.
+      isAdminForRecall = isAdmin;
+      document.getElementById("tabRecall").style.display = isAdmin ? "" : "none";
+      loadList();
+      if (isAdmin) loadRecallLog();
+      polishEmoji();
+      // Two different rhythms on purpose: refreshOpenThread() reads a
+      // single thread directly by ID (cheap, not affected by KV's
+      // separate/stricter list() quota — see loadList() below), so it
+      // stays fast/responsive since that's what actually matters when
+      // someone's actively viewing a conversation. loadList() (the
+      // sidebar) is what calls the server's listThreads(), which is
+      // itself now cached for 3 minutes server-side — polling it every
+      // 6s was just re-fetching the exact same cached data 30 times
+      // over for no benefit, while still adding needless request volume.
+      // 30s keeps the sidebar feeling reasonably live without that waste.
+      pollTimer = setInterval(() => {
+        refreshOpenThread();
+      }, 6000);
+      listPollTimer = setInterval(() => {
+        loadList(document.getElementById("threadSearch").value);
+        if (isAdmin) loadRecallLog();
+      }, 30000);
+    }
+
+    // ---------------------------------------------------------------------
+
+    let activeThreads = [];
+    let solvedThreads = [];
+    let recallEntries = [];
+    let selectedId = null;
+    let selectedThread = null;
+    let pollTimer = null;
+    let listPollTimer = null;
+    let searchTimer = null;
+
+    // ---- Sidebar diffed rendering ---------------------------------------
+    // id -> { el, key } for every thread-item currently in the DOM (active
+    // OR solved — one shared map, since a thread can move between the two
+    // sections, e.g. a TG follow-up auto-reopening an already-solved
+    // ticket server-side, see threads.js). renderLists() below reuses
+    // these nodes (and just relocates/patches them) instead of wiping and
+    // recreating the whole sidebar on every 6s poll — see renderLists().
+    const renderedItemEls = new Map();
+
+    // ---- ⋮ menu + Select batch mode -----------------------------------
+    let openItemMenuId = null;   // which thread's ⋮ dropdown is currently open (sidebar only, not select mode)
+    let selectMode = false;      // sidebar is showing checkboxes instead of ⋮
+    let selectedIds = new Set(); // checked thread ids, can span both Active and Solved
+
+    // ---- @ Tag Username --------------------------------------------------
+    // Candidates fetched from /api/mention-candidates, cached in memory
+    // per brand+module (see loadMentionCandidatesForThread) so re-opening
+    // the same thread, or @-ing more than once in it, doesn't re-fetch.
+    const mentionCandidatesCache = {}; // "brandId::module" -> [{handle, from}, ...]
+    let currentMentionCandidates = []; // merged list for whichever thread is open
+    let mentionActiveIndex = -1;
+
+    // ---- Local "optimistic" sidebar patches --------------------------
+    // The sidebar list comes from THREADS_KV.list() (see threads.js),
+    // which Cloudflare documents as *eventually* consistent across their
+    // edge — writing a thread's new metadata (e.g. solved:true) doesn't
+    // guarantee list() reflects it on the very next call. But any action
+    // WE just took (solve/unsolve/delete/reply) already hands us that
+    // thread's true fresh state straight from the POST response — no
+    // reason to wait for list() to catch up just to show it. So: patch
+    // it into the local sidebar arrays immediately, and keep protecting
+    // that entry from being clobbered by a stale server response for a
+    // short window, long enough for KV to actually propagate.
+    const localPatches = new Map(); // id -> { summary: {...}|null, expiresAt }
+    const PATCH_TTL_MS = 20000;
+
+    function summaryFromThread(t) {
+      return {
+        id: t.id, module: t.module, moduleName: t.moduleName, icon: t.icon, accent: t.accent,
+        brand: t.brand, title: t.title, submitter: t.submitter, submittedAt: t.submittedAt,
+        lastActivity: t.lastActivity, solved: t.solved, solvedAt: t.solvedAt,
+        replyCount: t.messages.length,
+      };
+    }
+
+    // Call right after a solve/unsolve/reply/edit/recall action succeeds —
+    // `t` is the fresh thread record the server just handed back.
+    function patchLocalThread(t) {
+      localPatches.set(t.id, { summary: summaryFromThread(t), expiresAt: Date.now() + PATCH_TTL_MS });
+      applyLocalPatches();
+      renderLists();
+    }
+
+    // Call right after a delete succeeds.
+    function removeLocalThread(id) {
+      localPatches.set(id, { summary: null, expiresAt: Date.now() + PATCH_TTL_MS });
+      applyLocalPatches();
+      renderLists();
+    }
+
+    // Re-applies every still-valid local patch on top of whatever
+    // activeThreads/solvedThreads currently hold (freshly fetched from the
+    // server, or just patched) — expired patches (KV has had plenty of
+    // time to catch up by then) are dropped so the server becomes the
+    // source of truth again.
+    function applyLocalPatches() {
+      const now = Date.now();
+      for (const [id, patch] of Array.from(localPatches.entries())) {
+        if (patch.expiresAt < now) { localPatches.delete(id); continue; }
+        activeThreads = activeThreads.filter((t) => t.id !== id);
+        solvedThreads = solvedThreads.filter((t) => t.id !== id);
+        if (patch.summary) (patch.summary.solved ? solvedThreads : activeThreads).unshift(patch.summary);
+      }
+    }
+
+    const activeList = document.getElementById("activeList");
+    const solvedList = document.getElementById("solvedList");
+    const activeCount = document.getElementById("activeCount");
+    const solvedCount = document.getElementById("solvedCount");
+    const main = document.getElementById("threadsMain");
+
+    // ---- Active/Solved/Recall tabs (2026-08 — replaces the old always-
+    // stacked collapsible sections). Only one panel is visible at a
+    // time; switching tabs also exits Select mode (selection never
+    // spans tabs — simpler than the old two-independent-select-alls
+    // design, and matches how the single "Select all" checkbox below is
+    // scoped to whichever tab is open). Recall has no Select mode at
+    // all (no bulk actions ever applied to it, same as before — its
+    // items don't even render a ⋮ menu, see renderRecallList()).
+    let currentTab = "active";
+    let isAdminForRecall = false; // set in bootDashboard(); gates the Recall tab itself
+
+    function switchTab(tab) {
+      if (tab === "recall" && !isAdminForRecall) return;
+      if (selectMode) { selectMode = false; selectedIds.clear(); }
+      openItemMenuId = null;
+      currentTab = tab;
+      document.querySelectorAll(".threads-section[data-tab-panel]").forEach((sec) => {
+        sec.style.display = sec.dataset.tabPanel === tab ? "" : "none";
+      });
+      document.querySelectorAll(".threads-tab").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.tab === tab);
+      });
+      renderLists();
+      if (tab === "recall") renderRecallList();
+    }
+    document.querySelectorAll(".threads-tab").forEach((btn) => {
+      btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+    });
+    switchTab("active"); // sets the initial panel/tab visual state before any data has loaded
+
+    document.getElementById("selectToggleBtn").addEventListener("click", () => {
+      selectMode = !selectMode;
+      selectedIds.clear();
+      renderLists();
+    });
+    document.getElementById("bulkReadBtn").addEventListener("click", runBulkReadToggle);
+    document.getElementById("bulkSolveBtn").addEventListener("click", runBulkSolveToggle);
+    document.getElementById("tabSelectAll").addEventListener("click", (e) => e.stopPropagation());
+    document.getElementById("tabSelectAll").addEventListener("change", (e) => {
+      selectMode = true;
+      const arr = currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []);
+      arr.forEach((t) => (e.target.checked ? selectedIds.add(t.id) : selectedIds.delete(t.id)));
+      renderLists();
+    });
+    // Click anywhere outside an open ⋮ dropdown closes it — the menu and
+    // its own trigger button both stop propagation on their own clicks
+    // (see buildItemMenu/renderItem), so anything that reaches here is
+    // genuinely "elsewhere".
+    document.addEventListener("click", () => {
+      if (openItemMenuId !== null) { openItemMenuId = null; renderLists(); }
+    });
+
+    const RECALL_TYPE_META = {
+      "delete-thread": { icon: "🗑", badge: "Deleted" },
+      "recall-root": { icon: "↩️", badge: "Recalled" },
+      "recall-reply": { icon: "↩️", badge: "Recalled reply" },
+    };
+
+    // Admin-only — the whole #recallSection is display:none for non-admins
+    // (set in bootDashboard), and the server 401s this endpoint for them
+    // too, so this never actually runs for a non-admin account.
+    async function loadRecallLog() {
+      try {
+        const res = await authFetch("/api/deletion-log", { cache: "no-store" });
+        if (res.status === 401) return; // not admin (or logged out — authFetch already handled that)
+        const data = await res.json();
+        if (!data.ok) return;
+        recallEntries = data.entries || [];
+        renderRecallList();
+      } catch {
+        // Network hiccup — leave the list as-is, try again next poll.
+      }
+    }
+
+    function renderRecallList() {
+      document.getElementById("recallCount").textContent = recallEntries.length;
+      const list = document.getElementById("recallList");
+      if (!recallEntries.length) {
+        list.innerHTML = '<div class="threads-empty">No deletions logged yet.</div>';
+        return;
+      }
+      list.innerHTML = recallEntries.map((e) => {
+        const meta = RECALL_TYPE_META[e.type] || { icon: "🗑", badge: e.type };
+        return `
+          <div class="thread-item recall-item">
+            <div class="icon">${meta.icon}</div>
+            <div class="meta">
+              <div class="t-title"><span class="badge">${escapeHtml(meta.badge)}</span>${escapeHtml(e.threadTitle || "")}</div>
+              <div class="t-sub">${escapeHtml(e.by || "unknown")} · ${timeAgo(e.ts)}${e.brand ? " · " + escapeHtml(e.brand) : ""}</div>
+              <div class="t-content">${escapeHtml((e.content || "").slice(0, 120))}</div>
+            </div>
+          </div>`;
+      }).join("");
+      polishEmoji();
+      updateAllThreadsCard();
+    }
+
+    document.getElementById("threadSearch").addEventListener("input", (e) => {
+      clearTimeout(searchTimer);
+      const q = e.target.value;
+      searchTimer = setTimeout(() => loadList(q), 250);
+    });
+
+    let pendingAttachments = []; // File[] — queued for the next reply, up to MAX_REPLY_ATTACHMENTS
+    const MAX_REPLY_ATTACHMENTS = 10; // Telegram's own sendMediaGroup album cap
+    const MAX_ATTACHMENT_MB = 45; // stays under Telegram Bot API's ~50MB upload ceiling with some margin
+    let replyTarget = null; // { messageId, from, text } | null
+
+    function setReplyTarget(messageId, from, text) {
+      replyTarget = { messageId: Number(messageId), from, text };
+      renderReplyTargetBanner();
+      document.getElementById("replyInput")?.focus();
+    }
+    function clearReplyTarget() {
+      replyTarget = null;
+      renderReplyTargetBanner();
+    }
+    function renderReplyTargetBanner() {
+      const el = document.getElementById("replyTargetBanner");
+      if (!el) return;
+      if (!replyTarget) { el.innerHTML = ""; return; }
+      el.innerHTML = `
+        <span class="reply-target-chip">
+          ↳ Replying to <b>${escapeHtml(replyTarget.from)}</b>: ${escapeHtml((replyTarget.text || "").slice(0, 60))}
+          <button type="button" id="cancelReplyTarget">✕</button>
+        </span>`;
+      document.getElementById("cancelReplyTarget").addEventListener("click", clearReplyTarget);
+      polishEmoji();
+    }
+
+    function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function renderAttachPreview() {
+      const el = document.getElementById("replyAttachPreview");
+      if (!el) return;
+      if (!pendingAttachments.length) { el.innerHTML = ""; return; }
+      el.innerHTML = pendingAttachments.map((f, i) => `
+        <span class="attach-chip">📎 ${escapeHtml(f.name)} (${Math.round(f.size / 1024)} KB)
+          <button type="button" data-clear-attach="${i}">✕</button>
+        </span>`).join("");
+      el.querySelectorAll("[data-clear-attach]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          pendingAttachments.splice(Number(btn.dataset.clearAttach), 1);
+          document.getElementById("replyFileInput").value = "";
+          renderAttachPreview();
+        });
+      });
+      polishEmoji();
+    }
+
+    // Shared by the file picker (change event) and clipboard paste — both
+    // just hand this a list of File objects and it applies the same
+    // rules: drop anything over MAX_ATTACHMENT_MB (with a heads-up, since
+    // a silent drop would look like a bug), cap the total queued at
+    // MAX_REPLY_ATTACHMENTS, then re-render the chip row.
+    function queueAttachments(files) {
+      if (!files.length) return;
+      const tooBig = files.filter((f) => f.size > MAX_ATTACHMENT_MB * 1024 * 1024);
+      const sized = files.filter((f) => f.size <= MAX_ATTACHMENT_MB * 1024 * 1024);
+      if (tooBig.length) alert(`${tooBig.map((f) => f.name).join(", ")} — over ${MAX_ATTACHMENT_MB}MB, Telegram will reject it. Not added.`);
+      const room = MAX_REPLY_ATTACHMENTS - pendingAttachments.length;
+      if (sized.length > room) alert(`You can attach up to ${MAX_REPLY_ATTACHMENTS} files in one message — only the first ${Math.max(room, 0)} of your new selection were added.`);
+      pendingAttachments.push(...sized.slice(0, Math.max(room, 0)));
+      renderAttachPreview();
+    }
+
+    function timeAgo(iso) {
+      const d = new Date(iso);
+      return d.toLocaleDateString(undefined, { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    }
+
+    // Unread tracking — per-browser (each agent's "have I seen this" state
+    // is naturally their own, not shared team-wide, same as Telegram's own
+    // unread counts). Stored as "how many messages had I seen last time".
+    function getSeenCount(id) {
+      return parseInt(localStorage.getItem(`lastseen:${id}`) || "0", 10);
+    }
+    function markSeen(id, count) {
+      localStorage.setItem(`lastseen:${id}`, String(count));
+    }
+
+    // Everything renderItem()'s markup/handlers depend on — if none of
+    // this changed since the node was last built, the existing DOM node
+    // can be reused as-is (see renderLists()) instead of torn down and
+    // recreated.
+    function itemRenderKey(t) {
+      return [
+        t.title, t.submitter, t.lastActivity, t.replyCount, t.solved,
+        t.accent, t.icon, getSeenCount(t.id),
+        t.id === selectedId, selectMode, selectedIds.has(t.id),
+        openItemMenuId === t.id,
+      ].join("|");
+    }
+
+    function renderItem(t) {
+      const el = document.createElement("div");
+      const unread = Math.max(0, (t.replyCount || 0) - getSeenCount(t.id));
+      const checked = selectedIds.has(t.id);
+      el.className = "thread-item" + (t.id === selectedId ? " selected" : "") + (selectMode ? " select-mode" : "");
+      el.style.setProperty("--thread-accent", t.accent || "#7c6cf0");
+      el.innerHTML = `
+        ${selectMode
+          ? `<input type="checkbox" class="thread-item-check" ${checked ? "checked" : ""} />`
+          : `<div class="icon" style="background:${(t.accent || "#7c6cf0")}33;">${t.icon || "🔔"}</div>`}
+        <div class="meta">
+          <div class="t-title">${escapeHtml(t.title)}</div>
+          <div class="t-sub">${escapeHtml(t.submitter)} · ${timeAgo(t.lastActivity)}${t.replyCount ? " · " + t.replyCount + " reply" : ""}</div>
+        </div>
+        ${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
+        ${t.solved ? '<span class="t-done">✓</span>' : ""}
+        ${selectMode ? "" : '<button type="button" class="item-menu-btn" title="More">⋮</button>'}
+      `;
+      if (selectMode) {
+        el.addEventListener("click", (e) => {
+          if (e.target.closest(".thread-item-check")) return; // its own change handler covers this
+          toggleThreadSelected(t.id);
+        });
+        el.querySelector(".thread-item-check").addEventListener("change", () => toggleThreadSelected(t.id));
+      } else {
+        el.addEventListener("click", (e) => {
+          if (e.target.closest(".item-menu-btn")) return;
+          if (t.id !== selectedId) { pendingAttachments = []; replyTarget = null; }
+          openThread(t.id);
+        });
+        el.querySelector(".item-menu-btn").addEventListener("click", (e) => {
+          e.stopPropagation();
+          openItemMenuId = openItemMenuId === t.id ? null : t.id;
+          renderLists();
+        });
+        if (openItemMenuId === t.id) el.appendChild(buildItemMenu(t, unread));
+      }
+      return el;
+    }
+
+    // The ⋮ dropdown for a single thread row — the last two rows are
+    // dynamic (which one shows depends on the ticket's current state),
+    // see the feature doc's ⋮ menu table.
+    function buildItemMenu(t, unread) {
+      const menu = document.createElement("div");
+      menu.className = "item-menu";
+      menu.innerHTML = `
+        <div class="item-menu-option" data-action="select"><span class="item-menu-icon">☐</span>Select</div>
+        ${unread > 0
+          ? '<div class="item-menu-option" data-action="markread"><span class="item-menu-icon ok">✓</span>Mark as read</div>'
+          : '<div class="item-menu-option" data-action="markunread"><span class="item-menu-icon">○</span>Mark as unread</div>'}
+        ${t.solved
+          ? '<div class="item-menu-option" data-action="unsolve"><span class="item-menu-icon danger">✕</span>Not solved</div>'
+          : '<div class="item-menu-option" data-action="solve"><span class="item-menu-icon ok">✅</span>Solved</div>'}
+      `;
+      menu.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const opt = e.target.closest("[data-action]");
+        if (!opt) return;
+        handleItemMenuAction(t, opt.dataset.action);
+      });
+      return menu;
+    }
+
+    function toggleThreadSelected(id) {
+      if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+      renderLists();
+    }
+
+    function handleItemMenuAction(t, action) {
+      openItemMenuId = null;
+      if (action === "select") {
+        selectMode = true;
+        selectedIds.add(t.id);
+      } else if (action === "markread") {
+        markSeen(t.id, t.replyCount || 0);
+      } else if (action === "markunread") {
+        markSeen(t.id, 0);
+      } else if (action === "solve" || action === "unsolve") {
+        setThreadSolvedById(t.id, action === "solve");
+      }
+      renderLists();
+    }
+
+    // Toggles solved/unsolved for an arbitrary thread id — used by the ⋮
+    // menu and by bulk actions below, neither of which necessarily has
+    // that thread open as selectedThread (toggleSolved() further down
+    // stays as the top-of-ticket status-chip's own version of this, which
+    // always operates on selectedThread).
+    async function setThreadSolvedById(id, solved) {
+      try {
+        const res = await authFetch(`/api/threads/${id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: solved ? "solve" : "unsolve" }),
+        });
+        const data = await res.json();
+        if (!data.ok) return;
+        patchLocalThread(data.thread);
+        if (selectedId === id) {
+          selectedThread = data.thread;
+          updateThreadContent(selectedThread, true);
+        }
+      } catch {
+        // Network hiccup — leave state as-is, agent can retry from the menu.
+      }
+    }
+
+    // ---- Select batch mode bulk actions ---------------------------------
+    function renderBulkBar() {
+      const bar = document.getElementById("bulkActionBar");
+      if (!selectMode) { bar.style.display = "none"; return; }
+      bar.style.display = "flex";
+      const inSelection = [...activeThreads, ...solvedThreads].filter((t) => selectedIds.has(t.id));
+      const readBtn = document.getElementById("bulkReadBtn");
+      const solveBtn = document.getElementById("bulkSolveBtn");
+      const nothingSelected = inSelection.length === 0;
+      readBtn.disabled = nothingSelected;
+      solveBtn.disabled = nothingSelected;
+      if (nothingSelected) return; // leave whatever label was already showing — just greyed out, not clickable
+      const anyUnread = inSelection.some((t) => Math.max(0, (t.replyCount || 0) - getSeenCount(t.id)) > 0);
+      readBtn.textContent = anyUnread ? "✓ Mark as read" : "○ Mark as unread";
+      readBtn.classList.toggle("tone-positive", anyUnread);
+      readBtn.classList.toggle("tone-negative", !anyUnread);
+      readBtn.dataset.mode = anyUnread ? "read" : "unread";
+      const anyUnsolved = inSelection.some((t) => !t.solved);
+      solveBtn.textContent = anyUnsolved ? "✅ Solved" : "✕ Not solved";
+      solveBtn.classList.toggle("tone-positive", anyUnsolved);
+      solveBtn.classList.toggle("tone-negative", !anyUnsolved);
+      solveBtn.dataset.mode = anyUnsolved ? "solve" : "unsolve";
+    }
+
+    // The single "Select all" checkbox (now shared by both tabs instead
+    // of one per section) reflects whether every thread in the CURRENTLY
+    // OPEN tab is selected — Recall never renders this row at all (no
+    // bulk actions there), so this is never called while currentTab is
+    // "recall" in practice, but guards anyway.
+    function syncTabSelectAll() {
+      const cb = document.getElementById("tabSelectAll");
+      const arr = currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []);
+      cb.checked = arr.length > 0 && arr.every((t) => selectedIds.has(t.id));
+    }
+
+    // Drives the "All threads" card's subtitle, count badge, and the
+    // Select/Cancel button label+visibility — recomputed after every
+    // render (renderLists() for Active/Solved, renderRecallList() for
+    // Recall) so it always reflects whichever tab is currently open.
+    function updateAllThreadsCard() {
+      const labelMap = { active: "Active", solved: "Solved", recall: "Recall" };
+      const sub = document.getElementById("allThreadsSub");
+      const countEl = document.getElementById("allThreadsCount");
+      const toggleBtn = document.getElementById("selectToggleBtn");
+      toggleBtn.style.display = currentTab === "recall" ? "none" : "";
+      toggleBtn.textContent = selectMode ? "Cancel" : "Select";
+      if (currentTab === "recall") {
+        sub.textContent = `Recall log · ${recallEntries.length} ${recallEntries.length === 1 ? "entry" : "entries"}`;
+        countEl.textContent = recallEntries.length;
+        return;
+      }
+      const arr = currentTab === "active" ? activeThreads : solvedThreads;
+      const unread = arr.filter((t) => Math.max(0, (t.replyCount || 0) - getSeenCount(t.id)) > 0).length;
+      sub.textContent = `${labelMap[currentTab]} threads · ${unread} new ${unread === 1 ? "reply" : "replies"}`;
+      countEl.textContent = selectMode ? selectedIds.size : arr.length;
+    }
+
+    function runBulkReadToggle() {
+      const makeRead = document.getElementById("bulkReadBtn").dataset.mode === "read";
+      [...activeThreads, ...solvedThreads].forEach((t) => {
+        if (selectedIds.has(t.id)) markSeen(t.id, makeRead ? (t.replyCount || 0) : 0);
+      });
+      selectMode = false;
+      selectedIds.clear();
+      renderLists();
+    }
+
+    async function runBulkSolveToggle() {
+      const readBtn = document.getElementById("bulkReadBtn");
+      const solveBtn = document.getElementById("bulkSolveBtn");
+      const solving = solveBtn.dataset.mode === "solve";
+      const ids = Array.from(selectedIds);
+      readBtn.disabled = true;
+      solveBtn.disabled = true;
+      await Promise.all(ids.map((id) => setThreadSolvedById(id, solving)));
+      readBtn.disabled = false;
+      solveBtn.disabled = false;
+      selectMode = false;
+      selectedIds.clear();
+      renderLists();
+      loadList(document.getElementById("threadSearch").value);
+    }
+
+    function polishEmoji(root) {
+      if (window.twemoji) window.twemoji.parse(root || document.body, { folder: "svg", ext: ".svg" });
+    }
+
+    // Reconciles the sidebar to match activeThreads/solvedThreads without
+    // rebuilding it from scratch — reuses each thread's existing DOM node
+    // (same identity, same listeners) whenever its itemRenderKey() hasn't
+    // changed, only relocating it if it moved between/within a section and
+    // only rebuilding its innerHTML when something it displays actually
+    // changed. This is what keeps a 6-second poll cheap even with a large
+    // Solved history: on a typical poll nothing in that history changed,
+    // so nothing there gets touched at all.
+    function reconcileSection(container, threads, touchedEls) {
+      let prevEl = null;
+      threads.forEach((t) => {
+        const key = itemRenderKey(t);
+        let entry = renderedItemEls.get(t.id);
+        if (!entry || entry.key !== key) {
+          if (entry) entry.el.remove(); // detach stale node before replacing the Map pointer, or it leaks as an orphan
+          entry = { el: renderItem(t), key };
+          renderedItemEls.set(t.id, entry);
+          touchedEls.push(entry.el);
+        }
+        const wantPos = prevEl ? prevEl.nextSibling : container.firstChild;
+        if (entry.el.parentNode !== container || entry.el !== wantPos) {
+          container.insertBefore(entry.el, wantPos);
+        }
+        prevEl = entry.el;
+      });
+    }
+
+    function renderLists() {
+      activeCount.textContent = activeThreads.length;
+      solvedCount.textContent = solvedThreads.length;
+
+      const touchedEls = []; // nodes newly created or rebuilt this pass — only these need twemoji re-parsing
+
+      let activeEmpty = activeList.querySelector(".threads-empty");
+      if (!activeThreads.length) {
+        if (!activeEmpty) activeList.innerHTML = '<div class="threads-empty">No active threads.<br/>Submit a form to start one.</div>';
+      } else {
+        if (activeEmpty) activeEmpty.remove();
+        reconcileSection(activeList, activeThreads, touchedEls);
+      }
+      reconcileSection(solvedList, solvedThreads, touchedEls);
+
+      // Drop tracked nodes for threads that no longer exist in either list
+      // (deleted, or just filtered out by the current search) — everything
+      // still present was already repositioned/rebuilt above.
+      const currentIds = new Set([...activeThreads, ...solvedThreads].map((t) => t.id));
+      for (const [id, entry] of renderedItemEls) {
+        if (!currentIds.has(id)) {
+          entry.el.remove();
+          renderedItemEls.delete(id);
+        }
+      }
+
+      touchedEls.forEach((el) => polishEmoji(el));
+      renderBulkBar();
+      syncTabSelectAll();
+      updateAllThreadsCard();
+    }
+
+    async function loadList(q) {
+      try {
+        const res = await authFetch(`/api/threads${q ? "?q=" + encodeURIComponent(q) : ""}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.ok) return;
+        activeThreads = data.active || [];
+        solvedThreads = data.solved || [];
+        applyLocalPatches();
+        renderLists();
+      } catch {
+        // Network hiccup — keep showing the last known list, try again next poll.
+      }
+    }
+
+    async function openThread(id) {
+      selectedId = id;
+      renderLists();
+      try {
+        const res = await authFetch(`/api/threads/${id}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.ok) {
+          main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread.</div>`;
+          return;
+        }
+        selectedThread = data.thread;
+        renderDetail();
+        markSeen(id, selectedThread.messages.length);
+        renderLists();
+      } catch {
+        main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — check your connection.</div>`;
+      }
+    }
+
+    // Called by the poll (and only the poll) — fetches fresh data for the
+    // open thread but updates it in place via updateThreadContent, so a
+    // reply the agent is mid-typing is never interrupted.
+    async function refreshOpenThread() {
+      if (!selectedId) return;
+      try {
+        const res = await authFetch(`/api/threads/${selectedId}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.ok) return;
+        selectedThread = data.thread;
+        updateThreadContent(selectedThread);
+        markSeen(selectedId, selectedThread.messages.length);
+        renderLists();
+        loadMentionCandidatesForThread(selectedThread);
+      } catch {
+        // Network hiccup — leave the panel as-is, try again next poll.
+      }
+    }
+
+    // The header bar only (icon/title/status/action buttons) — this is
+    // the part that stays visually frozen at the top of the panel,
+    // never scrolls, regardless of ticket detail or conversation length.
+    function buildHeaderHTML(t) {
+      return `
+        <div class="thread-detail-header">
+          <div>
+            <div class="thread-detail-title"><span>${t.icon || "🔔"}</span> ${escapeHtml(t.title)}</div>
+            <div class="thread-detail-sub">👤 ${escapeHtml(t.submitter)} &nbsp;·&nbsp; 📅 ${timeAgo(t.submittedAt)} &nbsp;·&nbsp; ${escapeHtml(t.brand)}</div>
+          </div>
+          <div class="thread-detail-actions">
+            <button class="status-chip ${t.solved ? "solved" : "unsolved"}" id="solveBtn">${t.solved ? "✅ Solved" : "❌ Not Solved"}</button>
+            ${!t.rootRecalled && (!t.fieldMap || !t.brandId) ? '<button class="icon-btn labeled" id="editRootBtn" title="Edit the original Telegram message (plain text — this ticket predates field-level editing)">✏️ Edit</button>' : ""}
+            ${!t.rootRecalled && t.fieldMap && t.brandId ? '<button class="icon-btn labeled" id="editDetailsBtn" title="Edit fields — syncs the Telegram message + the Sheet row (if any)">📊 Edit</button>' : ""}
+            ${t.fieldMap && t.brandId ? '<button class="icon-btn labeled" id="forwardBtn" title="Generate a new ticket in another Topic, pre-filled from this one">↗️ Forward</button>' : ""}
+            ${!t.rootRecalled ? '<button class="icon-btn labeled" id="recallRootBtn" title="Recall (delete) the original Telegram message">↩️ Recall</button>' : ""}
+            <button class="icon-btn labeled" id="deleteBtn" title="Delete this tracking record (Telegram + Sheet are untouched)">🗑 Delete</button>
+            <button class="icon-btn labeled" id="refreshBtn" title="Refresh this thread">🔄 Refresh</button>
+          </div>
+        </div>
+        <hr class="thread-divider" />
+      `;
+    }
+
+    // The ticket detail card (recalled notice + summary/rootText +
+    // attachments) — this now scrolls together with the conversation
+    // instead of staying pinned, since only the header bar above should
+    // stay frozen.
+    function buildSummaryHTML(t) {
+      return `
+        ${t.rootRecalled ? `
+          <div class="edit-modal-note err" style="font-size:12.5px; margin-bottom:14px;">
+            ⚠️ The original message was recalled from Telegram — this ticket no longer exists in the group.
+          </div>` : ""}
+
+        ${(() => {
+          // Clickable "View attachment" buttons for the ORIGINAL ticket's
+          // own photo(s)/document(s) — reuses the exact same lightbox
+          // (viewAttachment(), see the script below) and the same
+          // /api/attachment/<fileId> live-proxy endpoint that reply
+          // attachments use. Only present for tickets submitted after
+          // this feature shipped — attachmentFileIds is simply empty/
+          // undefined for older ones, so this cleanly renders nothing
+          // rather than a broken button.
+          const fileIds = t.attachmentFileIds || [];
+          const attachmentButtons = fileIds.length ? `
+            <div class="thread-summary-attachments">
+              ${fileIds.map((fid, i) => `
+                <div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="ticket-attachment-${i + 1}">
+                  <div class="inline-attach-loading">Loading attachment…</div>
+                </div>
+              `).join("")}
+            </div>` : "";
+
+          if (t.rootEdited) {
+            return `
+              <div class="thread-summary-card">
+                <div class="row" style="margin-bottom:6px;"><b style="color:var(--accent-gold);">✏️ Edited — current message text:</b></div>
+                <div style="white-space:pre-wrap; font-size:13px;">${escapeHtml(stripHtmlTags(t.rootText || ""))}</div>
+                ${attachmentButtons}
+              </div>`;
+          }
+          // The exact text originally sent to Telegram — same emoji,
+          // same line breaks, same wording an agent would see in the
+          // Telegram group itself (just with the <b> HTML tags stripped,
+          // since this renders as plain text, not HTML). Falls back to
+          // the old simplified field-list (t.summary) only in the
+          // unlikely case rootText itself is empty for some reason.
+          if (t.rootText) {
+            return `
+              <div class="thread-summary-card">
+                <div style="white-space:pre-wrap; font-size:13px; line-height:1.6;">${escapeHtml(stripHtmlTags(t.rootText))}</div>
+                ${attachmentButtons}
+              </div>`;
+          }
+          if (t.summary && t.summary.length) {
+            return `
+              <div class="thread-summary-card">
+                ${t.summary.map((s) => `<div class="row"><b>${escapeHtml(s.label)}:</b> <span>${escapeHtml(s.value)}</span></div>`).join("")}
+                ${attachmentButtons}
+              </div>`;
+          }
+          return "";
+        })()}
+
+        ${t.forwardedFrom ? `
+          <div class="forward-link-card" data-goto-thread="${escapeAttr(t.forwardedFrom.threadId)}">
+            ↩️ Forwarded from <b>${escapeHtml(t.forwardedFrom.moduleName)}</b> — ${escapeHtml(t.forwardedFrom.title)}
+          </div>` : ""}
+        ${(t.forwardedTo || []).map((link) => `
+          <div class="forward-link-card" data-goto-thread="${escapeAttr(link.threadId)}">
+            ↗️ Forwarded to <b>${escapeHtml(link.moduleName)}</b> — ${escapeHtml(link.title)} &nbsp;<span class="forward-link-time">${timeAgo(link.at)}</span>
+          </div>`).join("")}
+      `;
+    }
+
+    function stripHtmlTags(str) {
+      return String(str).replace(/<[^>]*>/g, "");
+    }
+
+    // ---- Conversation diffed rendering (2026-08) -------------------------
+    // Same reuse-DOM-nodes-instead-of-rebuilding pattern as the sidebar's
+    // reconcileSection()/renderedItemEls above, applied to the open
+    // thread's message list. Before this, updateThreadContent() replaced
+    // #threadScrollArea's ENTIRE innerHTML on every single poll (every 6s
+    // while a thread is open) even when nothing had actually changed —
+    // browsers reset a scrollable element's scrollTop to 0 the instant its
+    // own innerHTML is reassigned, so an agent scrolled up reading older
+    // messages got yanked back to the top of the conversation every few
+    // seconds ("page jumping"). The fix has two parts: (1) the scroll
+    // container's OWN innerHTML is never touched again after the initial
+    // open — only its persistent children (#threadSummaryBlock,
+    // #conversationTitle, #conversationList) get updated, and reassigning
+    // a CHILD's innerHTML does not reset the ancestor's scrollTop; (2)
+    // within #conversationList, each message keeps its own real DOM node
+    // across polls (reconcileConversation() below) instead of the whole
+    // list being torn down and rebuilt, so an unrelated new message
+    // arriving doesn't even touch the DOM of messages already on screen.
+    let renderedMsgEls = new Map(); // key -> { el, sig } — valid only for whichever thread is CURRENTLY open; cleared in renderDetail() every time a different thread is opened, since these nodes belong to that thread's own #conversationList container.
+
+    // messageId is the natural stable key (present on every message this
+    // dashboard itself sent, and on genuine incoming Telegram replies —
+    // see appendMessage() server-side); the ts+from fallback only ever
+    // matters for older, pre-messageId-tracking rows that might still be
+    // sitting in an old thread's history.
+    function msgKey(m) {
+      return m.messageId != null ? `id:${m.messageId}` : `i:${m.ts || ""}:${m.from || ""}`;
+    }
+
+    // Builds the {rootMessageId/messageId -> {from, text}} lookup
+    // renderMsg() needs to show a quoted preview above a reply-to-message
+    // — shared logic pulled out of the old buildConversationHTML() so
+    // both the full render and the diffed update use the exact same
+    // lookup, never two slightly different copies drifting apart.
+    function buildMsgById(t) {
+      const msgById = {};
+      if (t.rootMessageId) {
+        msgById[t.rootMessageId] = { from: "Original ticket", text: stripHtmlTags(t.rootText || t.title || "") };
+      }
+      t.messages.forEach((m) => {
+        if (m.messageId) msgById[m.messageId] = { from: m.from, text: m.text };
+      });
+      return msgById;
+    }
+
+    function reconcileConversation(container, messages, msgById) {
+      let prevEl = null;
+      const seen = new Set();
+      messages.forEach((m) => {
+        const key = msgKey(m);
+        seen.add(key);
+        const sig = JSON.stringify(m); // any field renderMsg() reads is covered — simplest correct signature for a small per-message object
+        let entry = renderedMsgEls.get(key);
+        if (!entry || entry.sig !== sig) {
+          if (entry) entry.el.remove(); // detach the stale node before replacing the Map pointer, or it leaks as an orphan
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = renderMsg(m, msgById).trim();
+          const el = wrapper.firstElementChild;
+          wireMessageRowButtons(el); // exactly once, right here — see that function's own comment for why
+          entry = { el, sig };
+          renderedMsgEls.set(key, entry);
+        }
+        const wantPos = prevEl ? prevEl.nextSibling : container.firstChild;
+        if (entry.el.parentNode !== container || entry.el !== wantPos) {
+          container.insertBefore(entry.el, wantPos);
+        }
+        prevEl = entry.el;
+      });
+      // Drop nodes for messages that no longer exist (a recall/delete) —
+      // everything still present was already repositioned/reused above.
+      for (const [key, entry] of renderedMsgEls) {
+        if (!seen.has(key)) {
+          entry.el.remove();
+          renderedMsgEls.delete(key);
+        }
+      }
+    }
+
+    // Full (re)build of the conversation list — used only when opening/
+    // switching threads (renderDetail()), where starting completely fresh
+    // is correct and simpler; polls afterward go through
+    // reconcileConversation() via updateThreadContent() instead.
+    // Ticket-level summary content essentially never changes after
+    // creation except via a few specific actions (rootEdited, a forward
+    // link added, a recall) — this signature deliberately excludes
+    // anything about the ticket's OWN attachment slots' load state
+    // (buildSummaryHTML() always emits the same "Loading attachment…"
+    // placeholder markup regardless of whether loadInlineAttachments()
+    // has since filled it in with a real <img>/<video>). Comparing raw
+    // rebuilt HTML against the live DOM's innerHTML would therefore
+    // "detect a change" on every single poll once an attachment finishes
+    // loading — the DOM has an <img>, the freshly-built string still has
+    // the placeholder — endlessly rebuilding the block, discarding the
+    // loaded image, and re-showing "Loading attachment…" forever. This
+    // signature only tracks the fields that actually matter.
+    function summarySignature(t) {
+      return JSON.stringify({
+        rootRecalled: t.rootRecalled, rootEdited: t.rootEdited, rootText: t.rootText,
+        attachmentFileIds: t.attachmentFileIds, summary: t.summary,
+        forwardedFrom: t.forwardedFrom, forwardedTo: t.forwardedTo,
+      });
+    }
+    let lastSummarySig = null; // reset in renderDetail() whenever a different thread opens
+
+    function renderConversationList(t) {
+      const listEl = document.getElementById("conversationList");
+      if (!listEl) return;
+      if (!t.messages.length) {
+        renderedMsgEls.clear();
+        listEl.innerHTML = '<div class="threads-empty">No replies yet — they\'ll show up here as soon as someone replies in Telegram.</div>';
+        return;
+      }
+      // Covers the empty→non-empty transition (first reply landing while
+      // the thread is already open) — the placeholder above isn't a
+      // tracked message node, so reconcileConversation() would otherwise
+      // just insert the new message next to it instead of replacing it.
+      const placeholder = listEl.querySelector(".threads-empty");
+      if (placeholder) placeholder.remove();
+      reconcileConversation(listEl, t.messages, buildMsgById(t));
+    }
+
+    function wireTopButtons() {
+      document.getElementById("solveBtn")?.addEventListener("click", () => toggleSolved());
+      document.getElementById("deleteBtn")?.addEventListener("click", () => deleteThread());
+      document.getElementById("editRootBtn")?.addEventListener("click", () => editRoot());
+      document.getElementById("editDetailsBtn")?.addEventListener("click", () => openEditDetailsModal());
+      document.getElementById("forwardBtn")?.addEventListener("click", () => openForwardModal());
+      document.getElementById("recallRootBtn")?.addEventListener("click", () => recallRoot());
+      document.getElementById("refreshBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("spinning");
+        btn.disabled = true;
+        const startedAt = Date.now();
+        const MIN_VISIBLE_MS = 2000;
+        try {
+          await loadList(document.getElementById("threadSearch").value);
+          await refreshOpenThread();
+        } finally {
+          const elapsed = Date.now() - startedAt;
+          if (elapsed < MIN_VISIBLE_MS) await new Promise((r) => setTimeout(r, MIN_VISIBLE_MS - elapsed));
+          document.getElementById("refreshBtn")?.classList.remove("spinning");
+          if (document.getElementById("refreshBtn")) document.getElementById("refreshBtn").disabled = false;
+        }
+      });
+    }
+
+    // Scoped to #threadSummaryBlock only — that block's own innerHTML IS
+    // fully replaced whenever it changes (see updateThreadContent()), so
+    // re-wiring its cards every time is safe/correct (always fresh
+    // nodes). This is now separate from message-row buttons below, which
+    // persist across polls and must NOT be re-wired on every one (see
+    // reconcileConversation()'s new-node branch, where they're wired
+    // exactly once, at creation).
+    function wireGotoThreadCards(root) {
+      root.querySelectorAll("[data-goto-thread]").forEach((card) => {
+        card.addEventListener("click", () => openThread(card.dataset.gotoThread));
+      });
+    }
+
+    // Wires a single freshly-created message row's own action buttons —
+    // called once, at creation time, from reconcileConversation() below.
+    // NEVER called again for a node that's being reused across polls, or
+    // every poll would stack another duplicate listener on top of the
+    // last one (a real regression the old "rebuild everything, rewire
+    // everything" approach never had to worry about, since every node
+    // really was fresh every time — now that nodes persist, wiring has
+    // to happen exactly once per node instead).
+    function wireMessageRowButtons(el) {
+      el.querySelectorAll("[data-edit-reply]").forEach((btn) => {
+        btn.addEventListener("click", () => editReply(btn.dataset.editReply, btn.dataset.currentText));
+      });
+      el.querySelectorAll("[data-recall-reply]").forEach((btn) => {
+        btn.addEventListener("click", () => recallReply(btn.dataset.recallReply));
+      });
+      el.querySelectorAll("[data-reply-target]").forEach((btn) => {
+        btn.addEventListener("click", () => setReplyTarget(btn.dataset.replyTarget, btn.dataset.replyFrom, btn.dataset.replyText));
+      });
+    }
+
+    function isNearBottom(el) {
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    }
+
+    function scrollConversation(force) {
+      const area = document.getElementById("threadScrollArea");
+      if (!area) return;
+      if (force || isNearBottom(area)) area.scrollTop = area.scrollHeight;
+    }
+
+    // Full render — used when opening/switching threads. Builds the reply
+    // box fresh (it's fine to lose focus here since the panel just opened).
+    function renderDetail() {
+      const t = selectedThread;
+      if (!t) return;
+      main.innerHTML = `
+        <div class="thread-top-fixed" id="threadTopFixed">${buildHeaderHTML(t)}</div>
+        <div class="thread-scroll-area" id="threadScrollArea">
+          <div id="threadSummaryBlock">${buildSummaryHTML(t)}</div>
+          <div class="conversation-title" id="conversationTitle">Conversation (${t.messages.length})</div>
+          <div class="conversation" id="conversationList"></div>
+        </div>
+        <div class="thread-reply-fixed">
+          <div id="replyTargetBanner"></div>
+          <div class="reply-attach-preview" id="replyAttachPreview"></div>
+          <div class="reply-box">
+            <div class="reply-input-wrap">
+              <button class="attach-btn" id="attachBtn" title="Attach images, videos, or PDFs (multiple allowed, or paste an image directly into the box)">🔗</button>
+              <input type="file" id="replyFileInput" accept="image/*,video/*,application/pdf" multiple hidden />
+              <input type="text" id="replyInput" placeholder="Reply into the Telegram thread..." autocomplete="off" />
+              <div class="mention-dropdown" id="mentionDropdown" style="display:none;"></div>
+            </div>
+            <button id="replySend">Send</button>
+          </div>
+        </div>
+      `;
+      // Opening a fresh thread invalidates every message DOM node from
+      // whatever was open before — see reconcileConversation()'s own
+      // comment for why this map can't just carry over between threads.
+      renderedMsgEls.clear();
+      lastSummarySig = summarySignature(t);
+      renderConversationList(t);
+      wireGotoThreadCards(document.getElementById("threadSummaryBlock"));
+      wireTopButtons();
+      document.getElementById("replySend").addEventListener("click", sendReply);
+      document.getElementById("replyInput").addEventListener("input", handleMentionInput);
+      document.getElementById("replyInput").addEventListener("keydown", (e) => {
+        if (handleMentionKeydown(e)) return; // dropdown consumed this key (nav/select/close)
+        if (e.key === "Enter") sendReply();
+      });
+      document.getElementById("attachBtn").addEventListener("click", () => document.getElementById("replyFileInput").click());
+      document.getElementById("replyFileInput").addEventListener("change", (e) => {
+        // Accumulate across multiple picks (the attach button can be clicked
+        // again to add more) rather than replacing the queue.
+        queueAttachments(Array.from(e.target.files || []));
+        e.target.value = ""; // reset so picking the same file again still fires "change"
+      });
+      renderAttachPreview();
+      scrollConversation(true);
+      polishEmoji();
+      loadInlineAttachments();
+      loadMentionCandidatesForThread(t);
+    }
+
+    // ---- @ Tag Username --------------------------------------------------
+    // Pulls the "people who've replied here before" list for this ticket's
+    // brand+module (see functions/api/mention-candidates.js), cached in
+    // memory per brand+module so re-opening the same thread or @-ing more
+    // than once doesn't re-fetch. Also merges in THIS thread's own
+    // conversation participants on top — covers the gap between someone
+    // just replying in Telegram and the KV registry write becoming visible
+    // (KV list/get is eventually consistent), see tg-reply-threads-
+    // features doc, Step 4.
+    async function loadMentionCandidatesForThread(t) {
+      currentMentionCandidates = [];
+      if (!t.brandId || !t.module) return;
+      const cacheKey = `${t.brandId}::${t.module}`;
+      let fromServer = mentionCandidatesCache[cacheKey];
+      if (!fromServer) {
+        try {
+          const res = await authFetch(`/api/mention-candidates?brandId=${encodeURIComponent(t.brandId)}&module=${encodeURIComponent(t.module)}`, { cache: "no-store" });
+          const data = await res.json();
+          fromServer = data.ok ? (data.candidates || []) : [];
+        } catch {
+          fromServer = [];
+        }
+        mentionCandidatesCache[cacheKey] = fromServer;
+      }
+      const merged = new Map();
+      fromServer.forEach((c) => merged.set(c.handle, { handle: c.handle, from: c.from }));
+      (t.messages || []).forEach((m) => {
+        if (!m.self && m.handle) merged.set(m.handle, { handle: m.handle, from: m.from });
+      });
+      // Only apply if we're still looking at the same thread — a slow
+      // fetch shouldn't clobber a newer thread's candidates if the agent
+      // already switched away by the time this resolves.
+      if (selectedThread && selectedThread.id === t.id) {
+        currentMentionCandidates = Array.from(merged.values());
+      }
+    }
+
+    function closeMentionDropdown() {
+      const dd = document.getElementById("mentionDropdown");
+      if (dd) { dd.style.display = "none"; dd.innerHTML = ""; }
+      mentionActiveIndex = -1;
+    }
+
+    // Fires on every keystroke in the reply box — looks for an @fragment
+    // right before the cursor (only when it's at the end of the text, or
+    // more precisely at the end of what's typed so far — same simple
+    // "trailing @word" match the feature doc specifies) and filters
+    // currentMentionCandidates by that fragment as a prefix, case-insensitive.
+    function handleMentionInput(e) {
+      const input = e.target;
+      const match = input.value.match(/(?:^|\s)@(\w*)$/);
+      if (!match || !currentMentionCandidates.length) { closeMentionDropdown(); return; }
+      const frag = match[1].toLowerCase();
+      const matches = currentMentionCandidates.filter((c) => c.handle.slice(1).toLowerCase().startsWith(frag));
+      if (!matches.length) { closeMentionDropdown(); return; }
+      renderMentionDropdown(matches);
+    }
+
+    function renderMentionDropdown(matches) {
+      const dd = document.getElementById("mentionDropdown");
+      if (!dd) return;
+      mentionActiveIndex = 0;
+      dd.innerHTML = matches.map((c, i) => `
+        <div class="mention-option${i === 0 ? " active" : ""}" data-handle="${escapeAttr(c.handle)}" data-idx="${i}">
+          <span class="mention-handle">${escapeHtml(c.handle)}</span>
+          <span class="mention-from">${escapeHtml(c.from || "")}</span>
+        </div>
+      `).join("");
+      dd.style.display = "block";
+      dd.querySelectorAll(".mention-option").forEach((opt) => {
+        opt.addEventListener("mousedown", (e) => {
+          e.preventDefault(); // keep focus in the input instead of the dropdown
+          selectMentionCandidate(opt.dataset.handle);
+        });
+      });
+    }
+
+    // Replaces the trailing @fragment the agent just typed with the full
+    // "@username " (trailing space so they can keep typing the message).
+    function selectMentionCandidate(handle) {
+      const input = document.getElementById("replyInput");
+      if (!input) return;
+      input.value = input.value.replace(/(?:^|\s)@(\w*)$/, (m) => (m[0] === " " ? " " : "") + handle + " ");
+      closeMentionDropdown();
+      input.focus();
+    }
+
+    // Returns true if it handled the keypress (dropdown was open and the
+    // key was one of its own — nav/select/close), so the caller's own
+    // Enter-to-send handling gets skipped for that keystroke.
+    function handleMentionKeydown(e) {
+      const dd = document.getElementById("mentionDropdown");
+      if (!dd || dd.style.display === "none") return false;
+      const options = Array.from(dd.querySelectorAll(".mention-option"));
+      if (!options.length) return false;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        mentionActiveIndex = (mentionActiveIndex + 1) % options.length;
+        options.forEach((o, i) => o.classList.toggle("active", i === mentionActiveIndex));
+        return true;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        mentionActiveIndex = (mentionActiveIndex - 1 + options.length) % options.length;
+        options.forEach((o, i) => o.classList.toggle("active", i === mentionActiveIndex));
+        return true;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const chosen = options[mentionActiveIndex] || options[0];
+        selectMentionCandidate(chosen.dataset.handle);
+        return true;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeMentionDropdown();
+        return true;
+      }
+      return false;
+    }
+
+    // Light refresh — used by polling and after in-place actions (solve,
+    // send, edit, recall). Only touches the top info block and the
+    // conversation; the reply box (and whatever the agent is mid-typing)
+    // is never rebuilt, so focus/cursor/draft text all survive.
+    //
+    // 2026-08: no longer reassigns #threadScrollArea's own innerHTML at
+    // all (that's what caused the scrollTop-reset "page jumping" on every
+    // poll — see reconcileConversation()'s comment above for the full
+    // explanation) — only its persistent children get touched, and the
+    // conversation list is now diffed message-by-message instead of
+    // rebuilt wholesale.
+    function updateThreadContent(t, forceScroll) {
+      const topFixed = document.getElementById("threadTopFixed");
+      const scrollArea = document.getElementById("threadScrollArea");
+      const summaryBlock = document.getElementById("threadSummaryBlock");
+      const titleEl = document.getElementById("conversationTitle");
+      if (!topFixed || !scrollArea || !summaryBlock || !titleEl) { renderDetail(); return; }
+      const wasNearBottom = isNearBottom(scrollArea);
+      const newHeaderHTML = buildHeaderHTML(t);
+      if (topFixed.innerHTML !== newHeaderHTML) {
+        topFixed.innerHTML = newHeaderHTML;
+        wireTopButtons();
+      }
+      const newSig = summarySignature(t);
+      if (newSig !== lastSummarySig) {
+        summaryBlock.innerHTML = buildSummaryHTML(t);
+        wireGotoThreadCards(summaryBlock); // only when actually rebuilt — same one-wire-per-fresh-node rule as message rows
+        lastSummarySig = newSig;
+      }
+      titleEl.textContent = `Conversation (${t.messages.length})`;
+      renderConversationList(t);
+      if (forceScroll || wasNearBottom) scrollConversation(true);
+      polishEmoji(topFixed);
+      polishEmoji(scrollArea);
+      loadInlineAttachments();
+    }
+
+    const AVATAR_COLORS = ["#60A5FA", "#FBBF24", "#F87171", "#F472B6", "#34D399", "#A78BFA", "#38bdf8", "#fb923c"];
+    function colorFor(name) {
+      let hash = 0;
+      for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+      return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+    }
+
+    function renderMsg(m, msgById) {
+      // A multi-attachment reply went out as a Telegram album (one
+      // message_id per photo) — Telegram doesn't support text-editing an
+      // album item, so the ✏️ button is hidden for those; ↩️ Recall still
+      // works and deletes every message in the group.
+      const isAlbum = m.messageIds && m.messageIds.length > 1;
+      const selfControls = m.self && m.messageId ? `
+        <span class="msg-actions">
+          ${isAlbum ? "" : `<button data-edit-reply="${m.messageId}" data-current-text="${escapeAttr(m.text)}" title="Edit">✏️</button>`}
+          <button data-recall-reply="${m.messageId}" title="Recall">↩️</button>
+        </span>` : "";
+      const replyTargetBtn = m.messageId
+        ? `<button class="reply-target-btn" data-reply-target="${m.messageId}" data-reply-from="${escapeAttr(m.from)}" data-reply-text="${escapeAttr(m.text)}" title="Reply to this message">↳</button>`
+        : "";
+      const quoted = m.replyToMessageId && msgById && msgById[m.replyToMessageId];
+      const replyQuote = quoted
+        ? `<div class="reply-quote-preview"><b>${escapeHtml(quoted.from)}</b>${escapeHtml((quoted.text || "").slice(0, 80))}</div>`
+        : "";
+      const initials = (m.from || "?").trim().slice(0, 2).toUpperCase();
+      const color = m.self ? "var(--accent-gold)" : colorFor(m.from || "?");
+      const deliveredTick = m.self ? '<span class="msg-tick" title="Delivered">✓</span>' : "";
+      const attachTag = m.hasAttachment
+        ? (m.attachmentFileIds && m.attachmentFileIds.length > 1
+            ? `<div class="msg-multi-attach">${m.attachmentFileIds.map((fid, i) => `
+                <div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="${escapeAttr((m.attachmentNames && m.attachmentNames[i]) || `attachment-${i + 1}`)}">
+                  <div class="inline-attach-loading">Loading attachment…</div>
+                </div>`).join("")}</div>`
+            : (m.attachmentFileId
+                ? `<div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(m.attachmentFileId)}" data-attachment-name="${escapeAttr(m.attachmentName || "attachment")}"><div class="inline-attach-loading">Loading attachment…</div></div>`
+                : '<span class="msg-attach-tag" title="Sent before this dashboard could look attachments back up — check the Telegram group for it.">📎 attachment</span>'))
+        : "";
+      return `
+        <div class="msg-row ${m.self ? "self" : ""}">
+          <div class="msg-avatar" style="background:${color};">${initials}</div>
+          <div class="msg-body">
+            <div class="msg-who">${escapeHtml(m.from)}${m.handle ? ` <span class="msg-handle">${escapeHtml(m.handle)}</span>` : ""}${m.editedAt ? ' <span class="msg-edited">(edited)</span>' : ""}</div>
+            <div class="msg-bubble">${replyTargetBtn}${replyQuote}${escapeHtml(m.text)}${attachTag}</div>
+            <div class="msg-time">${timeAgo(m.ts)} ${deliveredTick} ${selfControls}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function toggleSolved() {
+      const action = selectedThread.solved ? "unsolve" : "solve";
+      const res = await authFetch(`/api/threads/${selectedThread.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        selectedThread = data.thread;
+        updateThreadContent(selectedThread, true);
+        patchLocalThread(selectedThread);
+        loadList();
+      }
+    }
+
+    async function deleteThread() {
+      if (!confirm("Delete this tracking record? Telegram and the Sheet are untouched — this only removes it from the dashboard.")) return;
+      const deletedId = selectedThread.id;
+      const res = await authFetch(`/api/threads/${deletedId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete" }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert(data.error || "Delete failed.");
+        return;
+      }
+      selectedId = null;
+      selectedThread = null;
+      main.innerHTML = `<div class="threads-placeholder">Pick a thread on the left, or submit a form to start one.</div>`;
+      removeLocalThread(deletedId);
+      loadList();
+    }
+
+    async function sendReply() {
+      const input = document.getElementById("replyInput");
+      const text = input.value.trim();
+      if (!text && !pendingAttachments.length) return;
+      const btn = document.getElementById("replySend");
+      btn.disabled = true;
+      btn.textContent = "Sending…";
+      try {
+        const payload = { action: "reply", text };
+        if (replyTarget) payload.replyToMessageId = replyTarget.messageId;
+        if (pendingAttachments.length) {
+          payload.attachments = await Promise.all(pendingAttachments.map(async (f) => ({
+            name: f.name,
+            type: f.type,
+            dataUrl: await fileToDataUrl(f),
+          })));
+        }
+        const res = await authFetch(`/api/threads/${selectedThread.id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          alert("❌ Send failed: " + (data.error || "unknown error") + "\n\nYour message wasn't sent — try again.");
+          return; // keep input + attachment so the agent can retry without retyping
+        }
+        selectedThread = data.thread;
+        input.value = "";
+        pendingAttachments = [];
+        replyTarget = null;
+        renderReplyTargetBanner();
+        renderAttachPreview();
+        document.getElementById("replyFileInput").value = "";
+        updateThreadContent(selectedThread, true);
+        patchLocalThread(selectedThread);
+        loadList();
+      } catch {
+        alert("❌ Send failed: network error.\n\nYour message wasn't sent — try again.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Send";
+      }
+    }
+
+    async function editRoot() {
+      const newText = prompt("Edit the original Telegram message text:\n(This edits the exact message, including any formatting tags.)", selectedThread.rootText || "");
+      if (newText === null) return; // cancelled
+      if (!newText.trim()) return alert("Text can't be empty.");
+      const res = await postAction({ action: "editRoot", text: newText });
+      if (!res.ok) return alert(res.error || "Edit failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+    }
+
+    // "🔄 Sync to Sheet" flow — a real per-field form (built straight off
+    // window.MODULES, same source of truth the submission form itself
+    // uses) instead of editRoot's single free-text prompt(). Saving posts
+    // { action: "editDetails", fields, fieldMap } to the same endpoint,
+    // which rebuilds the Telegram message AND (if this ticket wrote a
+    // trackable Sheet row — see submit.js's `sheetRef`) that Sheet row,
+    // using the exact same builder functions the original submission
+    // used. Only offered at all when the thread has t.fieldMap/t.brandId
+    // saved — see the showIf on the 📊 button in buildHeaderHTML.
+    function openEditDetailsModal() {
+      const t = selectedThread;
+      const module = (window.MODULES || []).find((m) => m.id === t.module);
+      if (!module) return alert(`Unknown module "${t.module}" — can't build an edit form for this ticket.`);
+      const fieldMap = t.fieldMap || {};
+
+      const overlay = document.createElement("div");
+      overlay.className = "edit-details-overlay";
+      overlay.innerHTML = `
+        <div class="edit-details-modal">
+          <button type="button" class="modal-close-btn" id="editDetailsClose" title="Close" aria-label="Close">✕</button>
+          <div class="edit-details-title">${module.icon || "📊"} Edit fields — ${escapeHtml(module.name)}</div>
+          <div class="edit-details-sub">Updates the Telegram message${t.sheetRef ? " and the Google Sheet row" : ""} from these values — not a guess at parsed text.</div>
+          <div class="edit-details-fields" id="editDetailsFields"></div>
+          <div class="edit-details-status" id="editDetailsStatus"></div>
+          <div class="edit-details-actions">
+            <button type="button" class="icon-btn" id="editDetailsCancel" style="width:auto; padding:0 16px;">Cancel</button>
+            <button type="button" class="btn-submit" id="editDetailsSave" style="width:auto; padding:10px 22px;">Save &amp; Sync</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const container = overlay.querySelector("#editDetailsFields");
+      const fieldEls = {};
+
+      module.fields.forEach((f) => {
+        const wrap = document.createElement("div");
+        wrap.className = "field";
+        const value = fieldMap[f.key] != null ? fieldMap[f.key] : "";
+        let controlHtml;
+        if (f.type === "textarea") {
+          controlHtml = `<textarea name="${escapeAttr(f.key)}">${escapeHtml(value)}</textarea>`;
+        } else if (f.type === "select") {
+          const rawOpts = f.optionsByBrand ? (f.optionsByBrand[t.brandId] || []) : (f.options || []);
+          const opts = rawOpts.map((o) => (typeof o === "object" ? o.value : o));
+          controlHtml = `<select name="${escapeAttr(f.key)}">
+            <option value="">— Select —</option>
+            ${opts.map((o) => `<option value="${escapeAttr(o)}" ${o === value ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+          </select>`;
+        } else {
+          const inputType = f.type === "number" ? "number" : f.type === "date" ? "date" : "text";
+          controlHtml = `<input type="${inputType}" name="${escapeAttr(f.key)}" value="${escapeAttr(value)}" />`;
+        }
+        wrap.innerHTML = `<label>${escapeHtml(f.label)}${f.required ? ' <span class="required">*</span>' : ""}</label>${controlHtml}`;
+        container.appendChild(wrap);
+        fieldEls[f.key] = { wrap, control: wrap.querySelector("input,select,textarea") };
+      });
+
+      // Same AND-of-conditions showIf logic as the submission form
+      // (public/assets/app.js) — deliberately re-implemented here rather
+      // than shared, since this modal's fieldEls are plain DOM lookups
+      // with no brand-select/attachment/reporter concepts to worry about.
+      function conditionMet(showIf) {
+        const conditions = Array.isArray(showIf) ? showIf : [showIf];
+        return conditions.every((c) => {
+          if (c.field === "brand") return c.oneOf.includes(t.brandId); // brand isn't editable here — fixed to the ticket's own
+          const driver = fieldEls[c.field];
+          return driver && c.oneOf.includes(driver.control.value);
+        });
+      }
+      function refreshVisibility() {
+        module.fields.forEach((f) => {
+          if (!f.showIf) return;
+          fieldEls[f.key].wrap.style.display = conditionMet(f.showIf) ? "" : "none";
+        });
+      }
+      module.fields.forEach((f) => {
+        if (fieldEls[f.key].control.tagName === "SELECT") {
+          fieldEls[f.key].control.addEventListener("change", refreshVisibility);
+        }
+      });
+      refreshVisibility();
+
+      function close() { overlay.remove(); }
+      overlay.querySelector("#editDetailsClose").addEventListener("click", close);
+      overlay.querySelector("#editDetailsCancel").addEventListener("click", close);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+      overlay.querySelector("#editDetailsSave").addEventListener("click", async () => {
+        const fields = module.fields
+          .filter((f) => !f.showIf || fieldEls[f.key].wrap.style.display !== "none")
+          .map((f) => ({ key: f.key, label: f.label, value: (fieldEls[f.key].control.value || "").trim() }));
+        const missingRequired = module.fields.find((f) =>
+          f.required && (!f.showIf || fieldEls[f.key].wrap.style.display !== "none") && !fieldEls[f.key].control.value.trim()
+        );
+        const statusEl = overlay.querySelector("#editDetailsStatus");
+        if (missingRequired) {
+          statusEl.textContent = `"${missingRequired.label}" is required.`;
+          statusEl.className = "edit-details-status err";
+          return;
+        }
+
+        const newFieldMap = Object.fromEntries(fields.map((f) => [f.key, f.value]));
+        const saveBtn = overlay.querySelector("#editDetailsSave");
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving…";
+        statusEl.textContent = "";
+        statusEl.className = "edit-details-status";
+
+        const res = await postAction({ action: "editDetails", fields, fieldMap: newFieldMap });
+        if (!res.ok) {
+          statusEl.textContent = res.error || "Save failed.";
+          statusEl.className = "edit-details-status err";
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Save & Sync";
+          return;
+        }
+        selectedThread = res.thread;
+        updateThreadContent(selectedThread);
+        patchLocalThread(selectedThread);
+        loadList();
+        if (res.sheetHasRef && !res.sheetSynced) {
+          alert("Telegram message updated, but the Sheet row couldn't be updated:\n" + (res.sheetError || "unknown error") + "\n\nYou may need to fix that row manually.");
+        }
+        close();
+      });
+    }
+
+    // "Generate to another Topic" (forwarding) — see functions/api/
+    // forward.js for the full write-up. Two-stage modal: pick a target
+    // Topic first, THEN its full field form appears, pre-filled
+    // wherever a field key happens to match something on the source
+    // ticket (UID/Number/Email/Remark, etc.) — everything ELSE (most
+    // often Issue Type) starts blank. Every field is editable, INCLUDING
+    // pre-filled ones (see point 1 of the design discussion — carried
+    // values might not be exactly right for the new Topic). Brand is the
+    // one exception: shown read-only, always inherited from the source
+    // ticket, never re-typed here.
+    function openForwardModal() {
+      const source = selectedThread;
+      const otherModules = (window.MODULES || []).filter((m) => m.id !== source.module);
+
+      const overlay = document.createElement("div");
+      overlay.className = "edit-details-overlay";
+      overlay.innerHTML = `
+        <div class="edit-details-modal">
+          <button type="button" class="modal-close-btn" id="fwdClose" title="Close" aria-label="Close">✕</button>
+          <div class="edit-details-title">↗️ Generate to another Topic</div>
+          <div class="edit-details-sub">Creates a brand-new ticket in the Topic you pick — new Telegram message, new Sheet row (if that Topic logs to one) — pre-filled from this ticket, same as submitting it fresh.</div>
+          <div class="field">
+            <label>Send to Topic</label>
+            <select id="fwdModule">
+              <option value="">— Select a Topic —</option>
+              ${otherModules.map((m) => `<option value="${escapeAttr(m.id)}">${m.icon || ""} ${escapeHtml(m.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div id="fwdFieldsWrap" style="display:none;">
+            <div class="field"><label>Brand</label><input type="text" value="${escapeAttr(source.brand)}" disabled /></div>
+            <div class="field"><label>Reporter / PIC <span class="required">*</span></label><input type="text" id="fwdReporter" value="${escapeAttr(getAuth()?.username || "")}" /></div>
+            <div class="edit-details-fields" id="fwdFields"></div>
+            <p class="agent-profile-section-label" style="margin-top:4px;">Attachments carried over</p>
+            <div class="thread-summary-attachments" id="fwdCarriedAttachments"></div>
+            <div class="field" style="margin-top:10px;">
+              <label>Add another attachment (optional — e.g. this Topic's group needs a photo the original one didn't)</label>
+              <div class="dropzone" id="fwdDropzone" tabindex="0">
+                <div class="dz-icon">📎</div>
+                <p class="dz-main">Click or drag files here</p>
+                <p class="dz-sub">JPG, PNG, PDF — Max 3 files, 20MB each</p>
+                <p class="dz-paste">📋 Ctrl+V / ⌘V to paste screenshot</p>
+              </div>
+              <div class="file-list" id="fwdFileList"></div>
+              <input type="file" id="fwdNewFile" multiple hidden />
+            </div>
+          </div>
+          <div class="edit-details-status" id="fwdStatus"></div>
+          <div class="edit-details-actions">
+            <button type="button" id="fwdCancel" style="width:auto; padding:14px 22px; font-size:14px; font-weight:800; border-radius:12px; border:1px solid var(--required); background:transparent; color:var(--required); cursor:pointer;">Cancel</button>
+            <button type="button" class="btn-submit" id="fwdSubmit" style="width:auto; padding:14px 22px;" disabled>Generate &amp; Send</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      function close() { window.removeEventListener("paste", onWindowPaste); overlay.remove(); }
+      overlay.querySelector("#fwdClose").addEventListener("click", close);
+      overlay.querySelector("#fwdCancel").addEventListener("click", close);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+      const fieldsWrap = overlay.querySelector("#fwdFieldsWrap");
+      const fieldsContainer = overlay.querySelector("#fwdFields");
+      const submitBtn = overlay.querySelector("#fwdSubmit");
+      const statusEl = overlay.querySelector("#fwdStatus");
+      const newFileListEl = overlay.querySelector("#fwdFileList");
+      let fieldEls = {};
+      let targetModule = null;
+      const newFiles = []; // File objects, converted to base64 only at submit time
+
+      // Show the source ticket's own attachments as the "carried over"
+      // preview — reuses the EXACT SAME inline-attach-slot markup +
+      // loadInlineAttachments() the ticket detail view itself uses
+      // (defined below), not a re-implementation.
+      const carriedFileIds = source.attachmentFileIds || [];
+      const carriedWrap = overlay.querySelector("#fwdCarriedAttachments");
+      carriedWrap.innerHTML = carriedFileIds.length
+        ? carriedFileIds.map((fid, i) => `<div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="carried-${i + 1}"><div class="inline-attach-loading">Loading…</div></div>`).join("")
+        : `<p style="font-size:12.5px; color:var(--ink-soft); margin:4px 0 0;">This ticket has no attachments to carry over.</p>`;
+      loadInlineAttachments();
+
+      overlay.querySelector("#fwdModule").addEventListener("change", (e) => {
+        targetModule = otherModules.find((m) => m.id === e.target.value) || null;
+        fieldEls = {};
+        fieldsContainer.innerHTML = "";
+        if (!targetModule) {
+          fieldsWrap.style.display = "none";
+          submitBtn.disabled = true;
+          return;
+        }
+        fieldsWrap.style.display = "";
+        submitBtn.disabled = false;
+
+        const sourceFieldMap = source.fieldMap || {};
+        targetModule.fields.forEach((f) => {
+          const wrap = document.createElement("div");
+          wrap.className = "field";
+          const value = sourceFieldMap[f.key] != null ? sourceFieldMap[f.key] : "";
+          let controlHtml;
+          if (f.type === "textarea") {
+            controlHtml = `<textarea name="${escapeAttr(f.key)}">${escapeHtml(value)}</textarea>`;
+          } else if (f.type === "select") {
+            const rawOpts = f.optionsByBrand ? (f.optionsByBrand[source.brandId] || []) : (f.options || []);
+            const opts = rawOpts.map((o) => (typeof o === "object" ? o.value : o));
+            controlHtml = `<select name="${escapeAttr(f.key)}">
+              <option value="">— Select —</option>
+              ${opts.map((o) => `<option value="${escapeAttr(o)}" ${o === value ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+            </select>`;
+          } else {
+            const inputType = f.type === "number" ? "number" : f.type === "date" ? "date" : "text";
+            controlHtml = `<input type="${inputType}" name="${escapeAttr(f.key)}" value="${escapeAttr(value)}" />`;
+          }
+          wrap.innerHTML = `<label>${escapeHtml(f.label)}${f.required ? ' <span class="required">*</span>' : ""}</label>${controlHtml}`;
+          fieldsContainer.appendChild(wrap);
+          fieldEls[f.key] = { wrap, control: wrap.querySelector("input,select,textarea") };
+        });
+
+        // Same AND-of-conditions showIf logic openEditDetailsModal above
+        // uses — re-implemented locally here too, same reasoning (no
+        // brand-select/attachment/reporter concepts to entangle with).
+        function conditionMet(showIf) {
+          const conditions = Array.isArray(showIf) ? showIf : [showIf];
+          return conditions.every((c) => {
+            if (c.field === "brand") return c.oneOf.includes(source.brandId);
+            const driver = fieldEls[c.field];
+            return driver && c.oneOf.includes(driver.control.value);
+          });
+        }
+        function refreshVisibility() {
+          targetModule.fields.forEach((f) => {
+            if (!f.showIf) return;
+            fieldEls[f.key].wrap.style.display = conditionMet(f.showIf) ? "" : "none";
+          });
+        }
+        targetModule.fields.forEach((f) => {
+          if (fieldEls[f.key].control.tagName === "SELECT") {
+            fieldEls[f.key].control.addEventListener("change", refreshVisibility);
+          }
+        });
+        refreshVisibility();
+      });
+
+      // Same dropzone behavior (click / drag&drop / paste, with a
+      // removable chip list) the submission form itself uses — see
+      // public/assets/app.js's own copy of this same logic. Re-
+      // implemented locally rather than shared since this one has to be
+      // scoped to just this modal (the paste listener in particular
+      // must NOT fire while some other part of the page has focus, and
+      // must be torn down again on close()).
+      const fwdDropzone = overlay.querySelector("#fwdDropzone");
+      const fwdFileInput = overlay.querySelector("#fwdNewFile");
+      const FWD_MAX_FILES = 3;
+      const FWD_MAX_SIZE_MB = 20;
+
+      function renderNewFileList() {
+        newFileListEl.innerHTML = newFiles
+          .map((f, i) => `<div class="file-chip"><span class="name">${escapeHtml(f.name)}</span><button type="button" data-i="${i}">&times;</button></div>`)
+          .join("");
+        newFileListEl.querySelectorAll("button").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            newFiles.splice(Number(btn.dataset.i), 1);
+            renderNewFileList();
+          });
+        });
+      }
+
+      function addNewFiles(list) {
+        const rejected = [];
+        for (const f of list) {
+          if (newFiles.length >= FWD_MAX_FILES) break;
+          if (f.size > FWD_MAX_SIZE_MB * 1024 * 1024) {
+            rejected.push(f.name);
+            continue;
+          }
+          newFiles.push(f);
+        }
+        renderNewFileList();
+        if (rejected.length) {
+          statusEl.textContent = `Skipped (over ${FWD_MAX_SIZE_MB}MB): ${rejected.join(", ")}`;
+          statusEl.className = "edit-details-status err";
+        }
+      }
+
+      fwdDropzone.addEventListener("click", () => fwdFileInput.click());
+      fwdDropzone.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") fwdFileInput.click();
+      });
+      fwdFileInput.addEventListener("change", () => {
+        addNewFiles(fwdFileInput.files);
+        fwdFileInput.value = ""; // lets the same file (or more) be picked again
+      });
+      ["dragenter", "dragover"].forEach((evt) =>
+        fwdDropzone.addEventListener(evt, (e) => { e.preventDefault(); fwdDropzone.classList.add("drag-over"); })
+      );
+      ["dragleave", "drop"].forEach((evt) =>
+        fwdDropzone.addEventListener(evt, (e) => { e.preventDefault(); fwdDropzone.classList.remove("drag-over"); })
+      );
+      fwdDropzone.addEventListener("drop", (e) => addNewFiles(e.dataTransfer.files));
+
+      // Scoped to while THIS modal is open only — added here, removed
+      // again in close() below — so pasting elsewhere on the page (e.g.
+      // the reply box) is never intercepted by a modal that isn't even
+      // visible anymore.
+      function onWindowPaste(e) {
+        const items = Array.from(e.clipboardData.items).filter((i) => i.kind === "file");
+        if (!items.length) return;
+        addNewFiles(items.map((i) => i.getAsFile()).filter(Boolean));
+      }
+      window.addEventListener("paste", onWindowPaste);
+
+      function fileToDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+
+      submitBtn.addEventListener("click", async () => {
+        if (!targetModule) return;
+        const reporter = overlay.querySelector("#fwdReporter").value.trim();
+        if (!reporter) {
+          statusEl.textContent = "Reporter / PIC is required.";
+          statusEl.className = "edit-details-status err";
+          return;
+        }
+        const fields = targetModule.fields
+          .filter((f) => !f.showIf || fieldEls[f.key].wrap.style.display !== "none")
+          .map((f) => ({ key: f.key, label: f.label, value: (fieldEls[f.key].control.value || "").trim() }));
+        const missingRequired = targetModule.fields.find((f) =>
+          f.required && (!f.showIf || fieldEls[f.key].wrap.style.display !== "none") && !fieldEls[f.key].control.value.trim()
+        );
+        if (missingRequired) {
+          statusEl.textContent = `"${missingRequired.label}" is required.`;
+          statusEl.className = "edit-details-status err";
+          return;
+        }
+        const fieldMap = Object.fromEntries(fields.map((f) => [f.key, f.value]));
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Sending…";
+        statusEl.textContent = "";
+        statusEl.className = "edit-details-status";
+
+        let newAttachments;
+        try {
+          newAttachments = await Promise.all(newFiles.map(async (file) => ({
+            name: file.name, type: file.type, dataUrl: await fileToDataUrl(file),
+          })));
+        } catch {
+          statusEl.textContent = "Couldn't read one of the new attachments.";
+          statusEl.className = "edit-details-status err";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Generate & Send";
+          return;
+        }
+
+        let res;
+        try {
+          const r = await authFetch("/api/forward", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceThreadId: source.id, targetModule: targetModule.id, fields, fieldMap, reporter, newAttachments }),
+          });
+          res = await r.json();
+        } catch {
+          statusEl.textContent = "Network error — check your connection and try again.";
+          statusEl.className = "edit-details-status err";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Generate & Send";
+          return;
+        }
+
+        if (!res.ok) {
+          statusEl.textContent = res.error || "Forward failed.";
+          statusEl.className = "edit-details-status err";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Generate & Send";
+          return;
+        }
+        if (res.sheetAttempted && !res.sheetLogged) {
+          alert("Ticket was generated and sent to Telegram, but the Sheet row couldn't be written:\n" + (res.sheetError || "unknown error"));
+        }
+
+        // Reflect the new "↗️ Forwarded to..." reference on the ORIGINAL
+        // ticket immediately (matches what addForwardedToLink() just
+        // saved server-side) — patched locally rather than re-fetched,
+        // same pattern editRoot()/recallRoot() already use elsewhere on
+        // this page.
+        selectedThread = {
+          ...source,
+          forwardedTo: [...(source.forwardedTo || []), { threadId: res.thread.id, module: targetModule.id, moduleName: targetModule.name, title: res.thread.title, at: new Date().toISOString() }],
+        };
+        updateThreadContent(selectedThread);
+        patchLocalThread(selectedThread);
+        loadList();
+        close();
+        openThread(res.thread.id); // jump straight to the newly generated ticket
+      });
+    }
+
+    async function recallRoot() {
+      if (!confirm("Recall the original ticket message from Telegram? This removes it from the group. Your tracking record, the Sheet row, and this conversation stay.")) return;
+      const res = await postAction({ action: "recallRoot" });
+      if (!res.ok) return alert(res.error || "Recall failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+      patchLocalThread(selectedThread);
+      loadList();
+    }
+
+    async function editReply(messageId, currentText) {
+      const newText = prompt("Edit this reply:", currentText || "");
+      if (newText === null) return;
+      if (!newText.trim()) return alert("Text can't be empty.");
+      const res = await postAction({ action: "editReply", messageId: Number(messageId), text: newText });
+      if (!res.ok) return alert(res.error || "Edit failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+    }
+
+    async function recallReply(messageId) {
+      if (!confirm("Recall this reply from Telegram?")) return;
+      const res = await postAction({ action: "recallReply", messageId: Number(messageId) });
+      if (!res.ok) return alert(res.error || "Recall failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+    }
+
+    async function postAction(payload) {
+      const res = await authFetch(`/api/threads/${selectedThread.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      return res.json();
+    }
+
+
+    function escapeAttr(str) {
+      return escapeHtml(str).replace(/"/g, "&quot;");
+    }
+
+    function escapeHtml(str) {
+      return String(str == null ? "" : str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    // ---- Attachment lightbox ----
+    //
+    // Reverse of the server's guessContentType() in
+    // functions/api/attachment/[fileId].js — given a MIME type, returns
+    // the file extension a downloaded file should have. Needed because
+    // "ticket-attachment-N" (the placeholder name used when we never
+    // captured the agent's original filename — see the comment above)
+    // has NO extension at all; downloading a file with no extension
+    // means the OS has no idea which app to open it with, which is
+    // exactly why a downloaded PDF can look "broken" even though the
+    // actual bytes came through Telegram completely intact.
+    function guessExtensionFromMime(mimeType) {
+      const map = {
+        "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
+        "image/bmp": "bmp", "image/heic": "heic", "image/heif": "heif",
+        "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm", "video/3gpp": "3gp",
+        "application/pdf": "pdf",
+      };
+      return map[(mimeType || "").split(";")[0].trim().toLowerCase()] || null;
+    }
+
+    // Last-resort universal fallback: for OLDER tickets (submitted before
+    // today's fix, or ones where Telegram genuinely never retained a
+    // resolvable filename/extension on its own side), neither the
+    // filename NOR the server's declared Content-Type can be trusted —
+    // there's simply no metadata left to guess from. Rather than give
+    // up, read the file's own first few bytes and check them against
+    // known "magic number" signatures every one of these formats starts
+    // with. This works regardless of what any filename or header claims,
+    // because it's reading the actual file content, not a label someone
+    // else attached to it.
+    async function sniffTypeFromBlob(blob) {
+      const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+      const hex = Array.from(head).map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (hex.startsWith("25504446")) return "application/pdf"; // %PDF
+      if (hex.startsWith("ffd8ff")) return "image/jpeg";
+      if (hex.startsWith("89504e47")) return "image/png";
+      if (hex.startsWith("474946383761") || hex.startsWith("474946383961")) return "image/gif"; // GIF87a / GIF89a
+      if (hex.startsWith("52494646") && hex.slice(16, 24) === "57454250") return "image/webp"; // RIFF....WEBP
+      if (hex.startsWith("504b0304")) return "application/zip"; // also covers docx/xlsx/pptx (all zip-based)
+      return null;
+    }
+
+    function withExtension(name, mimeType) {
+      if (/\.[a-zA-Z0-9]{2,5}$/.test(name)) return name; // already has something extension-shaped
+      const ext = guessExtensionFromMime(mimeType);
+      return ext ? `${name}.${ext}` : name;
+    }
+
+    // Fetches the real bytes live from /api/attachment/<fileId> only at
+    // the moment someone clicks — nothing is pre-fetched or cached
+    // beyond the browser's own in-memory object URL for as long as the
+    // lightbox stays open (revoked on close, see closeAttachLightbox()).
+    // Non-image files (PDF, etc.) just trigger a normal browser download
+    // instead of trying to preview inline.
+    const attachLightbox = document.getElementById("attachLightbox");
+    const attachLightboxBody = document.getElementById("attachLightboxBody");
+
+    // ---- Shared attachment cache ----
+    //
+    // Images/videos now load AUTOMATICALLY the moment a thread opens
+    // (inline in the summary card + each reply bubble) rather than
+    // needing a click first. But the thread view re-renders from
+    // scratch on every 6-second poll (see updateThreadContent()) — no
+    // caching would mean re-fetching every visible attachment from
+    // Telegram every single poll, which is slow and pointless (nothing
+    // about an already-loaded attachment ever changes). This Map caches
+    // by fileId, storing the in-flight/completed Promise itself (not
+    // just the result) so two nearly-simultaneous requests for the same
+    // fileId (e.g. the inline slot AND a lightbox click both wanting it
+    // at once) share one fetch instead of firing two.
+    const attachmentCache = new Map(); // fileId -> Promise<{url, type}>
+
+    function getAttachmentUrl(fileId, name) {
+      if (!attachmentCache.has(fileId)) {
+        attachmentCache.set(fileId, (async () => {
+          const qs = name ? `?name=${encodeURIComponent(name)}` : "";
+          const res = await authFetch(`/api/attachment/${encodeURIComponent(fileId)}${qs}`);
+          if (!res.ok) {
+            const msg = await res.text().catch(() => "");
+            throw new Error(msg || "Couldn't load this attachment.");
+          }
+          const blob = await res.blob();
+          let type = blob.type || "";
+          // Server had nothing better to declare than the generic
+          // catch-all (see the comment on sniffTypeFromBlob above) — try
+          // reading the actual bytes before giving up on knowing the type.
+          if (!type || type === "application/octet-stream") {
+            const sniffed = await sniffTypeFromBlob(blob).catch(() => null);
+            if (sniffed) type = sniffed;
+          }
+          return { url: URL.createObjectURL(blob), type };
+        })());
+      }
+      return attachmentCache.get(fileId);
+    }
+
+    // Fills every not-yet-loaded ".inline-attach-slot" on the page (the
+    // summary card's ticket attachments + each reply's inline
+    // attachment) with the real image/video, using the cache above so
+    // repeat calls (every poll) skip anything already loaded. Called at
+    // the end of updateThreadContent() — see that function.
+    function loadInlineAttachments() {
+      document.querySelectorAll(".inline-attach-slot[data-attachment-file]:not([data-filled])").forEach((slot) => {
+        const fileId = slot.dataset.attachmentFile;
+        const name = slot.dataset.attachmentName || "attachment";
+        slot.setAttribute("data-filled", "1"); // mark now so a poll landing mid-fetch doesn't double-trigger
+        getAttachmentUrl(fileId, name).then(({ url, type }) => {
+          if (!document.body.contains(slot)) return; // a newer poll already replaced this DOM before we resolved
+          if (type.startsWith("video/")) {
+            slot.innerHTML = `<video src="${url}" controls class="inline-attach-media"></video>`;
+          } else if (type.startsWith("image/")) {
+            slot.innerHTML = `<img src="${url}" alt="${escapeAttr(name)}" class="inline-attach-media" />`;
+          } else {
+            // Content-Type couldn't be confirmed as image/video (common
+            // for ticket-level attachments — see the comment on the
+            // "ticket-attachment-N" placeholder name a few lines up,
+            // which has no real extension to guess from, and Telegram
+            // itself doesn't always set a specific Content-Type either).
+            // Rather than give up and show a download link for what
+            // might genuinely be a perfectly normal photo, optimistically
+            // try rendering it as an <img> anyway — a browser decodes
+            // <img> from the ACTUAL file bytes, not the declared MIME
+            // type, so this still displays correctly even when `type`
+            // was wrong/generic. Only truly falls back to the download
+            // link if the browser actually fails to decode it as an
+            // image (this file genuinely isn't one).
+            const img = document.createElement("img");
+            img.alt = name;
+            img.className = "inline-attach-media";
+            img.addEventListener("error", () => {
+              if (!document.body.contains(slot)) return;
+              const downloadName = withExtension(name, type);
+              slot.innerHTML = `<a href="${url}" download="${escapeAttr(downloadName)}" class="inline-attach-file">📎 ${escapeHtml(downloadName)} — click to download</a>`;
+            }, { once: true });
+            slot.innerHTML = "";
+            slot.appendChild(img);
+            img.src = url; // set last so the error listener above is already attached
+          }
+          // Clicking an inline image/video also opens the fullscreen
+          // lightbox, for a closer look — small bonus on top of what
+          // was actually asked for, reuses the cache so it's instant.
+          const media = slot.querySelector("img.inline-attach-media, video.inline-attach-media");
+          if (media) media.addEventListener("click", () => viewAttachment(fileId, name));
+        }).catch((err) => {
+          if (!document.body.contains(slot)) return;
+          slot.innerHTML = `<div class="inline-attach-error">⚠️ Couldn't load this attachment.</div>`;
+        });
+      });
+    }
+
+    async function viewAttachment(fileId, name) {
+      attachLightbox.classList.add("is-open");
+      attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Loading…</div>`;
+      try {
+        const { url, type } = await getAttachmentUrl(fileId, name);
+        if (type.startsWith("video/")) {
+          attachLightboxBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
+        } else if (type.startsWith("image/")) {
+          attachLightboxBody.innerHTML = `<img src="${url}" alt="${escapeAttr(name || "attachment")}" />`;
+        } else {
+          // Content-Type wasn't confirmed as image/video — same situation
+          // as loadInlineAttachments() above (see its comment on the
+          // "ticket-attachment-N" placeholder name having no real
+          // extension). Try rendering as an <img> anyway before assuming
+          // it's a genuinely non-previewable file — a browser decodes
+          // <img> from the actual bytes, not the declared MIME type.
+          const img = document.createElement("img");
+          img.alt = name || "attachment";
+          img.addEventListener("error", () => {
+            // Really isn't an image — hand it off as a normal download
+            // instead of pretending we can preview it inline.
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = name || "attachment";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Downloaded — this file type can't be previewed here.</div>`;
+          }, { once: true });
+          attachLightboxBody.innerHTML = "";
+          attachLightboxBody.appendChild(img);
+          img.src = url; // set last so the error listener above is already attached
+        }
+      } catch (e) {
+        attachLightboxBody.innerHTML = `<div class="attach-lightbox-status attach-lightbox-error">${escapeHtml(String((e && e.message) || "Couldn't load this attachment."))}</div>`;
+      }
+    }
+
+    function closeAttachLightbox() {
+      attachLightbox.classList.remove("is-open");
+      attachLightboxBody.innerHTML = "";
+      // NOTE: deliberately NOT revoking the object URL here anymore —
+      // it's now a shared cache entry (see attachmentCache above) that
+      // an inline thumbnail elsewhere on the page may still be using,
+      // not something exclusively owned by the lightbox. Object URLs
+      // get cleaned up by the browser when the page/tab itself closes.
+    }
+    document.getElementById("attachLightboxClose").addEventListener("click", closeAttachLightbox);
+    attachLightbox.addEventListener("click", (e) => { if (e.target === attachLightbox) closeAttachLightbox(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && attachLightbox.classList.contains("is-open")) closeAttachLightbox(); });
+
+    // Paste-anywhere, like Telegram desktop: copy a screenshot and just
+    // Ctrl+V / ⌘V while a thread is open — no need to click into the
+    // reply box first. Scoped with guards instead of to one element:
+    //   - no thread open → nothing to attach it to, let it fall through
+    //   - an edit/forward modal is open → that modal has its own scoped
+    //     paste handling (see onWindowPaste in openForwardModal), let it
+    //     own the paste instead of double-queuing onto the reply below
+    //   - the attachment lightbox is open → the person is VIEWING an
+    //     existing attachment, not composing a new reply
+    // Only acts when the clipboard actually contains a file — a normal
+    // text paste (kind "string") always falls through untouched,
+    // wherever on the page it happens.
+    document.addEventListener("paste", (e) => {
+      if (!selectedThread) return;
+      if (document.querySelector(".edit-details-overlay")) return;
+      if (attachLightbox.classList.contains("is-open")) return;
+      const items = Array.from(e.clipboardData?.items || []);
+      const files = items.filter((it) => it.kind === "file").map((it) => it.getAsFile()).filter(Boolean);
+      if (!files.length) return;
+      e.preventDefault();
+      // Clipboard screenshots often come through with a generic name
+      // like "image.png" with no useful info — good enough as-is, but
+      // give it a timestamp so multiple pastes don't look identical in
+      // the chip row.
+      const named = files.map((f, i) => (f.name && f.name !== "image.png") ? f : new File([f], `pasted-${Date.now()}-${i}.${(f.type.split("/")[1] || "png")}`, { type: f.type }));
+      queueAttachments(named);
+      // Land focus in the reply box so the caption is easy to type right
+      // after pasting, same as if the person had clicked 🔗 first.
+      document.getElementById("replyInput")?.focus();
+    });
+
+    bootDashboard();
+
+    // Browsers throttle background-tab timers, so a poll can lag while the
+    // tab is hidden (e.g. agent switches to the Telegram app/tab). Catch up
+    // immediately the moment this tab becomes visible again. (Idle-timeout
+    // checking itself is authguard.js's job, not this page's.)
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        loadList(document.getElementById("threadSearch").value);
+        refreshOpenThread();
+      }
+    });
+  </script>
+</body>
+</html>

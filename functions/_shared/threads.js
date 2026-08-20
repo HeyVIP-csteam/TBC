@@ -1,0 +1,862 @@
+/**
+ * threads.js  (SERVER-ONLY)
+ *
+ * Storage for the "TG Reply Threads" feature — tracks each form submission
+ * that was sent to Telegram, plus every reply that lands in that Telegram
+ * thread (via webhook) or is sent back out from the dashboard.
+ *
+ * Backed by Cloudflare KV (binding: THREADS_KV — see wrangler.toml).
+ * Two kinds of keys:
+ *   thread:<id>          → full thread record (JSON), with a lightweight
+ *                           summary attached as this key's KV *metadata*
+ *   msgid:<chatId>:<mid>  → thread id (string) — lets the Telegram webhook
+ *                           find which thread a reply belongs to in O(1)
+ *
+ * NO SHARED "index" KEY ANYMORE. Every write used to also rewrite one
+ * single `"index"` JSON blob (the sidebar's data source) — but Cloudflare
+ * KV allows at most 1 write/sec to the SAME key, and every reply/submit/
+ * solve-toggle/edit was hitting that one key, so concurrent agents could
+ * genuinely 429 each other. Instead, each thread's own summary now rides
+ * along as *metadata* on that thread's own `put()` — a different key per
+ * thread, so two agents touching two different tickets never contend with
+ * each other at all (only two edits to the exact same ticket in the same
+ * second still could, which is a much smaller, much rarer surface). The
+ * sidebar is built with `THREADS_KV.list({ prefix: "thread:" })`, which
+ * returns every thread's metadata without fetching the full record —
+ * cheap per-call, BUT Cloudflare's free plan caps `list()` at 1,000
+ * calls/day, completely separate from (and far stricter than) the
+ * 100,000 reads/day budget. A naive "call list() on every listThreads()"
+ * (the original version of this redesign) blew through that in a
+ * couple of hours of normal 6-second sidebar polling — see the
+ * LIST_CACHE_KEY / LIST_CACHE_TTL_MS / DAILY_SCAN_LIMIT section below for
+ * the fix (a real list() scan now only happens at most once every 2
+ * minutes, cached in between, AND is hard-capped at 800 real scans per
+ * UTC day no matter what). Keep this in mind before adding any OTHER list() calls
+ * anywhere in this codebase — they all share the same 1,000/day budget.
+ *
+ * Trade-off: `list()` is only *eventually* consistent across Cloudflare's
+ * edge (per Cloudflare's docs, propagation is usually fast but isn't
+ * instant/global like a single-key read), so a brand-new ticket can take
+ * a little longer to appear in someone else's sidebar than it used to.
+ * Given the previous alternative was writes silently dropped/delayed
+ * under contention, this is a straightforward trade in the sidebar's
+ * favor. Any `thread:<id>` key saved before this change has no metadata
+ * yet — `listThreads()` below transparently falls back to reading that
+ * one thread's full record and re-saves it with metadata attached so it
+ * only ever needs to do that once per pre-existing ticket. That healing is
+ * capped per call (MAX_HEAL_PER_CALL, near listThreads() below) — right
+ * after this ships, EVERY pre-existing ticket needs healing at once, and
+ * Cloudflare caps how many subrequests one call can make, so healing them
+ * all in a single call risked 503ing the whole page (this actually
+ * happened during testing). The sidebar catches up over a few 6-second
+ * polls instead — a one-time, self-resolving cost.
+ *
+ * AUTO-CLEANUP — controls how many KV "writes"/"deletes" you burn per day
+ * (see the free-plan limits: 1,000 writes/day, 1,000 deletes/day). Adjust
+ * the two numbers below to change how long tickets stick around; set
+ * either to `Infinity` to disable that rule entirely. Cleanup runs
+ * opportunistically (piggy-backing on normal reads), since Cloudflare
+ * Pages Functions don't support Cron Triggers.
+ */
+
+// Solved tickets older than this many days are auto-deleted.
+const SOLVED_RETENTION_DAYS = 30;
+// Any ticket (solved or not) with zero activity for this many days is
+// auto-deleted as a safety net, so a never-solved ticket can't sit forever.
+const STALE_RETENTION_DAYS = 90;
+
+function newId() {
+  return `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Still used for the low-frequency admin deletion log (one shared key, but
+// only written on an actual delete/recall action — nowhere near the write
+// volume that made "index" a problem, so it's left as a single key with a
+// retry instead of also being broken apart).
+async function kvPutWithRetry(kv, key, value, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await kv.put(key, value);
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await sleep(150 * (i + 1) + Math.floor(Math.random() * 100));
+    }
+  }
+  throw lastErr;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Cloudflare KV metadata is capped at 1024 bytes (serialized) per key —
+// well clear of what a sidebar row needs, but title/submitter are free-
+// text and `extraSearchText` folds in every custom form-field value, so
+// both are hard-capped defensively rather than trusting upstream length.
+function clip(str, max) {
+  const s = String(str || "");
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+// Lightweight summary of a thread — this is what actually gets stored as
+// this key's KV metadata (see saveThread) and is all the sidebar needs to
+// render a row without fetching the full record. msgIds/chatId/topicId are
+// deliberately NOT included: they're only needed once an agent opens a
+// specific thread, which fetches the full `thread:<id>` record anyway.
+function summarize(thread) {
+  // Extra searchable text beyond title/submitter/brand (which are already
+  // their own metadata fields, so listThreads() can match them without
+  // needing them duplicated in here too) — e.g. an account ID typed into
+  // one of the module's custom fields. Capped hard so a ticket with many/
+  // long custom fields can never push this key's metadata near the limit.
+  const extraSearchText = clip(
+    (thread.summary || []).map((s) => s.value).filter(Boolean).join(" ").toLowerCase(),
+    300
+  );
+  return {
+    id: thread.id,
+    module: thread.module,
+    moduleName: thread.moduleName,
+    icon: thread.icon,
+    accent: thread.accent,
+    brand: thread.brand,
+    title: clip(thread.title, 200),
+    submitter: clip(thread.submitter, 100),
+    submittedAt: thread.submittedAt,
+    lastActivity: thread.lastActivity,
+    solved: thread.solved,
+    solvedAt: thread.solvedAt,
+    deleted: !!thread.deleted,
+    replyCount: thread.messages.length,
+    extraSearchText,
+  };
+}
+
+// Every write to a thread's own record goes through this — saves the full
+// JSON as the value, and the lightweight summary as this key's metadata,
+// in one KV write. No second key touched, so no shared hot key.
+async function saveThread(kv, thread) {
+  await kv.put(`thread:${thread.id}`, JSON.stringify(thread), {
+    metadata: summarize(thread),
+  });
+}
+
+// Deletes a thread's KV record plus every msgid: pointer that leads to it
+// (the root submission message, and any reply sent back out from the
+// dashboard). Parallelized (Promise.all) instead of one-at-a-time — these
+// are all different keys, so there's no per-key rate limit to worry about
+// here, only wall-clock time, and a thread with many messages/attachments
+// could otherwise mean a long chain of sequential round-trips.
+async function purgeThread(kv, thread) {
+  const ids = thread.msgIds || [];
+  await Promise.all([
+    kv.delete(`thread:${thread.id}`),
+    ...ids.map((mid) => kv.delete(`msgid:${thread.chatId}:${mid}`)),
+  ]);
+}
+
+function isExpired(t, now) {
+  const daysSince = (iso) => (now - new Date(iso).getTime()) / 86400000;
+  if (t.solved && t.solvedAt && daysSince(t.solvedAt) > SOLVED_RETENTION_DAYS) return true;
+  if (daysSince(t.lastActivity) > STALE_RETENTION_DAYS) return true;
+  return false;
+}
+
+// Sweeps a batch of summaries for expired entries and deletes their KV
+// records (full record fetched first, since purging needs msgIds which
+// aren't in the summary — see summarize() above). Runs on a sample of
+// listThreads() calls rather than every one, since retention windows are
+// measured in DAYS, not seconds, and this is a read-path cost now (no
+// hot-key write to protect), so it's kept cheap mainly to avoid doing
+// extra KV round-trips on every single sidebar refresh.
+const SWEEP_SAMPLE_RATE = 0.05;
+
+async function sweepExpired(kv, list) {
+  if (Math.random() >= SWEEP_SAMPLE_RATE) return list;
+  const now = Date.now();
+  const keep = [];
+  const expiredIds = [];
+  for (const t of list) {
+    if (!t.deleted && isExpired(t, now)) expiredIds.push(t.id);
+    else keep.push(t);
+  }
+  if (expiredIds.length) {
+    await Promise.all(
+      expiredIds.map(async (id) => {
+        const thread = await getThread(kv, id);
+        if (thread) await purgeThread(kv, thread);
+      })
+    );
+  }
+  return keep;
+}
+
+export async function createThread(kv, { module: moduleId, moduleName, icon, accent, brand, brandId, title, submitter, chatId, topicId, rootMessageId, rootMessageIds, rootText, hasMedia, attachmentFileIds, summary, fieldMap, screenshotLink, sheetRef, forwardedFrom }) {
+  const now = new Date().toISOString();
+  // A ticket sent as a multi-photo Telegram album (sendMediaGroup) gets
+  // ONE message_id per photo, only the FIRST of which carries the
+  // caption/text and is what `rootMessageId` points at. Everything that
+  // acts on "the original ticket message" needs to know about ALL of
+  // them, not just that first one — most importantly recallRoot() (see
+  // functions/api/threads/[id].js), which used to only delete the first
+  // photo from Telegram, silently leaving the rest behind. Falls back to
+  // a single-element array when the caller only passes rootMessageId
+  // (single-attachment or text-only tickets, where there's only one
+  // message anyway).
+  const allRootIds = rootMessageIds && rootMessageIds.length ? rootMessageIds : [rootMessageId];
+  const thread = {
+    id: newId(),
+    module: moduleId,
+    moduleName,
+    icon,
+    accent,
+    brand,
+    // routing.js's BRANDS key (e.g. "crickex") — display name alone
+    // (`brand` above) isn't enough to re-look-up BRANDS[...] later, and
+    // editDetails() (see functions/api/threads/[id].js) needs the real
+    // brand object to rebuild the message/Sheet row correctly.
+    brandId: brandId || null,
+    title,
+    submitter,
+    submittedAt: now,
+    lastActivity: now,
+    chatId: String(chatId),
+    topicId: topicId ?? null,
+    rootMessageId,
+    // Every Telegram message_id belonging to the ORIGINAL submission —
+    // see the comment above allRootIds. Threads from before this field
+    // existed simply don't have it; recallRoot() falls back to
+    // [thread.rootMessageId] for those, same net effect as before.
+    rootMessageIds: allRootIds,
+    rootText: rootText || "",
+    rootEdited: false,
+    hasMedia: !!hasMedia,
+    // Telegram's own file_id(s) for the original submission's photo(s)/
+    // document(s) — same idea and same viewer (/api/attachment/[fileId].js)
+    // as reply attachments (see functions/api/threads/[id].js), just
+    // captured at ticket-creation time instead of reply time. Empty array
+    // for text-only tickets, or if the module doesn't collect attachments.
+    attachmentFileIds: attachmentFileIds || [],
+    rootRecalled: false,
+    // Includes every id in allRootIds (not just rootMessageId) so
+    // purgeThread()'s cleanup below removes a msgid: pointer for EVERY
+    // photo in the album, not just the first — matches the msgid: KV
+    // writes a few lines down.
+    msgIds: [...allRootIds],
+    summary: summary || [],
+    messages: [],
+    solved: false,
+    solvedAt: null,
+    deleted: false,
+    // The raw { fieldKey: value } this ticket was submitted with, plus
+    // where (if anywhere) it landed in a Google Sheet — both only used by
+    // the "Sync to Sheet" editDetails action (functions/api/threads/[id].js).
+    // Threads created before this existed just have fieldMap: null /
+    // sheetRef: null, meaning they can still get their Telegram message
+    // edited the old way, just not the Sheet-syncing kind of edit.
+    fieldMap: fieldMap || null,
+    screenshotLink: screenshotLink || "",
+    // { sheetId, tab, startColumn, columns, row } — null if this
+    // submission never wrote a (trackable) Sheet row. See submit.js's
+    // comment on `sheetRef` for why it's captured at write time instead
+    // of re-derived later (routing.js's config for this brand+module
+    // could change after the fact; the row this ticket ACTUALLY landed
+    // on never does).
+    sheetRef: sheetRef || null,
+    // "Generate to another Topic" (forwarding) — see functions/api/forward.js.
+    // forwardedFrom is set ONCE at creation time on the NEW ticket, points
+    // back at the ticket it was generated from. forwardedTo lives on the
+    // ORIGINAL ticket instead and can grow (one ticket could in principle
+    // be forwarded to more than one other Topic over time), appended via
+    // addForwardedToLink() below rather than passed in here.
+    forwardedFrom: forwardedFrom || null,
+    forwardedTo: [],
+  };
+  await Promise.all([
+    saveThread(kv, thread),
+    // One msgid: pointer per photo in the album (not just the first) —
+    // so a reply to ANY of them (not only the first/captioned one) still
+    // correctly resolves back to this thread via the webhook.
+    ...allRootIds.map((mid) => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id)),
+  ]);
+  await patchListCache(kv, thread); // instant sidebar visibility — see that function's comment for why
+  return thread;
+}
+
+export async function getThread(kv, id) {
+  const raw = await kv.get(`thread:${id}`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+export async function findThreadIdByMessage(kv, chatId, messageId) {
+  return kv.get(`msgid:${chatId}:${messageId}`);
+}
+
+// One-time migration cost, per pre-existing ticket: fetch its full record
+// once and re-save it with metadata attached, so future list() calls can
+// read it cheaply. Isolated into its own function so listThreads() can
+// run a bounded batch of these in parallel (see MAX_HEAL_PER_CALL below).
+async function healThread(kv, keyName) {
+  const raw = await kv.get(keyName);
+  if (!raw) return null;
+  const thread = JSON.parse(raw);
+  const meta = summarize(thread);
+  try {
+    await kv.put(keyName, raw, { metadata: meta });
+  } catch {
+    // Non-fatal — it'll just get healed again on a future list().
+  }
+  return meta;
+}
+
+// Cloudflare caps how many subrequests a single Function invocation can
+// make (well under what a naive "heal every pre-existing ticket in one
+// pass" loop can hit). Right after this metadata-based sidebar first
+// ships, EVERY existing `thread:*` key needs healing at once — with
+// enough tickets, healing them all serially (or even all in parallel) in
+// ONE call risks tripping that limit and 503ing the whole page, which is
+// exactly what showed up in testing. Capping how many get healed per
+// call bounds the damage to a small, fixed number of extra KV round
+// trips; whatever's left over just gets picked up on the next real scan
+// (see LIST_CACHE_TTL_MS below) — a one-time, self-resolving cost.
+const MAX_HEAL_PER_CALL = 15;
+
+// The actual KV `list()` walk — separated out from listThreads() below so
+// it can be called from BEHIND a cache (see getFreshOrCachedEntries).
+// Returns every thread's summary (unsorted, still includes soft-deleted
+// entries — filtering happens in listThreads()).
+async function scanThreadsFromKV(kv) {
+  const withMeta = [];
+  const needsHeal = [];
+  let cursor;
+  do {
+    const page = await kv.list({ prefix: "thread:", cursor, limit: 1000 });
+    for (const key of page.keys) {
+      if (key.metadata) withMeta.push(key.metadata);
+      else needsHeal.push(key.name);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+
+  const healed = await Promise.all(needsHeal.slice(0, MAX_HEAL_PER_CALL).map((name) => healThread(kv, name)));
+  return [...withMeta, ...healed.filter(Boolean)];
+}
+
+// ---- Cached sidebar scan ----
+//
+// Cloudflare's Workers KV free plan caps `list()` at 1,000 calls/day —
+// completely separate from (and far lower than) the 100,000 reads/day
+// budget, and NOT documented anywhere near as prominently. Every call to
+// listThreads() used to run a real list() scan, and the sidebar polls
+// every 6 seconds — do the math on ANY single agent leaving the
+// dashboard open for a couple of hours and it's obvious this was always
+// going to blow the daily list() quota, not a maybe. This is what
+// actually caused the "Unexpected server error: KV list() limit
+// exceeded for the day" failure that showed up in testing — a real
+// architectural miss when the shared "index" key was first replaced
+// with list()+metadata (that redesign fixed the KV *write*-contention
+// problem, but nobody checked list()'s own separate, much stricter
+// quota at the time).
+//
+// Fix: a real list() scan now only happens at most once every
+// LIST_CACHE_TTL_MS — the result is cached in ONE KV key
+// (LIST_CACHE_KEY) and every listThreads() call in between just reads
+// that cache (a cheap get(), which draws from the 100,000/day read
+// budget instead, with tons of headroom). 10 minutes keeps real list()
+// calls to at most ~144/day even under continuous nonstop polling all
+// day — comfortable headroom under 1,000, and also keeps the *write*
+// side (saving the cache) well under the SEPARATE 1,000 writes/day
+// budget, which every ticket submit/reply/solve-toggle also draws from
+// (this write-budget side is the part that was originally
+// under-accounted-for at a faster 2-minute interval — see the
+// standalone cron-worker's wrangler.toml for the full writeup).
+//
+// Trade-off, stated plainly: this 10-minute window is no longer what
+// controls how fast a NEW ticket or a solved/reopened toggle shows up —
+// those are now patched into the cache instantly the moment they happen
+// (see patchListCache() and its call sites in createThread(),
+// appendMessage(), setSolved(), softDeleteThread() below), completely
+// decoupled from this interval. What this window actually still governs
+// is much lower-stakes: how often a full "health check" re-scan runs to
+// heal any drift the instant-patches might have missed (e.g. a patch
+// that failed mid-write) and to catch anything that changed OUTSIDE
+// this app's own code paths. A live CS team seeing their own actions
+// reflected instantly was the actual requirement; this background
+// consistency sweep not running for up to 10 minutes is a genuinely
+// low-stakes trade, unlike the original "your new ticket might not show
+// up for 10 minutes" framing this comment used to have (business owner
+// was right to push back hard on that version).
+//
+// Resilience: if a real scan fails (e.g. the daily list() quota is
+// ALREADY exhausted for the day when this runs), fall back to whatever
+// is cached — even hours-stale data — rather than fail the request
+// outright. Only throws if there's truly nothing cached to fall back to.
+const LIST_CACHE_KEY = "thread-list-cache";
+const LIST_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes — matches the standalone cron-worker's Cron Trigger interval. Was 2 minutes originally; raised because the cron worker's OWN writes (2 KV puts per run, regardless of interval) were consuming most of the separate 1,000 writes/day free-tier budget at that frequency — see wrangler.toml in the cron-worker folder for the full writeup of that miscalculation and why 10 minutes is the corrected value.
+
+// ---- Hard daily ceiling on real list() calls, on top of the 10-minute
+// throttle above ----
+//
+// The 10-minute throttle alone caps real scans at ~144/day under normal
+// conditions — comfortably under Cloudflare's 1,000/day limit. But it's
+// a "soft" guarantee: if several agents' polls land in the exact same
+// instant right as the cache expires, each could independently decide
+// "the cache is stale, I'll do a real scan" before any of them has
+// written the refreshed cache back — a small, bounded race, not a
+// guaranteed-zero one. This counter is the actual hard backstop the
+// business owner asked for: an explicit daily count, stored in KV,
+// checked BEFORE every real scan. Once it reaches DAILY_SCAN_LIMIT, no
+// further real list() calls happen for the rest of the UTC day no
+// matter what — the sidebar just keeps serving whatever's cached (even
+// if that means it stops updating for the remainder of the day), which
+// is a far better failure mode than risking a repeat of the outright
+// "KV list() limit exceeded" error. Resets automatically at UTC
+// midnight, same as Cloudflare's own quota window, since the counter
+// key stores which UTC calendar date it's counting for and starts over
+// the moment that date changes.
+const DAILY_SCAN_LIMIT = 800;
+const SCAN_COUNTER_KEY = "thread-list-scan-counter";
+
+function utcDateString(d) {
+  return d.toISOString().slice(0, 10); // "YYYY-MM-DD", UTC
+}
+
+// Returns true if a real scan is allowed to proceed right now (and, if
+// so, has already recorded this call against today's count). Returns
+// false if today's DAILY_SCAN_LIMIT has already been reached.
+async function tryReserveScanSlot(kv) {
+  const today = utcDateString(new Date());
+  let counter;
+  try {
+    const raw = await kv.get(SCAN_COUNTER_KEY);
+    counter = raw ? JSON.parse(raw) : null;
+  } catch {
+    counter = null;
+  }
+  if (!counter || counter.date !== today) counter = { date: today, count: 0 };
+  if (counter.count >= DAILY_SCAN_LIMIT) return false;
+  counter.count += 1;
+  try {
+    await kv.put(SCAN_COUNTER_KEY, JSON.stringify(counter));
+  } catch {
+    // If we can't even persist the counter, err on the side of caution
+    // and still allow this one scan through — the 2-minute throttle is
+    // still there as a backup limiter either way.
+  }
+  return true;
+}
+
+async function getCachedScan(kv) {
+  try {
+    const raw = await kv.get(LIST_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---- Instant sidebar updates for OUR OWN actions, decoupled from the
+// cron worker's refresh interval ----
+//
+// LIST_CACHE_TTL_MS (10 minutes) controls how long the sidebar can go
+// between full re-scans — that's the right knob for "how stale can
+// things get if nobody's actively doing anything," but it's the WRONG
+// knob for "how fast does MY OWN new ticket / solve-toggle / reply show
+// up" — those are things we already know about the instant they happen
+// (we're the ones doing them), no need to wait for the next scheduled
+// scan to notice something we already have full details on. Business
+// owner was right to push back hard on "up to 10 minutes for a new
+// ticket to appear" for a live CS team — that's not acceptable, and
+// tying ticket visibility to the write-budget-driven scan interval was
+// the wrong way to solve the original quota problem.
+//
+// This patches the EXISTING cached entries list in place (one targeted
+// KV get + put, not a full re-scan) every time something we already
+// know the outcome of happens — see the call sites in createThread(),
+// appendMessage(), setSolved(), and softDeleteThread() below. Costs 1
+// extra read + 1 extra write per action — negligible compared to the
+// action's own KV writes (saving the thread itself), and NOT tied to
+// polling frequency at all, so it doesn't reintroduce the write-budget
+// problem the cron interval was raised to fix. If there's no cache yet
+// (nobody's loaded the sidebar since the last full scan), this is a
+// harmless no-op — the next real scan builds it fresh anyway.
+async function patchListCache(kv, thread, { remove } = {}) {
+  try {
+    const cached = await getCachedScan(kv);
+    if (!cached) return; // nothing to patch yet — fine, next real scan builds it
+    const idx = cached.entries.findIndex((e) => e.id === thread.id);
+    if (remove) {
+      if (idx >= 0) cached.entries.splice(idx, 1);
+    } else {
+      const meta = summarize(thread);
+      if (idx >= 0) cached.entries[idx] = meta;
+      else cached.entries.unshift(meta); // new ticket — put it at the front, sorting happens on read anyway
+    }
+    // generatedAt is deliberately left untouched — this is a targeted
+    // patch, not a fresh scan, and keeping the original timestamp means
+    // the periodic full re-scan (which also heals/cleans up drift) still
+    // runs on its normal schedule rather than being perpetually pushed
+    // back by ongoing activity.
+    await kv.put(LIST_CACHE_KEY, JSON.stringify(cached));
+  } catch {
+    // Best-effort only — worst case, this specific update shows up on
+    // the next real scan instead of instantly. Never worth failing the
+    // actual action (creating a ticket, replying, etc.) over this.
+  }
+}
+
+async function getFreshOrCachedEntries(kv) {
+  const cached = await getCachedScan(kv);
+  const now = Date.now();
+  if (cached && now - cached.generatedAt < LIST_CACHE_TTL_MS) {
+    return cached.entries;
+  }
+  // Cache is missing or stale — normally that means "do a real scan,"
+  // but only if today's hard ceiling hasn't been hit yet.
+  const allowed = await tryReserveScanSlot(kv);
+  if (!allowed) {
+    if (cached) return cached.entries; // stale is fine — never worth risking the real quota over
+    return []; // no cache AND no budget left for today — degrade to an empty list rather than throw
+  }
+  try {
+    const entries = await scanThreadsFromKV(kv);
+    // Best-effort — a failed cache write should never break the read
+    // path; the next call just re-scans instead of reusing a cache.
+    try {
+      await kv.put(LIST_CACHE_KEY, JSON.stringify({ generatedAt: now, entries }));
+    } catch {
+      // ignored
+    }
+    return entries;
+  } catch (err) {
+    if (cached) return cached.entries; // stale beats broken
+    throw err;
+  }
+}
+
+// Sidebar list — served from the cache above almost all the time; only
+// touches KV's list() directly when that cache is missing or stale.
+export async function listThreads(kv, { q } = {}) {
+  const results = await getFreshOrCachedEntries(kv);
+
+  const swept = await sweepExpired(kv, results);
+  const visible = swept.filter((t) => !t.deleted);
+  visible.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
+  if (!q) return visible;
+  const needle = q.toLowerCase();
+  return visible.filter((t) => {
+    if ((t.extraSearchText || "").includes(needle)) return true;
+    return (
+      (t.submitter || "").toLowerCase().includes(needle) ||
+      (t.title || "").toLowerCase().includes(needle) ||
+      (t.brand || "").toLowerCase().includes(needle)
+    );
+  });
+}
+
+// ---- @ Tag Username mention-candidate registry ----
+//
+// Per brand+module list of Telegram usernames who've been seen replying
+// in that specific TG group/topic, so the reply box's @ autocomplete can
+// suggest real people instead of an agent needing to go dig through
+// Telegram itself to remember a handle. Telegram's Bot API has no "list
+// group members" call, so this can only ever be "people who've said
+// something here before, that we happened to see" — never a full
+// member directory. Keyed by brandId+moduleId (not by thread) so a
+// suggestion is (almost always) actually reachable in that specific
+// ticket's TG group/topic — matches routing.js's one-group-per-
+// brand+module layout.
+//
+// KV shape: mention-registry:<brandId>:<moduleId> -> JSON
+//   { "@handle": { from, lastSeen }, ... }
+function mentionRegistryKey(brandId, moduleId) {
+  return `mention-registry:${brandId}:${moduleId}`;
+}
+
+export async function getMentionCandidates(kv, brandId, moduleId) {
+  if (!brandId || !moduleId) return [];
+  const raw = await kv.get(mentionRegistryKey(brandId, moduleId));
+  if (!raw) return [];
+  let registry;
+  try {
+    registry = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  return Object.entries(registry).map(([handle, v]) => ({ handle, from: v.from, lastSeen: v.lastSeen }));
+}
+
+// Called from appendMessage() below for every non-self incoming reply
+// that carries a handle, plus from the one-time backfill scan. Skips
+// the write entirely when this exact {handle, from} pair is already on
+// file (only `lastSeen` would change) — the same handful of people
+// reply over and over, and every skipped write is one fewer draw
+// against KV's 1,000 writes/day budget (see the big comment at the top
+// of this file). Best-effort only: a missed mention-candidate write
+// should never break the actual message/reply it rode in on.
+export async function rememberMentionCandidate(kv, brandId, moduleId, handle, from) {
+  if (!brandId || !moduleId || !handle) return;
+  try {
+    const key = mentionRegistryKey(brandId, moduleId);
+    const raw = await kv.get(key);
+    const registry = raw ? JSON.parse(raw) : {};
+    const existing = registry[handle];
+    if (existing && existing.from === from) return; // nothing new to record
+    registry[handle] = { from: from || (existing && existing.from) || handle, lastSeen: new Date().toISOString() };
+    await kv.put(key, JSON.stringify(registry));
+  } catch {
+    // ignored — best-effort
+  }
+}
+
+// One-time (safe to re-run) historical backfill — see
+// functions/api/admin/mention-backfill.js, which drives this one page
+// (100 threads) at a time so a large ticket history never risks hitting
+// Cloudflare Pages Functions' execution time limit in a single request.
+// Reads full thread records directly (not the summary cache) since only
+// the full record has each message's handle/from.
+export async function backfillMentionCandidatesPage(kv, cursor) {
+  const page = await kv.list({ prefix: "thread:", cursor, limit: 100 });
+  const raws = await Promise.all(page.keys.map((k) => kv.get(k.name)));
+  let scanned = 0;
+  for (const raw of raws) {
+    if (!raw) continue;
+    let t;
+    try {
+      t = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    scanned += 1;
+    if (!t.brandId || !t.module) continue;
+    for (const m of t.messages || []) {
+      if (m.self || !m.handle) continue;
+      await rememberMentionCandidate(kv, t.brandId, t.module, m.handle, m.from);
+    }
+  }
+  return { scanned, nextCursor: page.list_complete ? null : page.cursor };
+}
+
+export async function appendMessage(kv, threadId, message) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  thread.messages.push(message);
+  thread.lastActivity = message.ts;
+  // Any new message on an already-solved ticket is a "still need to talk
+  // about this" signal and gets auto-reopened — whether it's a genuine
+  // incoming reply from Telegram (see telegram-webhook.js) OR the agent
+  // themselves replying from this dashboard to a ticket that was already
+  // marked Solved (2026-08 — replying used to leave `solved: true` in
+  // place, which meant the ticket stayed buried in Solved Chat History
+  // even though there was now a fresh, unread reply on it). No special
+  // case needed for message.self here anymore — either direction reopens
+  // the same way.
+  if (thread.solved) {
+    thread.solved = false;
+    thread.solvedAt = null;
+  }
+  // Track this outbound message's id(s) (if Telegram returned any) so
+  // replies-to-replies still resolve back to the same thread, and so
+  // cleanup can find and delete every msgid: pointer for this thread.
+  // A multi-attachment reply lands in Telegram as an ALBUM — one
+  // message_id PER attachment, not just one for the whole reply — so
+  // message.messageIds (plural, see sendTelegramReplyAttachments in
+  // threads/[id].js) carries all of them when present. Without this, a
+  // reply to any photo in the album OTHER than the first would silently
+  // fail to resolve back to this thread. Falls back to the single
+  // messageId for plain text/single-attachment replies, which only ever
+  // have the one id anyway.
+  const allIds = message.messageIds && message.messageIds.length ? message.messageIds : (message.messageId ? [message.messageId] : []);
+  if (allIds.length) {
+    thread.msgIds = [...(thread.msgIds || [thread.rootMessageId]), ...allIds];
+  }
+  const writes = [saveThread(kv, thread)];
+  for (const mid of allIds) {
+    writes.push(kv.put(`msgid:${thread.chatId}:${mid}`, thread.id));
+  }
+  // @ Tag Username — remember "this person has replied in this brand +
+  // module before" so the reply box's @ autocomplete can suggest them
+  // later. Only for genuine incoming replies (never our own outgoing
+  // ones) that actually carry a Telegram @handle.
+  if (!message.self && message.handle) {
+    writes.push(rememberMentionCandidate(kv, thread.brandId, thread.module, message.handle, message.from));
+  }
+  await Promise.all(writes);
+  await patchListCache(kv, thread); // instant sidebar update — reply count / reopened status
+  return thread;
+}
+
+export async function setSolved(kv, threadId, solved) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  thread.solved = solved;
+  thread.solvedAt = solved ? new Date().toISOString() : null;
+  await saveThread(kv, thread);
+  await patchListCache(kv, thread); // instant sidebar update — solved/unsolved toggle
+  return thread;
+}
+
+// Root ticket message (the original submission) was edited on Telegram —
+// update the text we keep. The structured `summary` (Promotion/TID/etc.
+// rows) was captured once at submit time and can't be safely re-parsed
+// out of free-form edited text, so we flag the thread as edited — the
+// dashboard shows this raw text instead of the now-possibly-stale summary.
+export async function updateRootText(kv, threadId, text) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  thread.rootText = text;
+  thread.rootEdited = true;
+  thread.lastActivity = new Date().toISOString();
+  await saveThread(kv, thread);
+  return thread;
+}
+
+// Used by the "Sync to Sheet" editDetails action (functions/api/threads/
+// [id].js) after an agent corrects a ticket's field values — updates
+// everything that could have changed as a result: the raw fieldMap, the
+// re-rendered Telegram message text (rootText), and the sidebar's
+// title/preview (title/summary), which were all originally derived from
+// fieldMap at submission time and would otherwise go stale. Unlike
+// updateRootText above, this DOES call patchListCache() — title/summary
+// are exactly what the sidebar shows, so a stale cache here would mean
+// agents see outdated info until the next scan.
+export async function updateThreadDetails(kv, threadId, { fieldMap, rootText, title, summary }) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  if (fieldMap !== undefined) thread.fieldMap = fieldMap;
+  if (rootText !== undefined) {
+    thread.rootText = rootText;
+    thread.rootEdited = true;
+  }
+  if (title !== undefined) thread.title = title;
+  if (summary !== undefined) thread.summary = summary;
+  thread.lastActivity = new Date().toISOString();
+  await saveThread(kv, thread);
+  await patchListCache(kv, thread);
+  return thread;
+}
+
+// Appends one entry to the ORIGINAL ticket's forwardedTo array, right
+// after the new (forwarded) ticket was successfully created in
+// functions/api/forward.js — so the original shows "↗️ Forwarded to
+// Account Issue" alongside whatever else it already has, and that link
+// is clickable to jump straight to the new ticket. Doesn't call
+// patchListCache() — forwardedTo isn't part of the sidebar's summary/
+// title, so there's nothing there that would go stale.
+export async function addForwardedToLink(kv, threadId, link) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  thread.forwardedTo = [...(thread.forwardedTo || []), link];
+  await saveThread(kv, thread);
+  return thread;
+}
+
+
+// ---- Deletion history — every "delete/recall" action, kept separately
+// from thread storage so it survives even after a thread itself is gone.
+// Not linked from anywhere in the agent-facing UI. Low-frequency
+// (admin-only actions), so left as one shared key with a retry — see the
+// note on kvPutWithRetry above for why this one's different from the old
+// "index" key.
+const DELETION_LOG_KEY = "deletion-log";
+const MAX_LOG_SIZE = 500;
+
+export async function logDeletion(kv, entry) {
+  const raw = await kv.get(DELETION_LOG_KEY);
+  const list = raw ? JSON.parse(raw) : [];
+  list.unshift({ id: newId(), ts: new Date().toISOString(), by: entry.by || null, ...entry });
+  await kvPutWithRetry(kv, DELETION_LOG_KEY, JSON.stringify(list.slice(0, MAX_LOG_SIZE)));
+}
+
+export async function listDeletions(kv) {
+  const raw = await kv.get(DELETION_LOG_KEY);
+  return raw ? JSON.parse(raw) : [];
+}
+
+// Root ticket message was deleted from Telegram — keep the tracking record
+// (conversation history, sheet row, etc. are untouched) but flag it so the
+// dashboard can show "original message recalled" instead of pretending it's
+// still there.
+export async function markRootRecalled(kv, threadId) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  thread.rootRecalled = true;
+  thread.lastActivity = new Date().toISOString();
+  await saveThread(kv, thread);
+  return thread;
+}
+
+// A self-sent reply was edited on Telegram — update its stored text.
+export async function editMessageInThread(kv, threadId, messageId, text) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  const msg = thread.messages.find((m) => m.self && m.messageId === messageId);
+  if (!msg) return null;
+  msg.text = text;
+  msg.editedAt = new Date().toISOString();
+  await saveThread(kv, thread);
+  return thread;
+}
+
+// The OTHER side's reply was edited directly inside Telegram (not sent
+// from our own dashboard) — inbound counterpart to editMessageInThread()
+// above, which only ever touches OUR OWN self-sent replies. Driven by
+// Telegram's edited_message webhook update (see telegram-webhook.js),
+// since editing someone else's message isn't something the Bot API lets
+// us do — we can only find out about it after the fact and record what
+// it now says. Reopens an already-solved ticket the same way a brand-new
+// reply does (see appendMessage above) — a deliberate edit is the same
+// "still needs attention" signal, and it shouldn't sit unnoticed just
+// because it happened to be an edit instead of a new message.
+//
+// `attachment` (optional) carries { fileId, name } when the edited
+// Telegram message currently has photo/document/video/voice/sticker
+// attached — e.g. someone attached a photo to a message that didn't have
+// one before, or swapped it for a different one. Previously this
+// function only ever touched `text`, so an edit that added/changed an
+// attachment silently updated nothing visible in the dashboard even when
+// the edit WAS being recorded — the photo itself never made it in.
+// Passing null clears any attachment that used to be there (matches
+// Telegram: editMessageMedia can remove media just as it can add it).
+export async function editIncomingMessageInThread(kv, threadId, messageId, text, attachment = undefined) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  const msg = thread.messages.find((m) => !m.self && m.messageId === messageId);
+  if (!msg) return null; // not a message we're tracking for this thread — ignore
+  msg.text = text;
+  msg.editedAt = new Date().toISOString();
+  if (attachment !== undefined) {
+    msg.hasAttachment = !!attachment;
+    msg.attachmentFileId = attachment ? attachment.fileId : null;
+    msg.attachmentName = attachment ? attachment.name : null;
+  }
+  thread.lastActivity = msg.editedAt;
+  if (thread.solved) {
+    thread.solved = false;
+    thread.solvedAt = null;
+  }
+  await saveThread(kv, thread);
+  await patchListCache(kv, thread); // instant sidebar update — lastActivity / reopened status
+  return thread;
+}
+
+// A self-sent reply was recalled from Telegram — remove it from the
+// conversation (matches how Telegram itself just removes it, no trace).
+export async function removeMessageFromThread(kv, threadId, messageId) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  thread.messages = thread.messages.filter((m) => !(m.self && m.messageId === messageId));
+  await saveThread(kv, thread);
+  return thread;
+}
+
+export async function softDeleteThread(kv, threadId) {
+  const thread = await getThread(kv, threadId);
+  if (!thread) return null;
+  await purgeThread(kv, thread);
+  await patchListCache(kv, thread, { remove: true }); // instant sidebar update — drop it immediately, don't wait for the next scan to notice it's gone
+  return thread;
+}
