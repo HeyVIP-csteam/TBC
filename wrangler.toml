@@ -1,0 +1,63 @@
+name = "hub-merged"
+pages_build_output_dir = "public"
+
+# 这是真实的合并部署配置骨架 —— 每个国家的 R2/KV 绑定都是独立的，和现有三个项目
+# 各自的 wrangler.toml 里那套"绝不能跟别国共用一个 bucket/namespace，否则数据会混"
+# 的原则完全一致，只是现在三份绑定要写进同一份 wrangler.toml 里。
+#
+# 下面的 bucket_name / id 都是占位符 —— 真实值要从你们三份原始 wrangler.toml
+# 里原样搬过来（INR/PKR/PHP 各自现有的 bucket_name 和 KV namespace id 不要改，
+# 直接照抄，这样合并后读到的还是原来那些真实数据，不会变成空的新命名空间）。
+
+# === INR ===
+[[r2_buckets]]
+binding = "SCREENSHOTS_BUCKET_INR"
+bucket_name = "inr-issuescreenshot"          # 从 INR 项目原始 wrangler.toml 抄
+
+[[kv_namespaces]]
+binding = "THREADS_KV_INR"
+id = "REPLACE_WITH_INR_REAL_KV_ID"           # 从 INR 项目原始 wrangler.toml 抄
+
+# INR 额外有 D1（见 CHANGES-threads-redesign.md 提到的迁移）——合并后这个绑定
+# 也要带过来，PKR/PHP 目前没有对应的 D1，所以只有这一段：
+[[d1_databases]]
+binding = "THREADS_DB_INR"
+database_name = "inr-ticket-threads"
+database_id = "REPLACE_WITH_INR_REAL_D1_ID"  # 从 INR 项目原始 wrangler.toml 抄
+
+# === PKR ===
+[[r2_buckets]]
+binding = "SCREENSHOTS_BUCKET_PKR"
+bucket_name = "pkr-issuescreenshot"          # 从 PKR 项目原始 wrangler.toml 抄
+
+[[kv_namespaces]]
+binding = "THREADS_KV_PKR"
+id = "REPLACE_WITH_PKR_REAL_KV_ID"           # 从 PKR 项目原始 wrangler.toml 抄
+
+# === PHP ===
+[[r2_buckets]]
+binding = "SCREENSHOTS_BUCKET_PHP"
+bucket_name = "php-issuescreenshot"          # 从 PHP 项目原始 wrangler.toml 抄
+
+[[kv_namespaces]]
+binding = "THREADS_KV_PHP"
+id = "REPLACE_WITH_PHP_REAL_KV_ID"           # 从 PHP 项目原始 wrangler.toml 抄
+
+[vars]
+# Bot Token 不放在这里（和原项目一样，走 Cloudflare 加密 secret，不进 wrangler.toml/git）：
+#   Settings → Environment variables，为 Production 和 Preview 各设置：
+#     TELEGRAM_BOT_TOKEN_INR
+#     TELEGRAM_BOT_TOKEN_PKR
+#     TELEGRAM_BOT_TOKEN_PHP
+#   三个 env var 名字要和 functions/_shared/countries.js 里
+#   COUNTRIES.<code>.botTokenEnvVar 的值完全一致，改一边要记得改另一边。
+
+# Google Sheets 服务账号凭证——三国是否共用同一个服务账号，还是各自一个，
+# 取决于你们三份原始项目现在的设置；如果三国原本就是同一个服务账号（大概率是，
+# 因为都是同一家公司的 Google Cloud 项目），这里保持一份即可，不用拆三份：
+# GOOGLE_SERVICE_ACCOUNT_EMAIL = "..."
+# GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY = "..."
+
+# Build command 留空即可 —— 除非 telegramImageCompress.js 用到的
+# @cf-wasm/photon 依赖三国项目都需要，那还是要在 Cloudflare 控制台把
+# Build command 设成 "npm install"（和原 README.md 里写的一样）。
