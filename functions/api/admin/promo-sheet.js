@@ -15,7 +15,8 @@
  *     Requires canSeeAdminSection(..., "promoCodeSheet").
  *
  *   POST { action:"save", sheetUrlOrId, tabNames } -> store an override
- *     in THREADS_KV. `tabNames` is a comma-separated string. Takes
+ *     in ACCOUNTS_KV (this config has no country dimension — see
+ *     _shared/promoCodeSheet.js). `tabNames` is a comma-separated string. Takes
  *     effect on the very next search — no redeploy needed. Requires
  *     canEditAdminSection(..., "promoCodeSheet").
  *

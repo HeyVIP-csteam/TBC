@@ -26,8 +26,17 @@
  * Submission Gsheet" admin page, under Integration Portal) instead of
  * needing a code edit + redeploy.
  *
- * Stored in the same THREADS_KV namespace as accounts/offices/routes,
- * under its own key prefix:
+ * MERGED (2026-08-20) — same "resolve KV from brandId's country" fix as
+ * routes.js (TG Group/Channel): an override belongs to whichever
+ * country's THREADS_KV_<COUNTRY> the target brand is in (see routes.js's
+ * file header for the fuller reasoning on why this one's a mechanical
+ * fix, not a fresh architecture call — this file already iterates the
+ * full merged BRANDS list from routing.js regardless of country, so
+ * there's no "PHP one-page vs INR/PKR separate pages" layout question
+ * to resolve here; it's already always been one unified grid across all
+ * three countries' brands).
+ *
+ * Stored in that brand's own country THREADS_KV, under its own key prefix:
  *   issue-sheet:<brandId>:<moduleId>  ->  { sheetId, tabNames: string[] }
  *
  * MULTIPLE TAB NAMES (2026-08) — `tabNames` is a list, not a single
@@ -64,8 +73,19 @@
  */
 import { extractSheetId } from "./depositSheets.js";
 import { getSheetTabTitles } from "./googleSheets.js";
+import { getBrandCountry } from "./routing.js";
+import { resolveThreadsKv } from "./countries.js";
 
 const PROMO_MODULE_PREFIX = "promo:";
+
+// Resolves the right per-country KV for a brandId, or null if either the
+// brandId is unknown or that country's THREADS_KV isn't bound yet —
+// same helper shape as routes.js's kvForBrand().
+function kvForBrand(env, brandId) {
+  const country = getBrandCountry(brandId);
+  if (!country) return null;
+  return resolveThreadsKv(env, country);
+}
 
 // Builds the synthetic moduleId a Promotion Request row's override is
 // stored/read under — see the "PROMOTION REQUEST ROWS" file header note
@@ -95,42 +115,58 @@ function parseEntry(raw) {
 // null if nothing overridden for this brand+module (caller falls back
 // to the hardcoded BRANDS/SHEET_LAYOUT/PROMOTION_SHEET_CONFIG default).
 export async function getIssueSheetOverride(env, brandId, moduleId) {
-  if (!env.THREADS_KV) return null;
-  const raw = await env.THREADS_KV.get(sheetKey(brandId, moduleId));
+  const kv = kvForBrand(env, brandId);
+  if (!kv) return null;
+  const raw = await kv.get(sheetKey(brandId, moduleId));
   return parseEntry(raw);
 }
 
 // Fetches every brand x module override in one batch — used by the
 // admin GET endpoint to render the full grid. `moduleIds` is expected to
 // already include any synthetic promotionModuleId() entries the caller
-// wants included alongside the 6 fixed modules.
+// wants included alongside the 6 fixed modules. Groups brandIds by their
+// country's KV first so each country is only queried once (in parallel
+// across countries) instead of one round-trip per brand — same batching
+// idea as routes.js's getAllRouteOverrides(), just fanned out one level
+// since here the pairs are (brand, module) not just (brand).
 export async function getAllIssueSheetOverrides(env, brandIds, moduleIds) {
-  if (!env.THREADS_KV) return {};
-  const pairs = [];
+  const byCountryKv = new Map(); // kv -> [[brandId, moduleId], ...]
   for (const brandId of brandIds) {
-    for (const moduleId of moduleIds) pairs.push([brandId, moduleId]);
+    const kv = kvForBrand(env, brandId);
+    if (!kv) continue; // unknown brand, or that country's KV not bound yet
+    if (!byCountryKv.has(kv)) byCountryKv.set(kv, []);
+    for (const moduleId of moduleIds) byCountryKv.get(kv).push([brandId, moduleId]);
   }
-  const raws = await Promise.all(pairs.map(([b, m]) => env.THREADS_KV.get(sheetKey(b, m))));
+
   const result = {};
-  pairs.forEach(([brandId, moduleId], i) => {
-    const parsed = parseEntry(raws[i]);
-    if (parsed) result[`${brandId}|${moduleId}`] = parsed;
-  });
+  await Promise.all(
+    [...byCountryKv.entries()].map(async ([kv, pairs]) => {
+      const raws = await Promise.all(pairs.map(([b, m]) => kv.get(sheetKey(b, m))));
+      pairs.forEach(([brandId, moduleId], i) => {
+        const parsed = parseEntry(raws[i]);
+        if (parsed) result[`${brandId}|${moduleId}`] = parsed;
+      });
+    })
+  );
   return result;
 }
 
 export async function saveIssueSheetOverride(env, brandId, moduleId, { sheetUrlOrId, tabNames }) {
+  const kv = kvForBrand(env, brandId);
+  if (!kv) throw new Error(`No ticket storage bound for brand "${brandId}"'s country.`);
   const sheetId = extractSheetId(sheetUrlOrId);
   if (!sheetId) throw new Error("Couldn't find a Sheet ID in that link — paste the full Google Sheets URL or just the ID.");
   const cleanTabs = String(tabNames || "").split(",").map((t) => t.trim()).filter(Boolean);
   if (!cleanTabs.length) throw new Error("At least one tab name is required.");
   const value = { sheetId, tabNames: cleanTabs };
-  await env.THREADS_KV.put(sheetKey(brandId, moduleId), JSON.stringify(value));
+  await kv.put(sheetKey(brandId, moduleId), JSON.stringify(value));
   return value;
 }
 
 export async function deleteIssueSheetOverride(env, brandId, moduleId) {
-  await env.THREADS_KV.delete(sheetKey(brandId, moduleId));
+  const kv = kvForBrand(env, brandId);
+  if (!kv) return; // nothing to delete if that country's storage isn't even bound
+  await kv.delete(sheetKey(brandId, moduleId));
 }
 
 // Normalizes a tab name for comparison so invisible differences — non-
