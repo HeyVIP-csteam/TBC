@@ -1433,6 +1433,15 @@ html[data-theme="light"] {
     let acctDepositSheetsSelectedBrand = null;
 
     async function loadDepositSheets() {
+      // MERGED (2026-08-21) — Deposit Issue/Backup genuinely doesn't
+      // exist for PHP (real product difference — PHP has Deposit
+      // Request/Bank Issue instead, see countryModules.js's confirmed
+      // decision), but this endpoint has no per-country brand list at
+      // all (DEPOSIT_BRANDS just naturally has zero PHP entries) — a
+      // real gap this pass found: selecting PHP silently fell through
+      // to an empty-looking form (no brand selected, blank fields)
+      // instead of a clear "not available" message, which reads like a
+      // broken feature rather than an intentional country difference.
       const res = await window.AgentAuth.authFetch("/api/admin/deposit-sheets");
       const data = await res.json();
       if (!data.ok) {
@@ -1440,7 +1449,18 @@ html[data-theme="light"] {
         return;
       }
       acctDepositSheetsData = data;
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
       const visibleBrands = getCountryScopedBrands(data.brands);
+      if (!isAll && country && !visibleBrands.length) {
+        // Derived from the REAL brand list this endpoint returned
+        // (DEPOSIT_BRANDS server-side), not a hardcoded country list —
+        // stays correct automatically if which countries get this
+        // module ever changes.
+        const supportedCountries = [...new Set((data.brands || []).map((b) => b.country))];
+        acctBody.innerHTML = `<p class="edit-modal-note err">Deposit Issue/Backup isn't offered for this country — only ${acctEsc(supportedCountries.join("/") || "some countries")} have this module (see the countries switcher, top right).</p>`;
+        return;
+      }
       if (!acctDepositSheetsSelectedBrand || !visibleBrands.some((b) => b.id === acctDepositSheetsSelectedBrand)) {
         acctDepositSheetsSelectedBrand = visibleBrands[0]?.id || null;
       }
@@ -1775,60 +1795,82 @@ html[data-theme="light"] {
     // itself doesn't need to re-check that client-side beyond the
     // normal canEditAdminSection() gate every other panel already uses;
     // the server enforces the stricter Owner-only rule independently.
-    let acctBotTokenStatus = null; // { configured, last4, updatedAt, updatedBy }
+    let acctBotTokenStatusByCountry = {}; // { [country]: {configured, last4, updatedAt, updatedBy} }
 
     async function loadBotTokenPanel() {
       const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
       const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
-      if (!country || isAll) {
-        acctBody.innerHTML = `<p class="edit-modal-note err">Bot Token Settings are per-country — pick a specific country from the switcher (top right), not "All Countries".</p>`;
+      if (!country) {
+        acctBody.innerHTML = `<p class="edit-modal-note err">No country is selected.</p>`;
         return;
       }
+      // MERGED (2026-08-21) — "All Countries" mode now shows every
+      // country this account can see, one box each, instead of being
+      // blocked — direct business-owner request ("选择All countries进入
+      // bot token setting 则显示全部currencies bot token 给owner看才
+      // 对"). A specific country still shows just that one box, same as
+      // before. Each country's status is fetched independently in
+      // parallel — a failure on ONE country (e.g. that country's KV
+      // isn't bound yet) is shown inline for that box only, without
+      // blocking the others from loading.
+      const countriesToShow = isAll ? (window.AgentCountry.getAllowedCountries() || []) : [country];
       acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
-      const res = await window.AgentAuth.authFetch(`/api/admin/bot-token?country=${encodeURIComponent(country)}`);
-      const data = await res.json();
-      if (!data.ok) {
-        acctBody.innerHTML = `<p class="edit-modal-note err">${acctEsc(data.error || "Failed to load.")}</p>`;
-        return;
-      }
-      acctBotTokenStatus = data;
-      renderBotTokenPanel(country);
+      const results = await Promise.all(countriesToShow.map(async (c) => {
+        try {
+          const res = await window.AgentAuth.authFetch(`/api/admin/bot-token?country=${encodeURIComponent(c)}`);
+          const data = await res.json();
+          return [c, data.ok ? data : { configured: false, error: data.error || "Failed to load." }];
+        } catch {
+          return [c, { configured: false, error: "Network error." }];
+        }
+      }));
+      acctBotTokenStatusByCountry = Object.fromEntries(results);
+      renderBotTokenPanel(countriesToShow);
     }
 
-    function renderBotTokenPanel(country) {
-      if (!acctBotTokenStatus) return;
-      const s = acctBotTokenStatus;
+    function renderBotTokenPanel(countries) {
       const canEdit = canEditAdminSection("botToken");
       const roAttr = canEdit ? "" : "disabled";
-      const countryName = (window.COUNTRIES && window.COUNTRIES[country]) ? window.COUNTRIES[country].name : country;
 
-      const statusLine = s.configured
-        ? `<span class="route-tag custom">custom</span> Configured — ending in <code>••${acctEsc(s.last4 || "????")}</code>${s.updatedAt ? ` · last changed ${acctEsc(new Date(s.updatedAt).toLocaleString())}${s.updatedBy ? ` by ${acctEsc(s.updatedBy)}` : ""}` : ""}`
-        : `<span class="route-tag">default</span> Not configured here — using the ${acctEsc(country)}'s TELEGRAM_BOT_TOKEN_${acctEsc(country)} Cloudflare secret.`;
+      const boxesHtml = countries.map((country) => {
+        const s = acctBotTokenStatusByCountry[country] || { configured: false };
+        const countryName = (window.COUNTRIES && window.COUNTRIES[country]) ? window.COUNTRIES[country].name : country;
+        const statusLine = s.error
+          ? `<span class="route-tag">error</span> ${acctEsc(s.error)}`
+          : s.configured
+            ? `<span class="route-tag custom">custom</span> Configured — ending in <code>••${acctEsc(s.last4 || "????")}</code>${s.updatedAt ? ` · last changed ${acctEsc(new Date(s.updatedAt).toLocaleString())}${s.updatedBy ? ` by ${acctEsc(s.updatedBy)}` : ""}` : ""}`
+            : `<span class="route-tag">default</span> Not configured here — using the ${acctEsc(country)}'s TELEGRAM_BOT_TOKEN_${acctEsc(country)} Cloudflare secret.`;
+        const canEditThisBox = canEdit && !s.error;
 
-      acctBody.innerHTML = `
-        <div class="tgroute-modules">
-          <div class="tgroute-row">
+        return `
+          <div class="tgroute-row" data-country="${acctEsc(country)}">
             <div class="tgroute-mod-name">🔐 ${acctEsc(countryName)} (${acctEsc(country)}) Bot Token</div>
             <p class="edit-modal-note">${statusLine}</p>
+            ${s.error ? "" : `
             <p class="edit-modal-note" style="opacity:0.75;">This is a real credential — whoever holds it can send/receive messages as this Telegram bot. The field below is write-only: pasting a new token and saving overwrites it immediately; the current value is never shown here, even to you, once saved.</p>
             <div class="tgroute-fields" style="flex-direction:column; align-items:stretch;">
-              <input type="password" id="botTokenInput" placeholder="Paste a new Bot Token here to replace it — e.g. 123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ${roAttr} autocomplete="off" style="width:100%;" />
-              ${canEdit ? `<div class="tgroute-row-actions" style="margin-top:8px;">
-                <button type="button" class="tgroute-action-btn" id="botTokenSave">Save new token</button>
-                ${s.configured ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary" id="botTokenClear">Revert to Cloudflare secret</button>' : ""}
+              <input type="password" class="bot-token-input" placeholder="Paste a new Bot Token here to replace it — e.g. 123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ${canEditThisBox ? "" : "disabled"} autocomplete="off" style="width:100%;" />
+              ${canEditThisBox ? `<div class="tgroute-row-actions" style="margin-top:8px;">
+                <button type="button" class="tgroute-action-btn bot-token-save">Save new token</button>
+                ${s.configured ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary bot-token-clear">Revert to Cloudflare secret</button>' : ""}
               </div>` : ""}
-            </div>
-          </div>
-        </div>
+            </div>`}
+          </div>`;
+      }).join('<hr class="tgroute-divider" />');
+
+      acctBody.innerHTML = `
+        <div class="tgroute-modules">${boxesHtml}</div>
         ${canEdit ? "" : '<p class="edit-modal-note">View only.</p>'}`;
 
-      document.getElementById("botTokenSave")?.addEventListener("click", () => saveBotToken(country));
-      document.getElementById("botTokenClear")?.addEventListener("click", () => clearBotToken(country));
+      acctBody.querySelectorAll(".tgroute-row[data-country]").forEach((row) => {
+        const country = row.dataset.country;
+        row.querySelector(".bot-token-save")?.addEventListener("click", () => saveBotToken(country, row));
+        row.querySelector(".bot-token-clear")?.addEventListener("click", () => clearBotToken(country));
+      });
     }
 
-    async function saveBotToken(country) {
-      const input = document.getElementById("botTokenInput");
+    async function saveBotToken(country, row) {
+      const input = row.querySelector(".bot-token-input");
       const token = input.value.trim();
       if (!token) return setAcctNote("Paste a token before saving.", "err");
       if (!confirm(`Overwrite ${country}'s Bot Token right now? Every message this hub sends for ${country} will immediately start using the new one — make sure it's correct.`)) return;
@@ -1839,10 +1881,9 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
-      acctBotTokenStatus = data;
-      input.value = ""; // never leave the pasted value sitting in the DOM after a successful save
+      acctBotTokenStatusByCountry[country] = data;
       setAcctNote("Bot Token updated.", "ok");
-      renderBotTokenPanel(country);
+      renderBotTokenPanel(Object.keys(acctBotTokenStatusByCountry));
     }
 
     async function clearBotToken(country) {
@@ -1854,9 +1895,9 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Failed.", "err");
-      acctBotTokenStatus = data;
+      acctBotTokenStatusByCountry[country] = data;
       setAcctNote("Reverted to the Cloudflare secret default.", "ok");
-      renderBotTokenPanel(country);
+      renderBotTokenPanel(Object.keys(acctBotTokenStatusByCountry));
     }
 
     // ---- Settings ----
