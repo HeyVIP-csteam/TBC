@@ -15,15 +15,31 @@
  *                                                  explicit; never used
  *                                                  as an implicit default)
  *
- * CRITICAL DIFFERENCE FROM canSeeBrand()/canSeeModule() — READ THIS:
- * canSeeBrand()/canSeeModule() give admin-and-above an automatic bypass
- * ("admin & superadmin see everything"). canSeeCountry() below does
- * NOT do that. This is deliberate and was the whole point of this
- * change (see project notes, 2026-08-20): "set someone as Admin, but
- * they can only see PKR" requires country-scope to be independent of
- * rank. Rank still controls WHAT AN ACCOUNT CAN DO (create/edit/delete
- * other accounts, edit Settings, etc.) — it no longer controls WHICH
- * COUNTRY'S DATA an account can see. Those are now two separate axes.
+ * DIFFERENCE FROM canSeeBrand()/canSeeModule() FOR admin/superadmin —
+ * READ THIS: canSeeBrand()/canSeeModule() give admin-and-above an
+ * automatic bypass ("admin & superadmin see everything"). canSeeCountry()
+ * does NOT extend that bypass to admin/superadmin. This is deliberate
+ * and was the whole point of the original change (2026-08-20): "set
+ * someone as Admin, but they can only see PKR" requires country-scope
+ * to be independent of RANK for those two tiers — rank still controls
+ * WHAT an admin/superadmin account can DO, not WHICH COUNTRY'S data
+ * they can see.
+ *
+ * OWNER IS THE ONE EXCEPTION TO THAT (2026-08-21, direct business-owner
+ * decision) — role === "owner" DOES get an unconditional bypass here,
+ * same as literally every other permission function in this codebase
+ * already gives Owner (canSeeAdminSection/canEditAdminSection/
+ * canSeeBrand/canSeeModule — Owner short-circuits to true in every one
+ * of them). Making country access the ONE place Owner still needed
+ * explicit `allowedCountries` configuration was an inconsistency, not a
+ * deliberate extra safeguard — Owner is the account with unconditional
+ * top authority everywhere else in this system, and requiring it to
+ * self-grant country access created a real, confusing chicken-and-egg
+ * problem in practice (an Owner account whose allowedCountries was
+ * never explicitly set, e.g. one bootstrapped before this field
+ * existed, had no country access at all until someone — themselves,
+ * since nothing outranks Owner — went and fixed it by hand). Admin and
+ * SuperAdmin still get NO such bypass — this exception is Owner-only.
  */
 
 // True if `account` is allowed to see data belonging to `country`.
@@ -32,6 +48,7 @@
 // this function doesn't validate that, it just checks permission.
 export function canSeeCountry(account, country) {
   if (!account) return false;
+  if (account.role === "owner") return true;
   if (account.allowedCountries === "all") return true;
   return Array.isArray(account.allowedCountries) && account.allowedCountries.includes(country);
 }
@@ -47,6 +64,7 @@ export function canSeeCountry(account, country) {
 // account migration needed.
 export function resolveAllowedCountries(account, allCountryCodes) {
   if (!account) return [];
+  if (account.role === "owner") return [...allCountryCodes];
   if (account.allowedCountries === "all") return [...allCountryCodes];
   return Array.isArray(account.allowedCountries) ? account.allowedCountries.slice() : [];
 }
