@@ -265,6 +265,7 @@ html[data-theme="light"] {
     </div>
     <div class="topbar-right">
       <span class="clock" id="liveClock"></span>
+      <span class="country-switcher-mount" id="countrySwitcherMount"></span>
       <button class="theme-pill" id="themeToggle"></button>
       <span class="agent-whoami" id="agentWhoami"></span>
     </div>
@@ -333,14 +334,25 @@ html[data-theme="light"] {
   window.AgentAuth.renderWhoami("agentWhoami");
   window.HubNav.mount("hubNavMount", {});
   window.BrandRow.mount("pageBrandRow");
+  if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", function () { location.reload(); });
 
-  // PKR's 9 brands — logos reused from the existing site
+  // MERGED (2026-08-21) — same change as deposit-issue.html's DEP_BRANDS
+  // (see that file's comment for the full reasoning): was PKR-only bare
+  // ids, now spans INR too with country-suffixed ids.
   var DEP_BRANDS = [
-    {id:"crickex",name:"Crickex"},{id:"betjili",name:"Betjili"},{id:"mostplay",name:"Mostplay"},
-    {id:"jeetwin",name:"Jeetwin"},{id:"sbj66",name:"Sbj66"},{id:"heybaji",name:"Heybaji"},
-    {id:"superbaji",name:"Superbaji"},{id:"kv8",name:"KV8"},{id:"darazplay",name:"Darazplay"},
+    {id:"crickex_inr",name:"Crickex",country:"INR"},{id:"betjili_inr",name:"Betjili",country:"INR"},
+    {id:"mostplay_inr",name:"Mostplay",country:"INR"},{id:"betvisa_inr",name:"BetVisa",country:"INR"},
+    {id:"jeetway_inr",name:"Jeetway",country:"INR"},
+    {id:"crickex_pkr",name:"Crickex",country:"PKR"},{id:"betjili_pkr",name:"Betjili",country:"PKR"},
+    {id:"mostplay_pkr",name:"Mostplay",country:"PKR"},{id:"jeetwin_pkr",name:"Jeetwin",country:"PKR"},
+    {id:"sbj66_pkr",name:"Sbj66",country:"PKR"},{id:"heybaji_pkr",name:"Heybaji",country:"PKR"},
+    {id:"superbaji_pkr",name:"Superbaji",country:"PKR"},{id:"kv8_pkr",name:"KV8",country:"PKR"},
+    {id:"darazplay_pkr",name:"Darazplay",country:"PKR"},
   ];
-  function logoPath(id) { return '/assets/img/brands/' + id + '.png'; }
+  // Logo files shared by brand NAME, not id — same as deposit-issue.html.
+  var DEP_BRAND_NAME_BY_ID = {};
+  DEP_BRANDS.forEach(function (b) { DEP_BRAND_NAME_BY_ID[b.id] = b.name.toLowerCase(); });
+  function logoPath(id) { return '/assets/img/brands/' + (DEP_BRAND_NAME_BY_ID[id] || id) + '.png'; }
   function escapeHtml(str) { return String(str ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
   function cell(v) { v = (v ?? "").toString().trim(); return v ? escapeHtml(v) : '<span class="dep-dash">—</span>'; }
   function gi(id) { return document.getElementById(id); }
@@ -483,6 +495,27 @@ html[data-theme="light"] {
       var tabPill = r.sheetUrl
         ? '<a class="dep-tab-pill dep-tab-pill-link" href="'+escapeHtml(r.sheetUrl)+'" target="_blank" rel="noopener" title="Open in Google Sheets">'+escapeHtml(r.tabName)+' <span class="dep-pill-arrow">↗️</span></a>'
         : '<span class="dep-tab-pill">'+escapeHtml(r.tabName)+'</span>';
+      // MERGED (2026-08-21) — same country-branch as deposit-issue.html's
+      // showDep() (see that file's comment) — INR's Deposit Backup layout
+      // has its own field set (see depositColumns.js's BACKUP_COLUMNS —
+      // note it's NOT identical to INR's own Deposit Issue layout either,
+      // e.g. it has Remark PIC/Memo/Condition that Issue doesn't).
+      var fieldsHtml = r.country === 'INR'
+        ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)+f('Slip',r.slip)
+          +f('PG Staff Name',r.pgStaffName)+f('Slip Amount',r.slipAmount)
+          +f('Status',r.status)+f('Follow Up Times',r.followUpTimes)
+          +f('Chat IDs',r.chatIds)+f('Agent UPI',r.agentUpi)
+          +f('Payment Status',r.paymentStatus)+f('Order ID',r.orderId)
+          +f('PIC Name',r.picName)+f('Remark PIC',r.remarkPic)
+          +f('CS Remarks',r.csRemarks)+f('Memo',r.memo)+f('Condition',r.condition)
+        : f('Channel',r.channel)+f('Agent Number',r.agentNumber)
+          +f('Username',r.username)+f('Reference',r.reference)
+          +f('Cash Out Number',r.cashOutNumber)+f('Amount',r.amount)
+          +fp('Status PG',r.statusPG)+fErr('Transaction Error',r.transactionError)
+          +f('Cart ID',r.cartId)+f('Support PIC',r.supportPIC)
+          +f('CS PIC',r.csPIC)+f('Player Contact No',r.playerContactNo)
+          +fp('Status CS',r.statusCS)+f('Correct UID',r.correctUid)
+          +f('Player\'s Cart ID',r.playersCartId)+fPay('Payment Status',r.paymentStatus);
       return '<div class="dep-rcard"><div class="dep-rcard-h">'
         +monthPill(r)
         +tabPill
@@ -490,14 +523,7 @@ html[data-theme="light"] {
         +imgBtn
         +'<span class="dep-rcard-tm">📅 '+escapeHtml(r.requestTime)+'</span></div>'
         +'<div class="dep-rcard-b"><div class="dep-fg">'
-        +f('Channel',r.channel)+f('Agent Number',r.agentNumber)
-        +f('Username',r.username)+f('Reference',r.reference)
-        +f('Cash Out Number',r.cashOutNumber)+f('Amount',r.amount)
-        +fp('Status PG',r.statusPG)+fErr('Transaction Error',r.transactionError)
-        +f('Cart ID',r.cartId)+f('Support PIC',r.supportPIC)
-        +f('CS PIC',r.csPIC)+f('Player Contact No',r.playerContactNo)
-        +fp('Status CS',r.statusCS)+f('Correct UID',r.correctUid)
-        +f('Player\'s Cart ID',r.playersCartId)+fPay('Payment Status',r.paymentStatus)
+        +fieldsHtml
         +'</div></div></div>';
     }).join('');
     data.forEach(function(r,i){

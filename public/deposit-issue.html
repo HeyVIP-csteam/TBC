@@ -247,6 +247,7 @@ html[data-theme="light"] {
     </div>
     <div class="topbar-right">
       <span class="clock" id="liveClock"></span>
+      <span class="country-switcher-mount" id="countrySwitcherMount"></span>
       <button class="theme-pill" id="themeToggle"></button>
       <span class="agent-whoami" id="agentWhoami"></span>
     </div>
@@ -304,12 +305,25 @@ html[data-theme="light"] {
           <div class="dep-empty-h" id="depHint">Click Edit on any result to start editing</div>
           <div id="depEF" style="display:none">
             <div class="dep-ep-title">Editing<span class="dep-etid" id="depEL"></span></div>
-            <div class="dep-fg2"><label class="dep-fl2">CS PIC (col P)</label><input class="dep-fi" id="ef-piccs" placeholder="CS PIC..."></div>
-            <div class="dep-fg2"><label class="dep-fl2">Player Contact No (col Q)</label><input class="dep-fi" id="ef-pcoNo" placeholder="Player contact no..."></div>
-            <div class="dep-fg2"><label class="dep-fl2">Status CS (col R)</label><input class="dep-fi" id="ef-statuscs" placeholder="Status CS..."></div>
-            <div class="dep-fg2"><label class="dep-fl2">Correct UID (col S)</label><input class="dep-fi" id="ef-uid" placeholder="Correct UID..."></div>
-            <button class="dep-btn-sub" id="depSub">Submit — Update Sheet</button>
-            <button class="dep-btn-clear" id="depClear">Clear All — Update Sheet</button>
+            <!-- MERGED (2026-08-21) — PKR's Deposit Issue sheet has 4
+                 CS-editable columns; INR's has exactly 1 (CS Remarks).
+                 Both field sets are always in the DOM; openDep() below
+                 toggles which one is visible based on the record's
+                 country, so nothing needs to be built/torn down
+                 dynamically — just a display:none flip. -->
+            <div id="depEF-pkr">
+              <div class="dep-fg2"><label class="dep-fl2">CS PIC (col P)</label><input class="dep-fi" id="ef-piccs" placeholder="CS PIC..."></div>
+              <div class="dep-fg2"><label class="dep-fl2">Player Contact No (col Q)</label><input class="dep-fi" id="ef-pcoNo" placeholder="Player contact no..."></div>
+              <div class="dep-fg2"><label class="dep-fl2">Status CS (col R)</label><input class="dep-fi" id="ef-statuscs" placeholder="Status CS..."></div>
+              <div class="dep-fg2"><label class="dep-fl2">Correct UID (col S)</label><input class="dep-fi" id="ef-uid" placeholder="Correct UID..."></div>
+              <button class="dep-btn-sub" id="depSub">Submit — Update Sheet</button>
+              <button class="dep-btn-clear" id="depClear">Clear All — Update Sheet</button>
+            </div>
+            <div id="depEF-inr" style="display:none">
+              <div class="dep-fg2"><label class="dep-fl2">CS Remarks (col P)</label><input class="dep-fi" id="ef-csremarks" placeholder="CS remarks..."></div>
+              <button class="dep-btn-sub" id="depSubINR">Submit — Update Sheet</button>
+              <button class="dep-btn-clear" id="depClearINR">Clear — Update Sheet</button>
+            </div>
             <div class="dep-toast" id="depT"></div>
           </div>
         </div>
@@ -331,14 +345,42 @@ html[data-theme="light"] {
   window.AgentAuth.renderWhoami("agentWhoami");
   window.HubNav.mount("hubNavMount", {});
   window.BrandRow.mount("pageBrandRow");
+  if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", function () { location.reload(); });
 
-  // PKR's 9 brands — logos reused from the existing site
+  // MERGED (2026-08-21) — was PKR-only bare ids (crickex, betjili...);
+  // now spans INR too, with the country-suffixed ids routing.js uses
+  // everywhere else (crickex_inr/crickex_pkr) — required since
+  // window.AgentAuth.filterAllowedBrands() below now ALSO filters by
+  // the agent's currently-selected country (see agent-country.js), and
+  // needs each entry's `country` field to do that. If the switcher is
+  // set to "All Countries" (only ever offered to accounts allowed to
+  // see 2+ countries), both INR and PKR brands show together here — a
+  // deliberate difference from the submission form (app.js), where
+  // showing two countries' field-forms in one place isn't meaningful.
+  // A search results LIST doesn't have that problem: each result card
+  // renders using ITS OWN r.country (see showDep() below), so mixing
+  // countries in one search is safe and often exactly what an agent
+  // covering both wants.
   var DEP_BRANDS = [
-    {id:"crickex",name:"Crickex"},{id:"betjili",name:"Betjili"},{id:"mostplay",name:"Mostplay"},
-    {id:"jeetwin",name:"Jeetwin"},{id:"sbj66",name:"Sbj66"},{id:"heybaji",name:"Heybaji"},
-    {id:"superbaji",name:"Superbaji"},{id:"kv8",name:"KV8"},{id:"darazplay",name:"Darazplay"},
+    {id:"crickex_inr",name:"Crickex",country:"INR"},{id:"betjili_inr",name:"Betjili",country:"INR"},
+    {id:"mostplay_inr",name:"Mostplay",country:"INR"},{id:"betvisa_inr",name:"BetVisa",country:"INR"},
+    {id:"jeetway_inr",name:"Jeetway",country:"INR"},
+    {id:"crickex_pkr",name:"Crickex",country:"PKR"},{id:"betjili_pkr",name:"Betjili",country:"PKR"},
+    {id:"mostplay_pkr",name:"Mostplay",country:"PKR"},{id:"jeetwin_pkr",name:"Jeetwin",country:"PKR"},
+    {id:"sbj66_pkr",name:"Sbj66",country:"PKR"},{id:"heybaji_pkr",name:"Heybaji",country:"PKR"},
+    {id:"superbaji_pkr",name:"Superbaji",country:"PKR"},{id:"kv8_pkr",name:"KV8",country:"PKR"},
+    {id:"darazplay_pkr",name:"Darazplay",country:"PKR"},
   ];
-  function logoPath(id) { return '/assets/img/brands/' + id + '.png'; }
+  // Logo files are shared by BRAND NAME (lowercased), not by id — same
+  // convention brand-config.js's DEFAULT_LOGO_FILE_BY_NAME uses, since
+  // e.g. Crickex is the literal same real-world logo whether it's
+  // crickex_inr or crickex_pkr. Falls back to the id itself if no name
+  // match (harmless — logoPath()'s only caller already has an onerror
+  // handler that swaps in a colored-abbreviation div when the image
+  // 404s, so an unmapped name just degrades gracefully, same as always).
+  var DEP_BRAND_NAME_BY_ID = {};
+  DEP_BRANDS.forEach(function (b) { DEP_BRAND_NAME_BY_ID[b.id] = b.name.toLowerCase(); });
+  function logoPath(id) { return '/assets/img/brands/' + (DEP_BRAND_NAME_BY_ID[id] || id) + '.png'; }
   function escapeHtml(str) { return String(str ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
   function cell(v) { v = (v ?? "").toString().trim(); return v ? escapeHtml(v) : '<span class="dep-dash">—</span>'; }
   function gi(id) { return document.getElementById(id); }
@@ -492,20 +534,42 @@ html[data-theme="light"] {
       var tabPill = r.sheetUrl
         ? '<a class="dep-tab-pill dep-tab-pill-link" href="'+escapeHtml(r.sheetUrl)+'" target="_blank" rel="noopener" title="Open in Google Sheets">'+pillLabel+' <span class="dep-pill-arrow">↗️</span></a>'
         : '<span class="dep-tab-pill">'+pillLabel+'</span>';
+      // MERGED (2026-08-21) — card body fields now branch on r.country.
+      // PKR and INR's Deposit Issue sheets are genuinely different
+      // business processes (see depositColumns.js's file header), not
+      // just a different column order, so this renders two entirely
+      // different field lists rather than trying to force one shared
+      // layout. INR's fields use the plain f() helper (no colored-pill
+      // status styling) rather than reusing fp()/fPay()'s PKR-specific
+      // color mappings — those were confirmed from real PKR screenshots
+      // and there's no equivalent confirmation yet for what INR's
+      // status/paymentStatus/statusFinal VALUES actually are, so
+      // guessing a color mapping risks being actively misleading
+      // (e.g. showing something as "success green" that isn't).
+      var fieldsHtml = r.country === 'INR'
+        ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)+f('Slip',r.slip)
+          +f('PG Staff Name',r.pgStaffName)+f('Slip Amount',r.slipAmount)
+          +f('Status',r.status)+f('Follow Up Times',r.followUpTimes)
+          +f('Chat IDs',r.chatIds)+f('Agent UPI',r.agentUpi)
+          +f('PG Remarks',r.pgRemarks)+f('CS Remarks',r.csRemarks)
+          +f('Payment Status',r.paymentStatus)+f('Order ID',r.orderId)
+          +f('PIC Name',r.picName)+f('Cart ID',r.cartId)
+          +f('Amount',r.amount)+f('Final Status',r.statusFinal)+f('UPI',r.upi)
+        : f('Channel',r.channel)+f('Agent Number',r.agentNumber)
+          +f('Username',r.username)+f('Reference',r.reference)
+          +f('Cash Out Number',r.cashOutNumber)+f('Amount',r.amount)
+          +fp('Status PG',r.statusPG)+fErr('Transaction Error',r.transactionError)
+          +f('Cart ID',r.cartId)+f('Support PIC',r.supportPIC)
+          +f('CS PIC',r.csPIC)+f('Player Contact No',r.playerContactNo)
+          +fp('Status CS',r.statusCS)+f('Correct UID',r.correctUid)
+          +f('Player\'s Cart ID',r.playersCartId)+fPay('Payment Status',r.paymentStatus);
       return '<div class="dep-rcard"><div class="dep-rcard-h">'
         +tabPill
         +'<span class="dep-rcard-id">'+escapeHtml(r.transaction)+'</span>'
         +imgBtn
         +'<span class="dep-rcard-tm">📅 '+escapeHtml(r.requestTime)+'</span></div>'
         +'<div class="dep-rcard-b"><div class="dep-fg">'
-        +f('Channel',r.channel)+f('Agent Number',r.agentNumber)
-        +f('Username',r.username)+f('Reference',r.reference)
-        +f('Cash Out Number',r.cashOutNumber)+f('Amount',r.amount)
-        +fp('Status PG',r.statusPG)+fErr('Transaction Error',r.transactionError)
-        +f('Cart ID',r.cartId)+f('Support PIC',r.supportPIC)
-        +f('CS PIC',r.csPIC)+f('Player Contact No',r.playerContactNo)
-        +fp('Status CS',r.statusCS)+f('Correct UID',r.correctUid)
-        +f('Player\'s Cart ID',r.playersCartId)+fPay('Payment Status',r.paymentStatus)
+        +fieldsHtml
         +'</div></div>'
         +'<div class="dep-rcard-f"><button class="dep-btn-ed" id="deb-'+i+'">Edit</button></div></div>';
     }).join('');
@@ -583,8 +647,18 @@ html[data-theme="light"] {
     gi('depHint').style.display = 'none'; gi('depEF').style.display = 'block';
     gi('depEL').textContent = ' — ' + r.transaction + ' (' + r.brandName + ' / ' + r.tabName + ')';
     gi('depT').style.display = 'none';
-    gi('ef-piccs').value = r.csPIC || ''; gi('ef-pcoNo').value = r.playerContactNo || '';
-    gi('ef-statuscs').value = r.statusCS || ''; gi('ef-uid').value = r.correctUid || '';
+    // MERGED (2026-08-21) — shows the right field set for this record's
+    // country (see the depEF-pkr/depEF-inr markup above), instead of
+    // always assuming PKR's 4-column shape.
+    var isINR = r.country === 'INR';
+    gi('depEF-pkr').style.display = isINR ? 'none' : 'block';
+    gi('depEF-inr').style.display = isINR ? 'block' : 'none';
+    if (isINR) {
+      gi('ef-csremarks').value = r.csRemarks || '';
+    } else {
+      gi('ef-piccs').value = r.csPIC || ''; gi('ef-pcoNo').value = r.playerContactNo || '';
+      gi('ef-statuscs').value = r.statusCS || ''; gi('ef-uid').value = r.correctUid || '';
+    }
   }
 
   function resetEditPanel() {
@@ -675,8 +749,14 @@ html[data-theme="light"] {
     });
     const data = await res.json();
     if (data.ok) {
-      curDep.csPIC = values.csPIC; curDep.playerContactNo = values.playerContactNo;
-      curDep.statusCS = values.statusCS; curDep.correctUid = values.correctUid;
+      // MERGED (2026-08-21) — only patches the fields actually present
+      // in `values` (Object.assign, not a fixed list of 4 PKR keys) so
+      // this works unchanged for INR's single-field {csRemarks} payload
+      // too — assigning undefined into the other 4 PKR keys every INR
+      // save would silently wipe curDep's cached PKR-shaped fields for
+      // no reason (harmless today since a given record is always one
+      // country, but no reason to do it either).
+      Object.assign(curDep, values);
     }
     return data;
   }
@@ -719,10 +799,46 @@ html[data-theme="light"] {
     }
   }
 
+  // MERGED (2026-08-21) — INR's counterparts to subDep()/clearAndUpdate()
+  // above: same idea, one field (CS Remarks) instead of four. Kept as
+  // separate functions rather than branching subDep()/clearAndUpdate()
+  // internally — the 4-field PKR confirm/clear text doesn't translate
+  // cleanly to a 1-field message, and keeping them apart means neither
+  // has to thread a country flag through every line to stay readable.
+  async function subDepINR() {
+    if (!curDep) return;
+    var btn = gi('depSubINR'); btn.disabled = true; btn.textContent = 'Updating...';
+    try {
+      const data = await sendUpdate({ csRemarks: gi('ef-csremarks').value });
+      btn.disabled = false; btn.textContent = 'Submit — Update Sheet';
+      showT('depT', data.ok, data.error);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Submit — Update Sheet';
+      showT('depT', false, e.message);
+    }
+  }
+  async function clearAndUpdateINR() {
+    if (!curDep) return;
+    var hadAnything = gi('ef-csremarks').value;
+    if (hadAnything && !confirm('Clear CS Remarks for ' + curDep.transaction + ' — and update the Sheet immediately?\n\nThis can\'t be undone from here.')) return;
+    var btn = gi('depClearINR'); btn.disabled = true; btn.textContent = 'Clearing...';
+    try {
+      const data = await sendUpdate({ csRemarks: '' });
+      btn.disabled = false; btn.textContent = 'Clear — Update Sheet';
+      showT('depT', data.ok, data.error);
+      if (data.ok) gi('ef-csremarks').value = '';
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Clear — Update Sheet';
+      showT('depT', false, e.message);
+    }
+  }
+
   gi('depBtn').addEventListener('click', doDep);
   gi('depQ').addEventListener('keydown', function(e){ if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); doDep(); } });
   gi('depSub').addEventListener('click', subDep);
   gi('depClear').addEventListener('click', clearAndUpdate);
+  gi('depSubINR').addEventListener('click', subDepINR);
+  gi('depClearINR').addEventListener('click', clearAndUpdateINR);
 </script>
 </body>
 </html>
