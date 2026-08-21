@@ -497,25 +497,119 @@ html[data-theme="light"] {
       localStorage.setItem(`lastseen:${id}`, String(count));
     }
 
-    // Everything renderItem()'s markup/handlers depend on — if none of
-    // this changed since the node was last built, the existing DOM node
-    // can be reused as-is (see renderLists()) instead of torn down and
-    // recreated.
+    // Everything renderItem()'s STRUCTURE/CONTENT depends on — deliberately
+    // excludes selectMode/selectedIds/openItemMenuId/selectedId-highlight
+    // (see patchItemViewState()
+    // below, which handles those separately via a cheap in-place patch
+    // instead of a full rebuild). If none of what's listed here changed
+    // since the node was last built, the existing DOM node can be reused
+    // as-is (see renderLists()) instead of torn down and recreated.
+    //
+    // MERGED (2026-08-21) — selectMode/selectedIds used to be bundled
+    // into this same key, which meant clicking "Select" on a list with
+    // thousands of items (a real report: 2,016 Solved tickets) forced
+    // EVERY visible row to rebuild its entire DOM node — innerHTML
+    // template + re-creating every listener — all synchronously, in one
+    // tick, which is exactly what froze the tab long enough for
+    // Chrome's "Page Unresponsive" prompt to show up. Toggling select
+    // mode (or checking/unchecking one row) doesn't change any of a
+    // row's actual CONTENT, so there was never a real reason to rebuild
+    // it — see patchItemViewState().
     function itemRenderKey(t) {
       return [
         t.title, t.submitter, t.lastActivity, t.replyCount, t.solved,
         t.accent, t.icon, getSeenCount(t.id), t.country,
-        t.id === selectedId, selectMode, selectedIds.has(t.id),
-        openItemMenuId === t.id,
       ].join("|");
     }
 
+    // Cheap in-place patch for the 3 things that change WITHOUT
+    // affecting a row's content: select-mode on/off, this row's checked
+    // state, and the ⋮ menu's open/closed state. Runs on EVERY row on
+    // EVERY renderLists() call (rebuilt or reused), right after
+    // reconcileSection() below decides whether a full rebuild happened —
+    // O(1) DOM work per row (a class toggle + swapping one small child
+    // element), not a template rebuild, so it stays fast even across
+    // thousands of rows. Uses `el.onclick`/`.onchange` (single-slot
+    // property assignment, not addEventListener) specifically so
+    // re-wiring on a mode flip is just an overwrite — no risk of
+    // stacking duplicate listeners across repeated patches the way
+    // addEventListener would without careful removeEventListener
+    // bookkeeping.
+    function patchItemViewState(el, t) {
+      el.classList.toggle("selected", t.id === selectedId);
+      el.classList.toggle("select-mode", selectMode);
+
+      const existingCheck = el.querySelector(":scope > .thread-item-check");
+      const existingIcon = el.querySelector(":scope > .icon");
+      const existingMenuBtn = el.querySelector(":scope > .item-menu-btn");
+
+      if (selectMode) {
+        if (existingIcon) existingIcon.remove();
+        if (existingMenuBtn) existingMenuBtn.remove();
+        const openMenu = el.querySelector(":scope > .item-menu");
+        if (openMenu) openMenu.remove();
+        let check = existingCheck;
+        if (!check) {
+          check = document.createElement("input");
+          check.type = "checkbox";
+          check.className = "thread-item-check";
+          el.insertBefore(check, el.firstChild);
+        }
+        check.checked = selectedIds.has(t.id);
+        check.onchange = () => toggleThreadSelected(t.id);
+        el.onclick = (e) => {
+          if (e.target.closest(".thread-item-check")) return; // its own change handler covers this
+          toggleThreadSelected(t.id);
+        };
+      } else {
+        if (existingCheck) existingCheck.remove();
+        if (!existingIcon) {
+          const icon = document.createElement("div");
+          icon.className = "icon";
+          icon.style.background = (t.accent || "#7c6cf0") + "33";
+          icon.textContent = t.icon || "🔔";
+          el.insertBefore(icon, el.firstChild);
+        }
+        let menuBtn = existingMenuBtn;
+        if (!menuBtn) {
+          menuBtn = document.createElement("button");
+          menuBtn.type = "button";
+          menuBtn.className = "item-menu-btn";
+          menuBtn.title = "More";
+          menuBtn.textContent = "⋮";
+          el.appendChild(menuBtn);
+        }
+        menuBtn.onclick = (e) => {
+          e.stopPropagation();
+          openItemMenuId = openItemMenuId === t.id ? null : t.id;
+          renderLists();
+        };
+        el.onclick = (e) => {
+          if (e.target.closest(".item-menu-btn")) return;
+          if (t.id !== selectedId) { pendingAttachments = []; replyTarget = null; }
+          openThread(t.id, t.country);
+        };
+        const unread = Math.max(0, (t.replyCount || 0) - getSeenCount(t.id));
+        const existingMenuEl = el.querySelector(":scope > .item-menu");
+        if (openItemMenuId === t.id && !existingMenuEl) {
+          el.appendChild(buildItemMenu(t, unread));
+        } else if (openItemMenuId !== t.id && existingMenuEl) {
+          existingMenuEl.remove();
+        }
+      }
+    }
+
+    // Builds the CONTENT shell only (title/submitter/unread badge/solved
+    // check/country badge) — the select-mode-specific leading
+    // icon-or-checkbox and trailing menu-button/open-menu are left for
+    // patchItemViewState() (called once right after this, from
+    // reconcileSection() below) to fill in, so there's exactly one place
+    // that logic lives instead of two copies that could drift apart.
     function renderItem(t) {
       const el = document.createElement("div");
-      const unread = Math.max(0, (t.replyCount || 0) - getSeenCount(t.id));
-      const checked = selectedIds.has(t.id);
-      el.className = "thread-item" + (t.id === selectedId ? " selected" : "") + (selectMode ? " select-mode" : "");
+      el.className = "thread-item";
       el.style.setProperty("--thread-accent", t.accent || "#7c6cf0");
+      const unread = Math.max(0, (t.replyCount || 0) - getSeenCount(t.id));
       // MERGED (2026-08-20) — country badge, only actually shown when
       // the viewing account can see more than one country (see
       // AgentCountry.getAllowedCountries() — a single-country account
@@ -527,36 +621,13 @@ html[data-theme="light"] {
       const showCountryBadge = window.AgentCountry && window.AgentCountry.getAllowedCountries().length > 1 && t.country;
       const countryBadge = showCountryBadge ? `<span class="thread-country-badge">${escapeHtml(t.country)}</span>` : "";
       el.innerHTML = `
-        ${selectMode
-          ? `<input type="checkbox" class="thread-item-check" ${checked ? "checked" : ""} />`
-          : `<div class="icon" style="background:${(t.accent || "#7c6cf0")}33;">${t.icon || "🔔"}</div>`}
         <div class="meta">
           <div class="t-title">${countryBadge}${escapeHtml(t.title)}</div>
           <div class="t-sub">${escapeHtml(t.submitter)} · ${timeAgo(t.lastActivity)}${t.replyCount ? " · " + t.replyCount + " reply" : ""}</div>
         </div>
         ${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
         ${t.solved ? '<span class="t-done">✓</span>' : ""}
-        ${selectMode ? "" : '<button type="button" class="item-menu-btn" title="More">⋮</button>'}
       `;
-      if (selectMode) {
-        el.addEventListener("click", (e) => {
-          if (e.target.closest(".thread-item-check")) return; // its own change handler covers this
-          toggleThreadSelected(t.id);
-        });
-        el.querySelector(".thread-item-check").addEventListener("change", () => toggleThreadSelected(t.id));
-      } else {
-        el.addEventListener("click", (e) => {
-          if (e.target.closest(".item-menu-btn")) return;
-          if (t.id !== selectedId) { pendingAttachments = []; replyTarget = null; }
-          openThread(t.id);
-        });
-        el.querySelector(".item-menu-btn").addEventListener("click", (e) => {
-          e.stopPropagation();
-          openItemMenuId = openItemMenuId === t.id ? null : t.id;
-          renderLists();
-        });
-        if (openItemMenuId === t.id) el.appendChild(buildItemMenu(t, unread));
-      }
       return el;
     }
 
@@ -599,9 +670,20 @@ html[data-theme="light"] {
       } else if (action === "markunread") {
         markSeen(t.id, 0);
       } else if (action === "solve" || action === "unsolve") {
-        setThreadSolvedById(t.id, action === "solve");
+        setThreadSolvedById(t.id, action === "solve", t.country);
       }
       renderLists();
+    }
+
+    // MERGED (2026-08-21) — small helper for the handful of call sites
+    // that only have a thread ID on hand (not the full thread object) but
+    // need that thread's country to build a request — every mutating
+    // /api/threads/<id> call requires it now (see that endpoint's own
+    // comment). Looks across both lists since a bulk action can span
+    // active + solved threads together.
+    function findThreadCountry(id) {
+      const t = activeThreads.find((x) => x.id === id) || solvedThreads.find((x) => x.id === id);
+      return t ? t.country : (selectedThread && selectedThread.id === id ? selectedThread.country : undefined);
     }
 
     // Toggles solved/unsolved for an arbitrary thread id — used by the ⋮
@@ -609,12 +691,12 @@ html[data-theme="light"] {
     // that thread open as selectedThread (toggleSolved() further down
     // stays as the top-of-ticket status-chip's own version of this, which
     // always operates on selectedThread).
-    async function setThreadSolvedById(id, solved) {
+    async function setThreadSolvedById(id, solved, country) {
       try {
         const res = await authFetch(`/api/threads/${id}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: solved ? "solve" : "unsolve" }),
+          body: JSON.stringify({ action: solved ? "solve" : "unsolve", country: country || findThreadCountry(id) }),
         });
         const data = await res.json();
         if (!data.ok) return;
@@ -734,6 +816,10 @@ html[data-theme="light"] {
           renderedItemEls.set(t.id, entry);
           touchedEls.push(entry.el);
         }
+        // Runs on EVERY row every pass — cheap (see its own comment for
+        // why), unlike the content rebuild above which only fires when
+        // itemRenderKey() actually changed.
+        patchItemViewState(entry.el, t);
         const wantPos = prevEl ? prevEl.nextSibling : container.firstChild;
         if (entry.el.parentNode !== container || entry.el !== wantPos) {
           container.insertBefore(entry.el, wantPos);
@@ -788,11 +874,23 @@ html[data-theme="light"] {
       }
     }
 
-    async function openThread(id) {
+    async function openThread(id, country) {
       selectedId = id;
       renderLists();
+      // MERGED (2026-08-21) — this call was still missing `?country=`
+      // entirely, even after this file's other fetch calls (attachments,
+      // forward) were fixed to send it during the D1-migration pass —
+      // a real gap this specific call site fell through the cracks on.
+      // GET /api/threads/<id> has required this since that same pass
+      // (country-scoped storage resolution) — without it, EVERY click
+      // on a thread was failing with "Couldn't load this thread." no
+      // matter which country it belonged to.
+      if (!country) {
+        main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — missing country.</div>`;
+        return;
+      }
       try {
-        const res = await authFetch(`/api/threads/${id}`, { cache: "no-store" });
+        const res = await authFetch(`/api/threads/${id}?country=${encodeURIComponent(country)}`, { cache: "no-store" });
         const data = await res.json();
         if (!data.ok) {
           main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread.</div>`;
@@ -813,7 +911,7 @@ html[data-theme="light"] {
     async function refreshOpenThread() {
       if (!selectedId) return;
       try {
-        const res = await authFetch(`/api/threads/${selectedId}`, { cache: "no-store" });
+        const res = await authFetch(`/api/threads/${selectedId}?country=${encodeURIComponent((selectedThread && selectedThread.country) || "")}`, { cache: "no-store" });
         const data = await res.json();
         if (!data.ok) return;
         selectedThread = data.thread;
@@ -912,11 +1010,11 @@ html[data-theme="light"] {
         })()}
 
         ${t.forwardedFrom ? `
-          <div class="forward-link-card" data-goto-thread="${escapeAttr(t.forwardedFrom.threadId)}">
+          <div class="forward-link-card" data-goto-thread="${escapeAttr(t.forwardedFrom.threadId)}" data-goto-country="${escapeAttr(t.country || "")}">
             ↩️ Forwarded from <b>${escapeHtml(t.forwardedFrom.moduleName)}</b> — ${escapeHtml(t.forwardedFrom.title)}
           </div>` : ""}
         ${(t.forwardedTo || []).map((link) => `
-          <div class="forward-link-card" data-goto-thread="${escapeAttr(link.threadId)}">
+          <div class="forward-link-card" data-goto-thread="${escapeAttr(link.threadId)}" data-goto-country="${escapeAttr(t.country || "")}">
             ↗️ Forwarded to <b>${escapeHtml(link.moduleName)}</b> — ${escapeHtml(link.title)} &nbsp;<span class="forward-link-time">${timeAgo(link.at)}</span>
           </div>`).join("")}
       `;
@@ -1081,7 +1179,7 @@ html[data-theme="light"] {
     // exactly once, at creation).
     function wireGotoThreadCards(root) {
       root.querySelectorAll("[data-goto-thread]").forEach((card) => {
-        card.addEventListener("click", () => openThread(card.dataset.gotoThread));
+        card.addEventListener("click", () => openThread(card.dataset.gotoThread, card.dataset.gotoCountry));
       });
     }
 
@@ -1382,7 +1480,7 @@ html[data-theme="light"] {
       const res = await authFetch(`/api/threads/${selectedThread.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, country: selectedThread.country }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -1396,10 +1494,11 @@ html[data-theme="light"] {
     async function deleteThread() {
       if (!confirm("Delete this tracking record? Telegram and the Sheet are untouched — this only removes it from the dashboard.")) return;
       const deletedId = selectedThread.id;
+      const deletedCountry = selectedThread.country;
       const res = await authFetch(`/api/threads/${deletedId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete" }),
+        body: JSON.stringify({ action: "delete", country: deletedCountry }),
       });
       const data = await res.json();
       if (!data.ok) {
@@ -1421,7 +1520,7 @@ html[data-theme="light"] {
       btn.disabled = true;
       btn.textContent = "Sending…";
       try {
-        const payload = { action: "reply", text };
+        const payload = { action: "reply", text, country: selectedThread.country };
         if (replyTarget) payload.replyToMessageId = replyTarget.messageId;
         if (pendingAttachments.length) {
           payload.attachments = await Promise.all(pendingAttachments.map(async (f) => ({
@@ -1920,7 +2019,7 @@ html[data-theme="light"] {
         patchLocalThread(selectedThread);
         loadList();
         close();
-        openThread(res.thread.id); // jump straight to the newly generated ticket
+        openThread(res.thread.id, source.country); // jump straight to the newly generated ticket
       });
     }
 
@@ -1952,11 +2051,19 @@ html[data-theme="light"] {
       updateThreadContent(selectedThread);
     }
 
+    // MERGED (2026-08-21) — injects `country` into every payload here,
+    // once, rather than at each of this helper's 5 call sites — every
+    // mutating /api/threads/<id> action needs it (see that endpoint's
+    // own comment), and this was the actual root cause of "Couldn't
+    // load this thread"/action-failed errors across this whole file:
+    // this helper (and several other call sites fixed alongside it)
+    // simply never got updated to send it when the requirement was
+    // added during the D1-migration pass.
     async function postAction(payload) {
       const res = await authFetch(`/api/threads/${selectedThread.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, country: selectedThread.country }),
       });
       return res.json();
     }

@@ -297,6 +297,30 @@ html[data-theme="light"] {
   <script src="/assets/active-agents-modal.js?v=2d846145"></script>
   <script src="/assets/spa-shell.js?v=ad696f3c"></script>
   <script>
+    // MERGED (2026-08-21) — mirrors _shared/accounts.js's
+    // OWNER_ONLY_BY_DEFAULT_SECTIONS exception: "botToken" must NOT be
+    // implied by a rank-tiered "all" default the way every other
+    // section is — only an explicit array naming it counts. Keep this
+    // list in sync with the server file's own constant of the same name
+    // if it ever grows past just "botToken".
+    //
+    // MUST be declared here, as close to the very top of this script as
+    // possible — a real bug this pass introduced and then fixed: this
+    // was originally declared much further down (right next to
+    // accountCanSeeAdminSection(), which reads it), but canSeeAdminSection()
+    // gets called during the very first few lines of this script's own
+    // top-level execution (deciding initial Home-card visibility) —
+    // `const` is not hoisted with a usable value the way `function`
+    // declarations are, so that early call hit this constant while it
+    // was still in the "temporal dead zone" and threw
+    // "Cannot access 'OWNER_ONLY_BY_DEFAULT_SECTIONS' before
+    // initialization" — which, being an uncaught synchronous error,
+    // silently aborted the REST of this script too, including things as
+    // unrelated-looking as the Account Management sidebar toggle's
+    // click handler further down never getting wired at all. One
+    // misplaced `const` broke two seemingly-unrelated features at once.
+    const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken"];
+
     window.initThemeToggle();
     window.initClock();
 
@@ -709,15 +733,6 @@ html[data-theme="light"] {
     // Generic form — takes an arbitrary account object, used both for
     // "me" (authInfo) and for rendering someone ELSE's checkboxes in the
     // Agent Profile modal (see openAgentProfileModal).
-    //
-    // MERGED (2026-08-21) — mirrors _shared/accounts.js's
-    // OWNER_ONLY_BY_DEFAULT_SECTIONS exception: "botToken" must NOT be
-    // implied by a rank-tiered "all" default the way every other
-    // section is — only an explicit array naming it counts (Owner is
-    // already handled above this check). Keep this list in sync with
-    // the server file's own constant of the same name if it ever grows
-    // past just "botToken".
-    const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken"];
     function accountCanSeeAdminSection(acc, sectionId) {
       if (!acc) return false;
       if (acc.role === "owner") return true;
@@ -1914,28 +1929,36 @@ html[data-theme="light"] {
     // left here (@ Tag Username backfill, Announcement rotation speed)
     // are unrelated features that just happened to live in the same
     // modal.
+    // MERGED (2026-08-21) — same working-country concept as
+    // acctBettingLinksWorkingCountry above, shared by both sections in
+    // this Settings panel (Mention Backfill + Announcement rotation
+    // speed) — when the top switcher is "All Countries", this panel
+    // gets its own small in-panel picker instead of blocking either
+    // section outright.
+    let acctSettingsWorkingCountry = null;
+
     function renderSettingsPanel() {
       const canEdit = canEditAdminSection("settings");
-      // MERGED (2026-08-21) — both sections below are per-country
-      // (mention-backfill.js explicitly runs one country per call, no
-      // fan-out — see that file's own header; announcement-settings.js
-      // needed the same country param the Betting Resources Links loader
-      // above does). Neither call ever actually sent a country before
-      // this pass — a real pre-existing bug (not something the country
-      // switcher introduced) that meant BOTH of these silently failed
-      // with a "not authorized" error the whole time. Now both key off
-      // the switcher's current selection, with a clear label showing
-      // which country "Run backfill" will actually scan.
-      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
-      const countryLabel = country && !isAll ? ((window.COUNTRIES && window.COUNTRIES[country]) ? window.COUNTRIES[country].name : country) : null;
+      const topCountry = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(topCountry);
+      const allowedCountries = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
+      if (isAll) {
+        if (!acctSettingsWorkingCountry || !allowedCountries.includes(acctSettingsWorkingCountry)) {
+          acctSettingsWorkingCountry = allowedCountries[0] || null;
+        }
+      } else {
+        acctSettingsWorkingCountry = topCountry;
+      }
+      const country = acctSettingsWorkingCountry;
+      const countryLabel = country ? ((window.COUNTRIES && window.COUNTRIES[country]) ? window.COUNTRIES[country].name : country) : null;
       const backfillDisabled = !canEdit || !countryLabel;
       acctBody.innerHTML = `
+        ${countryWorkingPickerHtml(acctSettingsWorkingCountry, "settings")}
         <div class="mention-backfill-row">
           <div class="mention-backfill-copy">
             <div class="mention-backfill-title">@ Tag Username — historical backfill</div>
             <p class="edit-modal-note">One-time scan of every existing ticket so agents who replied before this feature shipped are also suggested when typing @ in TG Reply Threads. Safe to run more than once. Don't close this window or refresh while it's running.</p>
-            ${countryLabel ? "" : '<p class="edit-modal-note err">Pick a specific country from the switcher (top right) — this runs one country at a time.</p>'}
+            ${countryLabel ? "" : '<p class="edit-modal-note err">No country available.</p>'}
           </div>
           <div class="mention-backfill-action">
             <button type="button" class="tgroute-action-btn" id="mentionBackfillBtn" ${backfillDisabled ? "disabled" : ""}>Run backfill${countryLabel ? ` — ${acctEsc(countryLabel)}` : ""}</button>
@@ -1963,6 +1986,15 @@ html[data-theme="light"] {
         </div>
         ${canEdit ? "" : '<p class="edit-modal-note">View only.</p>'}`;
 
+      document.getElementById("settingsWorkingCountryPicker")?.querySelectorAll("[data-working-country]").forEach((el) => {
+        el.addEventListener("click", () => {
+          const code = el.dataset.workingCountry;
+          if (code === acctSettingsWorkingCountry) return;
+          acctSettingsWorkingCountry = code;
+          renderSettingsPanel();
+        });
+      });
+
       wireMentionBackfill();
       loadAnnounceRotateSetting();
     }
@@ -1983,10 +2015,9 @@ html[data-theme="light"] {
 
     async function runMentionBackfill(btn) {
       const statusEl = document.getElementById("mentionBackfillStatus");
-      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
-      if (!country || isAll) {
-        showToast("Pick a specific country from the switcher (top right) first.", "err");
+      const country = acctSettingsWorkingCountry;
+      if (!country) {
+        showToast("No country available.", "err");
         return;
       }
       btn.disabled = true;
@@ -2026,17 +2057,10 @@ html[data-theme="light"] {
       const unitEl = document.getElementById("rotateUnit");
       const statusEl = document.getElementById("rotateStatus");
       if (!amountEl) return;
-      // MERGED (2026-08-21) — announcement-settings.js has required
-      // `country` since Announcements became per-country content (same
-      // pattern as the Betting Resources Links loader above), but this
-      // call never sent one — a real pre-existing bug this pass found,
-      // not something introduced by the country switcher itself.
-      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
-      if (!country || isAll) {
-        statusEl.textContent = `Pick a specific country from the switcher (top right) — this setting is per-country.`;
+      const country = acctSettingsWorkingCountry;
+      if (!country) {
+        statusEl.textContent = "No country available.";
         statusEl.className = "edit-modal-note err";
-        document.getElementById("rotateSaveBtn")?.addEventListener("click", saveAnnounceRotateSetting);
         return;
       }
       try {
@@ -2067,10 +2091,9 @@ html[data-theme="light"] {
         showToast("Enter a number greater than 0.", "err");
         return;
       }
-      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
-      if (!country || isAll) {
-        showToast(`Pick a specific country from the switcher (top right) before saving.`, "err");
+      const country = acctSettingsWorkingCountry;
+      if (!country) {
+        showToast("No country available.", "err");
         return;
       }
       const rotateIntervalMs = Math.round(amount * (unit === "minutes" ? 60000 : 1000));
@@ -2080,7 +2103,7 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) { showToast(data.error || "Save failed.", "err"); return; }
-      showToast("Saved — takes effect instantly for this device, up to 60s for others.", "ok");
+      showToast(`Saved for ${country} — takes effect instantly for this device, up to 60s for others.`, "ok");
       window.refreshAnnouncementBanner?.();
     }
 
@@ -2661,25 +2684,33 @@ html[data-theme="light"] {
     // saveBettingResources()).
     let acctBettingLinksData = null; // { rules: {name,url,icon}, results: [...], updatedAt, updatedBy }
     let acctBettingLinksCategory = "rules"; // "rules" | "results"
+    // MERGED (2026-08-21) — the country this panel is actually working
+    // on right now. When the top switcher has a specific country
+    // selected, this always just mirrors that. When the top switcher is
+    // "All Countries", this panel has its OWN small in-panel country
+    // picker (see renderBettingLinks()) so an Owner can still fully
+    // browse/edit every country's Betting Resources Links without
+    // leaving "All Countries" mode at the top — persists across
+    // switching categories/re-renders within this modal session, reset
+    // only when the modal is reopened.
+    let acctBettingLinksWorkingCountry = null;
 
     async function loadBettingLinks() {
-      // MERGED (2026-08-21) — this panel's API has required a `country`
-      // param since Betting Resources became per-country content (see
-      // admin/betting-resources.js's own header comment), but this
-      // frontend call never actually sent one — a real, pre-existing bug
-      // this pass found (not something the country switcher introduced).
-      // Betting Resources has no "combined all countries" view (each
-      // country's rules/results are a genuinely separate, independently-
-      // edited config), so "All Countries" mode can't load anything
-      // meaningful here — same reasoning as app.js's ALL_COUNTRIES
-      // handling for the submission form.
-      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
-      if (!country || isAll) {
-        acctBody.innerHTML = `<p class="edit-modal-note err">Betting Resources Links are per-country — pick a specific country from the switcher (top right), not "All Countries", to view or edit these.</p>`;
+      const topCountry = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(topCountry);
+      const allowedCountries = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
+      if (isAll) {
+        if (!acctBettingLinksWorkingCountry || !allowedCountries.includes(acctBettingLinksWorkingCountry)) {
+          acctBettingLinksWorkingCountry = allowedCountries[0] || null;
+        }
+      } else {
+        acctBettingLinksWorkingCountry = topCountry;
+      }
+      if (!acctBettingLinksWorkingCountry) {
+        acctBody.innerHTML = `<p class="edit-modal-note err">No country available.</p>`;
         return;
       }
-      const res = await window.AgentAuth.authFetch(`/api/admin/betting-resources?country=${encodeURIComponent(country)}`);
+      const res = await window.AgentAuth.authFetch(`/api/admin/betting-resources?country=${encodeURIComponent(acctBettingLinksWorkingCountry)}`);
       const data = await res.json();
       if (!data.ok) {
         acctBody.innerHTML = `<p class="edit-modal-note err">${acctEsc(data.error || "Failed to load.")}</p>`;
@@ -2712,6 +2743,28 @@ html[data-theme="light"] {
           icon: card.querySelector(".bl-result-icon").value.trim() || "🔗",
         }));
       }
+    }
+
+    // Small in-panel country picker — only rendered when the TOP
+    // switcher is "All Countries" (a specific top selection already
+    // pins the working country 1:1, nothing to pick). Reused by every
+    // Integration Portal panel that has real per-country FORM STATE
+    // (unlike the simple brand-sidebar panels, which just filter a
+    // list — see getCountryScopedBrands() for those) and therefore
+    // needs its own working-country concept instead of just filtering:
+    // Betting Resources Links, Announcements, Announcement rotation
+    // speed. `onSwitch(newCountry)` is called after updating the
+    // caller's own working-country variable — the caller decides how to
+    // reload/re-render for the new country.
+    function countryWorkingPickerHtml(workingCountry, idPrefix) {
+      if (!window.AgentCountry || !window.AgentCountry.isAll(window.AgentCountry.getCountry())) return "";
+      const allowed = window.AgentCountry.getAllowedCountries();
+      if (allowed.length <= 1) return "";
+      const pills = allowed.map((code) => {
+        const label = (window.COUNTRIES && window.COUNTRIES[code]) ? window.COUNTRIES[code].name : code;
+        return `<div class="tgroute-brand${code === workingCountry ? " selected" : ""}" data-working-country="${acctEsc(code)}">${acctEsc(label)} (${acctEsc(code)})</div>`;
+      }).join("");
+      return `<div class="edit-modal-note" style="margin-bottom:8px; opacity:0.75;">"All Countries" is selected at the top — pick which one to view/edit below:</div><div class="tgroute-brands" id="${acctEsc(idPrefix)}WorkingCountryPicker" style="flex-direction:row; flex-wrap:wrap; margin-bottom:14px;">${pills}</div>`;
     }
 
     function renderBettingLinks() {
@@ -2760,11 +2813,21 @@ html[data-theme="light"] {
       }
 
       acctBody.innerHTML = `
+        ${countryWorkingPickerHtml(acctBettingLinksWorkingCountry, "bl")}
         <div class="tgroute-layout">
           <div class="tgroute-brands br-category-list">${categoryListHtml}</div>
           <div class="tgroute-modules">${formHtml}</div>
         </div>
         ${canEdit ? "" : '<p class="edit-modal-note">View only.</p>'}`;
+
+      document.getElementById("blWorkingCountryPicker")?.querySelectorAll("[data-working-country]").forEach((el) => {
+        el.addEventListener("click", () => {
+          const code = el.dataset.workingCountry;
+          if (code === acctBettingLinksWorkingCountry) return;
+          acctBettingLinksWorkingCountry = code;
+          loadBettingLinks();
+        });
+      });
 
       acctBody.querySelectorAll(".br-category-item").forEach((el) => {
         el.addEventListener("click", () => {
@@ -2834,20 +2897,18 @@ html[data-theme="light"] {
       if (!acctBettingLinksData.rules.url && !(acctBettingLinksData.results || []).some((r) => r.url)) {
         return setAcctNote("Add at least one URL (either panel) before saving.", "err");
       }
-      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
-      if (!country || isAll) {
-        return setAcctNote(`Pick a specific country from the switcher (top right) before saving — Betting Resources Links can't be saved while "All Countries" is selected.`, "err");
+      if (!acctBettingLinksWorkingCountry) {
+        return setAcctNote("No country selected.", "err");
       }
       setAcctNote("Saving…");
       const res = await window.AgentAuth.authFetch("/api/admin/betting-resources", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ country, rules: acctBettingLinksData.rules, results: acctBettingLinksData.results }),
+        body: JSON.stringify({ country: acctBettingLinksWorkingCountry, rules: acctBettingLinksData.rules, results: acctBettingLinksData.results }),
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
       acctBettingLinksData = { rules: data.rules, results: data.results, updatedAt: data.updatedAt, updatedBy: data.updatedBy };
-      setAcctNote("Betting Resources Links saved.", "ok");
+      setAcctNote(`Betting Resources Links saved for ${acctBettingLinksWorkingCountry}.`, "ok");
       renderBettingLinks();
     }
 

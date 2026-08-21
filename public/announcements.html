@@ -174,34 +174,81 @@ html[data-theme="light"] {
     // (admin/announcements.js has required `country` on GET and POST
     // since Announcements became per-country content — see that file's
     // header — but this page never actually sent one, a real pre-
-    // existing bug this pass found, same pattern as the Betting
-    // Resources Links admin panel in index.html). Returns null when the
-    // switcher isn't showing a single specific country (not logged in
-    // yet, or "All Countries" selected) — Announcements has no combined
-    // "all countries" view, each country's banner is genuinely separate
-    // config.
-    function currentCountry() {
-      const c = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      if (!c || (window.AgentCountry && window.AgentCountry.isAll(c))) return null;
-      return c;
-    }
+    // existing bug this pass found). When the top switcher (top right)
+    // has a specific country selected, this always mirrors it. When the
+    // top switcher is "All Countries", this page has its OWN small
+    // in-page country picker (see renderWorkingCountryPicker() below)
+    // instead of just blocking — an Owner in "All Countries" mode can
+    // still fully browse/edit every country's announcements, just via
+    // this page's own picker rather than the top one (Announcements has
+    // no combined "all countries" view — each country's list is
+    // genuinely separate config — so there's no way to show them all at
+    // once here, only to make switching between them easy without
+    // leaving "All Countries" mode at the top).
+    //
+    // REVISED (2026-08-21, same day) — direct business-owner feedback:
+    // "All Countries" should show every country's announcements
+    // COMBINED into one list, not require picking one at a time. This
+    // is actually straightforward for Announcements specifically (unlike
+    // Betting Resources Links, which has nested per-category editing
+    // state that doesn't merge cleanly) — it's just a list of
+    // independent items, so this fetches every allowed country in
+    // parallel and tags each announcement with which country it came
+    // from (`.country`), same pattern threads.html already uses for its
+    // own combined multi-country list. Editing an existing item always
+    // uses ITS OWN tagged country (not whatever the current mode is) —
+    // creating a brand-new one in "All Countries" mode needs an explicit
+    // country picker IN THE FORM ITSELF instead (see renderForm() —
+    // there's no "which country" to infer for something that doesn't
+    // exist yet).
+    let announcementsAreCombined = false; // true only while "All Countries" was the mode this list was loaded under
 
     async function loadAnnouncements() {
-      const country = currentCountry();
-      if (!country) {
-        document.getElementById("formArea").innerHTML = `<p class="edit-modal-note err">Announcements are per-country — pick a specific country from the switcher (top right), not "All Countries", to view or edit these.</p>`;
-        document.getElementById("announceList").innerHTML = "";
-        document.getElementById("announceCount").textContent = "0";
-        return;
+      const top = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(top);
+      const allowed = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
+      announcementsAreCombined = isAll;
+
+      if (isAll) {
+        if (!allowed.length) {
+          document.getElementById("formArea").innerHTML = `<p class="edit-modal-note err">No country available.</p>`;
+          document.getElementById("announceList").innerHTML = "";
+          document.getElementById("announceCount").textContent = "0";
+          return;
+        }
+        const results = await Promise.all(allowed.map(async (code) => {
+          try {
+            const res = await authFetch(`/api/admin/announcements?country=${encodeURIComponent(code)}`);
+            const data = await res.json();
+            return data.ok ? { code, data } : { code, error: data.error || "Failed to load." };
+          } catch {
+            return { code, error: "Network error." };
+          }
+        }));
+        const failed = results.filter((r) => r.error);
+        announcements = results.filter((r) => r.data).flatMap((r) => r.data.announcements.map((a) => ({ ...a, country: r.code })));
+        const firstGoodTopics = results.find((r) => r.data && r.data.topics && r.data.topics.length);
+        if (firstGoodTopics) topics = firstGoodTopics.data.topics;
+        if (failed.length) {
+          showToast(`Couldn't load: ${failed.map((f) => f.code).join(", ")} — ${failed[0].error}`, "err");
+        }
+      } else {
+        if (!top) {
+          document.getElementById("formArea").innerHTML = `<p class="edit-modal-note err">No country available.</p>`;
+          document.getElementById("announceList").innerHTML = "";
+          document.getElementById("announceCount").textContent = "0";
+          return;
+        }
+        const res = await authFetch(`/api/admin/announcements?country=${encodeURIComponent(top)}`);
+        const data = await res.json();
+        if (!data.ok) {
+          document.getElementById("formArea").innerHTML = `<p class="edit-modal-note err">${esc(data.error || "Failed to load.")}</p>`;
+          return;
+        }
+        announcements = data.announcements.map((a) => ({ ...a, country: top }));
+        if (data.topics && data.topics.length) topics = data.topics;
       }
-      const res = await authFetch(`/api/admin/announcements?country=${encodeURIComponent(country)}`);
-      const data = await res.json();
-      if (!data.ok) {
-        document.getElementById("formArea").innerHTML = `<p class="edit-modal-note err">${esc(data.error || "Failed to load.")}</p>`;
-        return;
-      }
-      announcements = data.announcements;
-      if (data.topics && data.topics.length) topics = data.topics;
+
       if (!canEditAnnouncements && mode === "list" && announcements.length) { selectedId = announcements[0].id; mode = "edit"; }
       render();
     }
@@ -212,14 +259,24 @@ html[data-theme="light"] {
     // whatever they haven't saved yet (renderForm() rebuilds the textarea
     // from server data). Save/Delete still call the full loadAnnouncements()
     // above afterward, since at that point there's nothing unsaved to lose.
+    // Re-fetches however many countries the list was originally combined
+    // from (1, or every allowed country) — same shape as loadAnnouncements()
+    // above, just skipping the formArea/topics work since nothing there
+    // needs to change on a background poll.
     async function pollAnnouncements() {
-      const country = currentCountry();
-      if (!country) return; // nothing sensible to poll in "All Countries" mode
+      const top = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(top);
+      const codes = isAll ? (window.AgentCountry ? window.AgentCountry.getAllowedCountries() : []) : (top ? [top] : []);
+      if (!codes.length) return;
       try {
-        const res = await authFetch(`/api/admin/announcements?country=${encodeURIComponent(country)}`);
-        const data = await res.json();
-        if (!data.ok) return;
-        announcements = data.announcements;
+        const results = await Promise.all(codes.map(async (code) => {
+          const res = await authFetch(`/api/admin/announcements?country=${encodeURIComponent(code)}`);
+          const data = await res.json();
+          return data.ok ? { code, data } : null;
+        }));
+        const good = results.filter(Boolean);
+        if (!good.length) return;
+        announcements = good.flatMap((r) => r.data.announcements.map((a) => ({ ...a, country: r.code })));
         renderList();
       } catch {
         // Non-fatal — list just stays as-is until the next poll.
@@ -253,9 +310,15 @@ html[data-theme="light"] {
         const el = document.createElement("div");
         el.className = "thread-item announce-item" + (mode === "edit" && selectedId === a.id ? " selected" : "");
         el.style.setProperty("--thread-accent", status.color);
+        // MERGED (2026-08-21) — country badge, only shown while the
+        // list is actually combined across countries (announcementsAreCombined
+        // — a single-country list never needs to say which country
+        // every item is from, that's the only one there is). Same
+        // visual pattern as threads.html's own thread-country-badge.
+        const countryBadge = announcementsAreCombined ? `<span class="thread-country-badge">${esc(a.country)}</span>` : "";
         el.innerHTML = `
           <div class="meta">
-            <div class="t-title">${esc(a.topic || "(no topic)")}</div>
+            <div class="t-title">${countryBadge}${esc(a.topic || "(no topic)")}</div>
             <div class="t-sub">${esc(a.updatedBy || a.createdBy || "")} · ${fmtFullLocal(a.updatedAt)}</div>
           </div>
           <span class="status-indicator">
@@ -278,11 +341,27 @@ html[data-theme="light"] {
       // opposite of what it is now; for a brand new one, Active by default
       // (nothing to toggle yet, so it just shows what creating it will do).
       const nextEnabled = a ? !a.enabled : true;
+      // MERGED (2026-08-21) — a NEW announcement has no country yet — in
+      // combined ("All Countries") mode there's no way to infer one, so
+      // this shows an explicit picker right in the form (editing an
+      // EXISTING one never shows this — it always keeps whatever
+      // country it already belongs to, see `a.country` used directly in
+      // save()/remove() below, never re-derived from this field).
+      const allowedCountries = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
+      const showNewCountryPicker = mode === "new" && announcementsAreCombined && allowedCountries.length > 1;
+      const countryPickerHtml = showNewCountryPicker ? `
+          <div class="field">
+            <label>Country<span class="required">*</span></label>
+            <select id="fCountry" ${ro}>
+              ${allowedCountries.map((c) => `<option value="${esc(c)}">${esc((window.COUNTRIES && window.COUNTRIES[c]) ? window.COUNTRIES[c].name : c)} (${esc(c)})</option>`).join("")}
+            </select>
+          </div>` : "";
       area.style.display = "flex";
       area.style.flexDirection = "column";
       area.innerHTML = `
         <div style="flex:1; overflow-y:auto; min-height:0;">
-          <p class="edit-modal-title" style="margin-bottom:18px;">${mode === "new" ? "New announcement" : "Edit announcement"}</p>
+          <p class="edit-modal-title" style="margin-bottom:18px;">${mode === "new" ? "New announcement" : "Edit announcement"}${a && announcementsAreCombined ? ` <span class="edit-modal-note" style="display:inline; opacity:0.7;">(${esc(a.country)})</span>` : ""}</p>
+          ${countryPickerHtml}
           <div class="field">
             <label>Issue topic<span class="required">*</span></label>
             <select id="fTopic" ${ro}>
@@ -314,7 +393,7 @@ html[data-theme="light"] {
       `;
       if (canEditAnnouncements) {
         document.getElementById("saveBtn").addEventListener("click", () => save(nextEnabled));
-        if (a) document.getElementById("deleteBtn").addEventListener("click", () => remove(a.id));
+        if (a) document.getElementById("deleteBtn").addEventListener("click", () => remove(a.id, a.country));
       }
     }
 
@@ -324,8 +403,17 @@ html[data-theme="light"] {
       const errEl = document.getElementById("formErr");
       errEl.textContent = "";
       if (!text) { errEl.textContent = "Message can't be empty."; return; }
-      const country = currentCountry();
-      if (!country) { errEl.textContent = `Pick a specific country from the switcher (top right) before saving.`; return; }
+      // MERGED (2026-08-21) — editing an EXISTING announcement always
+      // uses its own tagged country (never re-derived from the current
+      // mode — see loadAnnouncements()'s comment on why every item
+      // carries `.country`). Creating a NEW one uses the in-form country
+      // picker when combined mode showed one (see renderForm()), else
+      // just the single top-switcher country there's only ever one
+      // choice for.
+      const existing = mode === "edit" ? announcements.find((x) => x.id === selectedId) : null;
+      const countryFieldEl = document.getElementById("fCountry");
+      const country = existing ? existing.country : (countryFieldEl ? countryFieldEl.value : (window.AgentCountry ? window.AgentCountry.getCountry() : null));
+      if (!country) { errEl.textContent = `No country available.`; return; }
       const startAt = localInputToIso(document.getElementById("fStart").value);
       const endAt = localInputToIso(document.getElementById("fEnd").value);
       if (startAt && endAt && new Date(startAt) >= new Date(endAt)) {
@@ -356,10 +444,9 @@ html[data-theme="light"] {
       window.refreshAnnouncementBanner?.();
     }
 
-    async function remove(id) {
+    async function remove(id, country) {
       if (!confirm("Delete this announcement? This can't be undone.")) return;
-      const country = currentCountry();
-      if (!country) { showToast("Pick a specific country from the switcher (top right) first.", "err"); return; }
+      if (!country) { showToast("No country available.", "err"); return; }
       const res = await authFetch("/api/admin/announcements", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", country, id }),
