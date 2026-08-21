@@ -47,6 +47,7 @@
 // 三国合并（2026-08-20）—— 真实新增 import，不是补丁说明。
 import { canSeeCountry, normalizeAllowedCountries } from "./countryAccess.js";
 import { COUNTRY_CODES } from "./countries.js";
+import { BRANDS as ROUTING_BRANDS } from "./routing.js";
 
 const OFFICES_INDEX_KEY = "offices-index";
 const ACCOUNTS_INDEX_KEY = "accounts-index";
@@ -760,10 +761,44 @@ export async function verifyRequest(request, env) {
   return stripSecret(account);
 }
 
-export function canSeeBrand(account, brandName) {
+// MERGED (2026-08-20) — accepts EITHER a brand id ("crickex_pkr") or a
+// brand NAME ("Crickex") and checks allowedBrands against both forms.
+// Why: allowedBrands has always stored brand NAMES (grants made through
+// accounts-admin.html before the merge, or through it today if that
+// page still submits names for a brand that predates this change), but
+// submit.js was already updated to call this with brandId instead (see
+// that file's own 2026-08-20 comment on why — bare names collide across
+// countries post-merge). Rather than pick one form and silently break
+// whichever callers pass the other, this resolves the id<->name pair via
+// routing.js's BRANDS and checks allowedBrands for whichever form is
+// actually present, so an old name-based grant and a new id-based grant
+// both keep working no matter which form a given call site happens to
+// pass. This is NOT by itself what stops cross-country leakage from a
+// bare name being ambiguous (e.g. "Crickex" existing in both INR and
+// PKR) — every real call site that matters pairs this with
+// canSeeCountry(account, record.country) first (submit.js, threads.js),
+// and that country check is what actually disambiguates; this function
+// alone can't, since it only ever receives one string with no country
+// attached. Callers introducing a NEW brand-gated endpoint should follow
+// that same pairing, not rely on this function alone.
+export function canSeeBrand(account, brandIdentifier) {
   if (rankOf(account.role) >= ROLE_RANK.admin) return true; // admin & superadmin see everything
   if (account.allowedBrands === "all") return true;
-  return Array.isArray(account.allowedBrands) && account.allowedBrands.includes(brandName);
+  const allowed = Array.isArray(account.allowedBrands) ? account.allowedBrands : [];
+  if (allowed.includes(brandIdentifier)) return true;
+  const byId = ROUTING_BRANDS[brandIdentifier];
+  if (byId && allowed.includes(byId.name)) return true;
+  // Only resolve name->id when the name is UNAMBIGUOUS (exactly one
+  // brand across all countries has this name) — if two+ brands share
+  // brandIdentifier as their name (e.g. "Crickex" in both INR and PKR),
+  // there's no way to know which one's id to check from a bare name
+  // alone, so this deliberately does NOT guess; it falls through to
+  // `false` for that half of the check, relying on the caller's
+  // accompanying canSeeCountry() (see the comment above) to have
+  // already scoped things correctly by then.
+  const matchingIds = Object.keys(ROUTING_BRANDS).filter((id) => ROUTING_BRANDS[id].name === brandIdentifier);
+  if (matchingIds.length === 1 && allowed.includes(matchingIds[0])) return true;
+  return false;
 }
 
 // 三国合并（2026-08-20）—— 真实新增的姐妹函数，不是补丁说明。

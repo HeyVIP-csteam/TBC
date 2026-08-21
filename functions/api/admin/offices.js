@@ -33,7 +33,7 @@ export async function onRequestGet(context) {
 }
 
 async function handleGet({ request, env }) {
-  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
+  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "ACCOUNTS_KV is not bound yet." }, 500);
   // Lowest floor among the sections that need an office list at all —
   // "can I even get in the door" is separate from "how much data do I
   // get back", handled below.
@@ -59,7 +59,7 @@ export async function onRequestPost(context) {
 }
 
 async function handlePost({ request, env, waitUntil }) {
-  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
+  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "ACCOUNTS_KV is not bound yet." }, 500);
   const auth = await authenticateStaff(request, env, ROLE_RANK.senior);
   if (!auth.ok) return json({ ok: false, error: "Not authorized." }, 401);
   if (!canEditAdminSection(auth.account, "whitelistIp")) {

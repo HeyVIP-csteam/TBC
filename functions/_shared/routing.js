@@ -252,6 +252,20 @@ export const RECORD_TO_SHEET = {
   // Sheet structure confirmed (see SHEET_LAYOUT.withdraw_issue below) —
   // no more guessing needed, safe to turn on.
   withdraw_issue: true,
+  // MERGED (2026-08-20) — ported from PHP's original routing.js (see
+  // MODULE_META's matching comment above for the full story). Neither
+  // has a SHEET_LAYOUT entry below yet (PHP's original column
+  // positions weren't re-verified against the merged messageBuilders.js
+  // shape, so rather than guess and risk writing misaligned columns
+  // into a real spreadsheet, this deliberately leaves them without one)
+  // — submit.js's SHEET_LAYOUT[moduleId] lookup returning undefined
+  // falls through to its own generic key/value row writer (see that
+  // file's else-branch), which is always column-position-safe by
+  // construction. Add a SHEET_LAYOUT entry for either of these once
+  // PHP's real deposit_request/bank_issue sheet columns are confirmed,
+  // for the nicer fixed-column format every other module gets.
+  deposit_request: true,
+  bank_issue: true,
 };
 
 // Emoji + display name per module, used to build the Telegram message header.
@@ -263,7 +277,64 @@ export const MODULE_META = {
   daily_report: { emoji: "📊", name: "Daily Report", accent: "#34D399" },
   genie_issue: { emoji: "🤖", name: "Genie Issue", accent: "#A78BFA" },
   withdraw_issue: { emoji: "💸", name: "Withdraw Issue", accent: "#4ADE80" },
+
+  // MERGED (2026-08-20) — PHP-only, ported from PHP's original routing.js
+  // (never actually merged in before now — see submit.js's own
+  // 2026-08-20 comment on how this was discovered: PHP agents couldn't
+  // submit either of these at all, VALID_MODULES = Object.keys(this
+  // object) rejected both with "Unknown module" before this). bank_issue
+  // is a normal module like any above; deposit_request is special — see
+  // DEPOSIT_CHANNEL_PSEUDO_MODULES/depositChannelModuleId() right below.
+  deposit_request: { emoji: "💳", name: "Deposit Request", accent: "#22D3EE" },
+  bank_issue: { emoji: "🏦", name: "Bank Issue", accent: "#38BDF8" },
+
+  // ---- Deposit Request channel routing targets (NOT real submittable
+  // topics — see DEPOSIT_CHANNEL_PSEUDO_MODULES / depositChannelModuleId()
+  // below and the filtering in functions/api/submit.js's VALID_MODULES).
+  // Every real Deposit Request submission still uses moduleId
+  // "deposit_request" above; ONLY the Telegram routing target (which
+  // group/topic it's sent to) is picked per-channel via one of these
+  // pseudo-module ids, so each channel can point at a totally different
+  // group — not just a different topic in the same group — using the
+  // exact same "TG Group / Channel" admin page and routes.js KV machinery
+  // every other module already uses (one row per brand x pseudo-module,
+  // live-editable, no redeploy). A brand that doesn't offer a given
+  // channel (see schemas.js's deposit_request optionsByBrand) just
+  // leaves that row blank — harmless, it's never looked up for that
+  // brand since the channel never appears in that brand's dropdown.
+  deposit_copopay: { emoji: "💳", name: "Deposit — Copopay", accent: "#22D3EE" },
+  deposit_sgpay: { emoji: "💳", name: "Deposit — SGPay", accent: "#22D3EE" },
+  deposit_htpay: { emoji: "💳", name: "Deposit — HTpay", accent: "#22D3EE" },
+  deposit_k2pay: { emoji: "💳", name: "Deposit — K2Pay", accent: "#22D3EE" },
+  deposit_lpay: { emoji: "💳", name: "Deposit — LPay", accent: "#22D3EE" },
+  deposit_ewp: { emoji: "💳", name: "Deposit — EWP", accent: "#22D3EE" },
+  deposit_dreampay: { emoji: "💳", name: "Deposit — Dreampay", accent: "#22D3EE" },
 };
+
+// Every pseudo-module key added above, in one place — submit.js's
+// VALID_MODULES must NOT include these (they must never be accepted as a
+// real moduleId in a submission, only used internally to look up a
+// route) — see the filter on VALID_MODULES in submit.js.
+export const DEPOSIT_CHANNEL_PSEUDO_MODULES = [
+  "deposit_copopay", "deposit_sgpay", "deposit_htpay", "deposit_k2pay", "deposit_lpay", "deposit_ewp", "deposit_dreampay",
+];
+
+// Deposit Request's "channel" field value (as typed by whichever brand's
+// team named it, e.g. "SGPAY" vs "SGpay") -> the pseudo-module id used to
+// look up its Telegram route. Case/punctuation-insensitive on purpose —
+// both brands' spelling variants of the same channel collapse to the same
+// routing target (e.g. betjili_php's "SGPAY" and betvisa_php's "SGpay"
+// both resolve to "deposit_sgpay"), while still letting each BRAND have
+// its own chatId/topicId for that channel via the normal brand|module KV
+// key. Returns null for a name that doesn't match any known channel
+// (caller should treat that as a routing error rather than silently
+// falling back to some default group).
+export function depositChannelModuleId(channelName) {
+  const slug = String(channelName || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const match = DEPOSIT_CHANNEL_PSEUDO_MODULES.find((id) => id === `deposit_${slug}`);
+  return match || null;
+}
+
 
 /**
  * Risk Issue only: emoji shown next to each field when building the message
@@ -780,6 +851,9 @@ function dailyReportColumns() {
 export const SCREENSHOT_R2_ENABLED = {
   qa: true,
   account_issue: true,
+  // MERGED (2026-08-20) — ported from PHP's original routing.js, same
+  // story as RECORD_TO_SHEET/MODULE_META above.
+  bank_issue: true,
 };
 
 // ══════════════════════════════════════════════════════════════════

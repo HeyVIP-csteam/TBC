@@ -114,7 +114,7 @@ export async function onRequestPost(context) {
 }
 
 async function handleLogin({ request, env, waitUntil }) {
-  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
+  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "ACCOUNTS_KV is not bound yet." }, 500);
   let body;
   try {
     body = await request.json();
@@ -229,7 +229,12 @@ async function handleLogin({ request, env, waitUntil }) {
   return json({
     ok: true,
     token,
-    account: { username: account.username, role: account.role, allowedBrands: account.allowedBrands, allowedModules: account.allowedModules, officeId: account.officeId, allowedAdminSections: account.allowedAdminSections, adminSectionEditAccess: account.adminSectionEditAccess, canManageAdminAccess: account.canManageAdminAccess, canViewActiveAgents: account.canViewActiveAgents, canViewActivityLogs: account.canViewActivityLogs },
+    // allowedCountries added 2026-08-20 (merge) — was missing from this
+    // response entirely, which meant the client had no way to know which
+    // countries an agent can even operate in. Nothing client-side could
+    // build a country switcher or filter brands/modules by country
+    // without this — see assets/agent-country.js.
+    account: { username: account.username, role: account.role, allowedBrands: account.allowedBrands, allowedModules: account.allowedModules, allowedCountries: account.allowedCountries, officeId: account.officeId, allowedAdminSections: account.allowedAdminSections, adminSectionEditAccess: account.adminSectionEditAccess, canManageAdminAccess: account.canManageAdminAccess, canViewActiveAgents: account.canViewActiveAgents, canViewActivityLogs: account.canViewActivityLogs },
   });
 }
 

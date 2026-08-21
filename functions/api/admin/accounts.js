@@ -82,7 +82,7 @@ export async function onRequestGet(context) {
 }
 
 async function handleGet({ request, env }) {
-  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
+  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "ACCOUNTS_KV is not bound yet." }, 500);
   const auth = await authenticateStaff(request, env, ROLE_RANK.senior);
   if (!auth.ok) return json({ ok: false, error: "Not authorized." }, 401);
   // Only an owner viewing this list gets their OWN row back (see the
@@ -101,7 +101,7 @@ export async function onRequestPost(context) {
 }
 
 async function handlePost({ request, env, waitUntil }) {
-  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
+  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "ACCOUNTS_KV is not bound yet." }, 500);
   const auth = await authenticateStaff(request, env, ROLE_RANK.senior);
   if (!auth.ok) return json({ ok: false, error: "Not authorized." }, 401);
 

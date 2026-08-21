@@ -1,4 +1,4 @@
-import { BRANDS, RECORD_TO_SHEET, MODULE_META, SHEET_LAYOUT, MESSAGE_TEMPLATE, SCREENSHOT_R2_ENABLED, PROMOTION_SHEET_CONFIG, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken } from "../_shared/routing.js";
+import { BRANDS, RECORD_TO_SHEET, MODULE_META, SHEET_LAYOUT, MESSAGE_TEMPLATE, SCREENSHOT_R2_ENABLED, PROMOTION_SHEET_CONFIG, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken, DEPOSIT_CHANNEL_PSEUDO_MODULES, depositChannelModuleId } from "../_shared/routing.js";
 import { appendRowToSheet, appendRowByColumns, writeRowForDate } from "../_shared/googleSheets.js";
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
 import { createThread } from "../_shared/threads.js";
@@ -9,7 +9,16 @@ import { resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY, buildTicke
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
 import { resolveThreadsKv } from "../_shared/countries.js";
 
-const VALID_MODULES = Object.keys(MODULE_META);
+// MERGED (2026-08-20) — excludes DEPOSIT_CHANNEL_PSEUDO_MODULES from
+// what a submission can claim as its moduleId. Those ids exist in
+// MODULE_META purely so the "TG Group / Channel" admin page can render
+// per-channel routing rows using the same brand|module KV shape every
+// real module uses (see MODULE_META's comment in routing.js) — they are
+// NEVER a real ticket type, only a routing lookup key resolved
+// internally below via depositChannelModuleId(). Without this filter, a
+// crafted request with module:"deposit_sgpay" would sail through the
+// VALID_MODULES check and create a nonsense "Deposit — SGPay" ticket.
+const VALID_MODULES = Object.keys(MODULE_META).filter((id) => !DEPOSIT_CHANNEL_PSEUDO_MODULES.includes(id));
 
 // Top-level safety net. Everything below already handles its OWN expected
 // failure modes (bad JSON, missing config, Telegram/Sheets errors) with a
@@ -130,14 +139,28 @@ async function handleSubmit({ request, env, waitUntil }) {
   }
 
   const meta = MODULE_META[moduleId];
+  const fieldMap = Object.fromEntries(fields.map((f) => [f.key, f.value]));
+  // MERGED (2026-08-20) — Deposit Request routes by CHANNEL, not by
+  // module — each channel can point at a completely different Telegram
+  // group (not just a different topic in the same group), via the
+  // deposit_<channel> pseudo-module ids in routing.js (see MODULE_META's
+  // comment there for the full reasoning — ported from PHP's original
+  // submit.js, which had this and got left behind during the merge).
+  // Every other module routes by moduleId itself, same as always.
+  let routeModuleId = moduleId;
+  if (moduleId === "deposit_request") {
+    routeModuleId = depositChannelModuleId(fieldMap.channel);
+    if (!routeModuleId) {
+      return json({ ok: false, error: `Unknown deposit channel "${fieldMap.channel || ""}".` }, 400);
+    }
+  }
   // Live-editable routing (TG Group / Channel admin page) takes priority
   // over the hardcoded default — see _shared/routes.js. An empty/unset KV
   // means every brand+module just falls back to brand.telegram as before,
   // so this can't break anything that already works.
-  const routeOverride = await getRouteOverride(env, brandId, moduleId);
-  const route = routeOverride || brand.telegram[moduleId] || brand.telegram.default;
+  const routeOverride = await getRouteOverride(env, brandId, routeModuleId);
+  const route = routeOverride || brand.telegram[routeModuleId] || brand.telegram.default;
   const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
-  const fieldMap = Object.fromEntries(fields.map((f) => [f.key, f.value]));
 
   // 1. Upload attachments to R2 first (if configured) so the message text
   //    can include a real, directly-openable screenshot link.

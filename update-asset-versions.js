@@ -20,9 +20,25 @@
 // (compares old content vs new content before writing).
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+// MERGED (2026-08-20) — converted from CommonJS (require/__dirname) to
+// ESM import syntax. This script always actually failed to run in this
+// project specifically — package.json has "type":"module" (added so
+// Cloudflare Pages treats functions/*.js as ES modules, required for
+// the rest of this codebase's import/export syntax), which makes Node
+// treat EVERY .js file in this repo as an ES module, including this
+// one — require()/__dirname aren't available there. Discovered because
+// this exact command is the documented way to pick up the merge's
+// asset changes (new countries.js/country-modules.js/agent-country.js,
+// edited schemas.js/app.js/authguard.js/style.css) before deploying;
+// it's been silently unusable since whenever "type":"module" was added,
+// not something this pass broke.
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ASSETS_DIR = path.join(PUBLIC_DIR, 'assets');

@@ -28,7 +28,7 @@ export async function onRequestPost(context) {
 }
 
 async function handleChangePassword({ request, env, waitUntil }) {
-  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "THREADS_KV is not bound yet." }, 500);
+  if (!env.ACCOUNTS_KV) return json({ ok: false, error: "ACCOUNTS_KV is not bound yet." }, 500);
   const authed = await verifyRequest(request, env);
   if (!authed) return json({ ok: false, error: "Login required." }, 401);
 
