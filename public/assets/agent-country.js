@@ -99,30 +99,105 @@
   }
 
   // Renders a compact country switcher into the given element id — a
-  // single <select> when the account has 2+ allowed countries, nothing
-  // at all (empty, no dropdown chrome) when it only has one, since a
-  // switcher with one option is just clutter. Calls `onChange()` after
-  // updating the stored value so the calling page can re-render its
-  // brand/module lists without a full page reload.
+  // custom button+panel widget (NOT a native <select> — see this
+  // rewrite's reasoning in style.css's .country-switcher-mount comment:
+  // native dropdown panels can't be fully restyled cross-browser, and
+  // the trigger's width used to jump around based on the selected
+  // label's text length) when the account has 2+ allowed countries,
+  // nothing at all when it only has one, since a switcher with one
+  // option is just clutter. Calls `onChange()` after updating the
+  // stored value so the calling page can re-render its brand/module
+  // lists without a full page reload.
+  let outsideClickWired = false;
   function renderSwitcher(elId, onChange) {
     const el = document.getElementById(elId);
     if (!el) return;
     const allowed = getAllowedCountries();
     if (allowed.length <= 1) { el.innerHTML = ""; return; }
     const current = getCountry();
-    const opts = allowed.map(function (code) {
-      const c = (window.COUNTRIES && window.COUNTRIES[code]) || { name: code, currencySymbol: "" };
-      const sel = code === current ? " selected" : "";
-      return `<option value="${code}"${sel}>${c.name} (${code})</option>`;
+
+    function labelFor(code) {
+      if (code === ALL_COUNTRIES) return "All Countries";
+      const c = (window.COUNTRIES && window.COUNTRIES[code]) || { name: code };
+      return `${c.name} (${code})`;
+    }
+
+    const optionsHtml = [ALL_COUNTRIES].concat(allowed).map(function (code, i) {
+      const isSelected = code === current;
+      const classes = "country-switcher-option" + (isSelected ? " is-selected" : "") + (i === 0 ? " cs-all-option" : "");
+      return `<div class="${classes}" data-country="${code}" role="option" aria-selected="${isSelected}">${labelFor(code)}</div>`;
     }).join("");
-    const allSel = current === ALL_COUNTRIES ? " selected" : "";
-    const allOption = `<option value="${ALL_COUNTRIES}"${allSel}>All Countries</option>`;
-    el.innerHTML = `<select class="country-switcher" id="__countrySwitcherSelect">${allOption}${opts}</select>`;
-    const sel = document.getElementById("__countrySwitcherSelect");
-    sel.addEventListener("change", function () {
-      setCountry(sel.value);
-      if (typeof onChange === "function") onChange(sel.value);
+
+    el.innerHTML = `
+      <button type="button" class="country-switcher-btn" id="__csBtn" aria-haspopup="listbox" aria-expanded="false">
+        <span id="__csBtnLabel">${labelFor(current)}</span>
+        <svg class="cs-chevron" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="#aab0c8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 8 10 13 15 8"></polyline></svg>
+      </button>
+      <div class="country-switcher-panel" id="__csPanel" role="listbox">${optionsHtml}</div>
+    `;
+
+    const btn = document.getElementById("__csBtn");
+    const panel = document.getElementById("__csPanel");
+    const label = document.getElementById("__csBtnLabel");
+
+    function closePanel() {
+      panel.classList.remove("is-open");
+      btn.classList.remove("is-open");
+      btn.setAttribute("aria-expanded", "false");
+    }
+    function openPanel() {
+      panel.classList.add("is-open");
+      btn.classList.add("is-open");
+      btn.setAttribute("aria-expanded", "true");
+    }
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (panel.classList.contains("is-open")) closePanel();
+      else openPanel();
     });
+
+    panel.querySelectorAll(".country-switcher-option").forEach(function (opt) {
+      opt.addEventListener("click", function (e) {
+        e.stopPropagation();
+        const code = opt.dataset.country;
+        setCountry(code);
+        label.textContent = labelFor(code);
+        panel.querySelectorAll(".country-switcher-option").forEach(function (o) {
+          o.classList.toggle("is-selected", o.dataset.country === code);
+        });
+        closePanel();
+        if (typeof onChange === "function") onChange(code);
+      });
+    });
+
+    // One shared document-level listener handles "click outside to
+    // close" for every switcher instance ever rendered on this page
+    // (index.html/form.html/promo.html/threads.html can each mount
+    // their own) — wired once, not once per renderSwitcher() call, so
+    // repeated re-renders (e.g. an SPA view remount) don't stack up
+    // duplicate listeners.
+    if (!outsideClickWired) {
+      outsideClickWired = true;
+      document.addEventListener("click", function (e) {
+        document.querySelectorAll(".country-switcher-panel.is-open").forEach(function (openPanelEl) {
+          if (!openPanelEl.parentElement.contains(e.target)) {
+            openPanelEl.classList.remove("is-open");
+            const parentBtn = openPanelEl.parentElement.querySelector(".country-switcher-btn");
+            if (parentBtn) { parentBtn.classList.remove("is-open"); parentBtn.setAttribute("aria-expanded", "false"); }
+          }
+        });
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          document.querySelectorAll(".country-switcher-panel.is-open").forEach(function (openPanelEl) {
+            openPanelEl.classList.remove("is-open");
+            const parentBtn = openPanelEl.parentElement.querySelector(".country-switcher-btn");
+            if (parentBtn) { parentBtn.classList.remove("is-open"); parentBtn.setAttribute("aria-expanded", "false"); }
+          });
+        }
+      });
+    }
   }
 
   window.AgentCountry = {

@@ -28,7 +28,20 @@
 (function () {
   if (!window.AgentAuth || !window.AgentAuth.getAuth()) return; // not logged in, nothing to track
 
-  const HEARTBEAT_INTERVAL_MS = 15000;
+  // CAPACITY (2026-08-21) — bumped from 15s to 3 minutes: this project
+  // runs 24/7 (not 8h shifts), so heartbeat REQUEST volume scales with
+  // concurrent-online-headcount × the full day, not × a shift — at 15s
+  // that was 5,760 requests/agent/day just for presence. This is a 12x
+  // cut. The KV WRITE side was already well-throttled server-side (see
+  // MIN_KV_WRITE_INTERVAL_MS in _shared/presence.js) so this change is
+  // mainly about REQUEST/READ volume, not writes.
+  // MUST stay in sync with functions/_shared/presence.js's copy of this
+  // same constant, and with ONLINE_OFFLINE_AFTER_MS/
+  // INACTIVE_OFFLINE_AFTER_MS there — those offline-detection thresholds
+  // are sized relative to this interval; changing this here without
+  // updating those server-side would make every genuinely-online agent
+  // flicker to "offline" between heartbeats.
+  const HEARTBEAT_INTERVAL_MS = 180000;
 
   function detectDevice() {
     const ua = navigator.userAgent;
@@ -75,7 +88,10 @@
   // Immediately on load, and immediately again on every visibility flip
   // (tab switch, minimize, app switch) — not waiting for the next
   // interval tick is what makes "inactive" register instantly rather
-  // than up to 15s late.
+  // than up to HEARTBEAT_INTERVAL_MS late. This is why bumping that
+  // interval (see its own comment above) doesn't make switching tabs
+  // feel slower — only the steady-state "still here" keepalive between
+  // status changes got less frequent, not status changes themselves.
   sendHeartbeat();
   document.addEventListener("visibilitychange", sendHeartbeat);
   setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
