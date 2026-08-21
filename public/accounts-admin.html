@@ -39,6 +39,7 @@ html[data-theme="light"] {
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
+<script src="/assets/countries.js?v=78bdc076"></script>
 <script src="/assets/schemas.js?v=3f70df87"></script>
 <style>
   .admin-shell { max-width: 1360px; margin: 0 auto; padding: 24px 20px 80px; }
@@ -188,6 +189,10 @@ html[data-theme="light"] {
           <select id="accountOffice"><option value="">— none —</option></select>
         </div>
         <div class="field">
+          <label><input type="checkbox" id="accountAllCountries" /> Can see all countries</label>
+          <div class="brand-checks" id="accountCountryChecks"></div>
+        </div>
+        <div class="field">
           <label><input type="checkbox" id="accountAllBrands" /> Can see all brands</label>
           <div class="brand-checks" id="accountBrandChecks"></div>
         </div>
@@ -200,7 +205,7 @@ html[data-theme="light"] {
         <h3>Existing Accounts</h3>
         <div style="overflow-x:auto;">
         <table class="admin-table">
-          <thead><tr><th>Username</th><th>Full Name</th><th>PID</th><th>Role</th><th>Office</th><th>Brands</th><th>Status</th><th>Last Login</th><th>Pwd Changed</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Username</th><th>Full Name</th><th>PID</th><th>Role</th><th>Office</th><th>Countries</th><th>Brands</th><th>Status</th><th>Last Login</th><th>Pwd Changed</th><th>Actions</th></tr></thead>
           <tbody id="accountsTableBody"></tbody>
         </table>
         </div>
@@ -411,13 +416,48 @@ html[data-theme="light"] {
     }
 
     // ---- accounts ----
+    // MERGED (2026-08-21) — value is now b.id (e.g. "crickex_pkr"), not
+    // b.name — this page used to store allowedBrands by brand NAME
+    // (value="${b.name}"), which is exactly what breaks once the same
+    // name exists in two countries post-merge (both INR and PKR have a
+    // "Crickex"). Every real permission check (canSeeBrand() server-
+    // side, filterAllowedBrands() client-side) already accepts EITHER
+    // form for backward compatibility with existing name-based grants —
+    // see accounts.js's canSeeBrand() comment — but this page now saves
+    // the unambiguous id form going forward. Each label also shows the
+    // brand's country so two same-named brands are visually distinguishable
+    // in this list (previously impossible — there was only ever one
+    // country's worth of brands to pick from before this merge).
     function renderBrandChecks(selected) {
       const wrap = document.getElementById("accountBrandChecks");
       wrap.innerHTML = (typeof BRANDS !== "undefined" ? BRANDS : []).map((b) => `
-        <label><input type="checkbox" value="${escapeHtml(b.name)}" ${selected.includes(b.name) ? "checked" : ""} /> ${escapeHtml(b.name)}</label>
+        <label><input type="checkbox" value="${escapeHtml(b.id)}" ${selected.includes(b.name) || selected.includes(b.id) ? "checked" : ""} /> ${escapeHtml(b.name)} <span style="opacity:0.55; font-size:10px;">${escapeHtml(b.country)}</span></label>
       `).join("");
     }
     renderBrandChecks([]);
+
+    // NEW (2026-08-21) — this page never had ANY country picker before
+    // this pass (see accounts-admin.html's own progress notes) — every
+    // account created here defaulted to seeing zero countries' worth of
+    // brands/modules/tickets, since allowedCountries was never sent at
+    // all and canSeeCountry() deliberately does NOT auto-bypass a
+    // missing/empty allowedCountries the way canSeeBrand()/
+    // canSeeModule() do (see countryAccess.js's own comment on why that
+    // one's different) — a real, silent "new account can't see
+    // anything" gap this closes.
+    function renderCountryChecks(selected) {
+      const wrap = document.getElementById("accountCountryChecks");
+      const codes = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []);
+      wrap.innerHTML = codes.map((code) => {
+        const c = (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) || { name: code };
+        return `<label><input type="checkbox" value="${escapeHtml(code)}" ${selected.includes(code) ? "checked" : ""} /> ${escapeHtml(c.name)} <span style="opacity:0.55; font-size:10px;">${escapeHtml(code)}</span></label>`;
+      }).join("");
+    }
+    renderCountryChecks([]);
+
+    document.getElementById("accountAllCountries").addEventListener("change", (e) => {
+      document.getElementById("accountCountryChecks").style.display = e.target.checked ? "none" : "flex";
+    });
 
     document.getElementById("accountAllBrands").addEventListener("change", (e) => {
       document.getElementById("accountBrandChecks").style.display = e.target.checked ? "none" : "flex";
@@ -447,6 +487,7 @@ html[data-theme="light"] {
       const isSuperAdmin = getAuth()?.role === "superadmin" || !!bootstrapPassword;
       body.innerHTML = accounts.map((a) => {
         const officeName = offices.find((o) => o.id === a.officeId)?.name || "—";
+        const countries = a.allowedCountries === "all" ? "All" : (a.allowedCountries || []).join(", ") || "—";
         const brands = a.allowedBrands === "all" ? "All" : (a.allowedBrands || []).join(", ") || "—";
         const pwChanged = a.lastPasswordChange
           ? `${timeAgo(a.lastPasswordChange.at)} <span style="color:var(--ink-soft); font-size:11px;">by ${escapeHtml(a.lastPasswordChange.by)}</span>`
@@ -466,6 +507,7 @@ html[data-theme="light"] {
           <td>${escapeHtml(a.pid || "—")}</td>
           <td>${escapeHtml(a.role)}</td>
           <td>${escapeHtml(officeName)}</td>
+          <td>${escapeHtml(countries)}</td>
           <td>${escapeHtml(brands)}</td>
           <td>${statusCell}</td>
           <td>${timeAgo(a.lastActiveAt)}</td>
@@ -476,7 +518,7 @@ html[data-theme="light"] {
             <button class="danger" data-delete-account="${a.username}">Delete</button>
           </td>
         </tr>`;
-      }).join("") || `<tr><td colspan="10" style="color:var(--ink-soft);">No accounts yet.</td></tr>`;
+      }).join("") || `<tr><td colspan="11" style="color:var(--ink-soft);">No accounts yet.</td></tr>`;
       body.querySelectorAll("[data-edit-account]").forEach((b) => b.addEventListener("click", () => editAccount(b.dataset.editAccount)));
       body.querySelectorAll("[data-delete-account]").forEach((b) => b.addEventListener("click", () => deleteAccount(b.dataset.deleteAccount)));
       body.querySelectorAll("[data-lock-account]").forEach((b) => b.addEventListener("click", () => setAccountLock(b.dataset.lockAccount, true)));
@@ -494,6 +536,10 @@ html[data-theme="light"] {
       document.getElementById("accountPid").value = a.pid || "";
       document.getElementById("accountRole").value = a.role;
       document.getElementById("accountOffice").value = a.officeId || "";
+      const allCountries = a.allowedCountries === "all";
+      document.getElementById("accountAllCountries").checked = allCountries;
+      document.getElementById("accountCountryChecks").style.display = allCountries ? "none" : "flex";
+      renderCountryChecks(allCountries ? [] : (a.allowedCountries || []));
       const allBrands = a.allowedBrands === "all";
       document.getElementById("accountAllBrands").checked = allBrands;
       document.getElementById("accountBrandChecks").style.display = allBrands ? "none" : "flex";
@@ -511,6 +557,9 @@ html[data-theme="light"] {
       document.getElementById("accountPid").value = "";
       document.getElementById("accountRole").value = "agent";
       document.getElementById("accountOffice").value = "";
+      document.getElementById("accountAllCountries").checked = false;
+      document.getElementById("accountCountryChecks").style.display = "flex";
+      renderCountryChecks([]);
       document.getElementById("accountAllBrands").checked = false;
       document.getElementById("accountBrandChecks").style.display = "flex";
       renderBrandChecks([]);
@@ -526,6 +575,8 @@ html[data-theme="light"] {
       if (!username) { msg.innerHTML = '<div class="admin-msg err">Username is required.</div>'; return; }
       if (isNew && !password) { msg.innerHTML = '<div class="admin-msg err">Password is required for a new account.</div>'; return; }
 
+      const allCountries = document.getElementById("accountAllCountries").checked;
+      const allowedCountries = allCountries ? "all" : Array.from(document.querySelectorAll("#accountCountryChecks input:checked")).map((el) => el.value);
       const allBrands = document.getElementById("accountAllBrands").checked;
       const allowedBrands = allBrands ? "all" : Array.from(document.querySelectorAll("#accountBrandChecks input:checked")).map((el) => el.value);
 
@@ -537,6 +588,7 @@ html[data-theme="light"] {
           pid: document.getElementById("accountPid").value.trim(),
           role: document.getElementById("accountRole").value,
           officeId: document.getElementById("accountOffice").value || null,
+          allowedCountries,
           allowedBrands,
         }),
       });
