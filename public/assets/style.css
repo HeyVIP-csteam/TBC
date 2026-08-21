@@ -1658,6 +1658,12 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
 
 /* ---- betting-resources.html — the HeyVIP Betting Rules page itself ---- */
 .br-inner { max-width: 820px; text-align: left; }
+/* MERGED (2026-08-21) — wraps one country's pair of .br-panels when
+   "All Countries" mode shows more than one — plain margin between
+   stacked blocks, no border/background of its own (the country label
+   above it is enough separation, and each .br-panel already has its
+   own card styling below). */
+.br-country-block + .br-country-block { margin-top: 28px; }
 .br-panels {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=426cee2e" />
+<link rel="stylesheet" href="/assets/style.css?v=ea9e36f7" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -55,6 +55,7 @@ html[data-theme="light"] {
     </div>
     <div class="topbar-right">
       <span class="clock" id="liveClock"></span>
+      <span class="country-switcher-mount" id="countrySwitcherMount"></span>
       <button class="theme-pill" id="themeToggle"></button>
     </div>
   </header>
@@ -169,8 +170,31 @@ html[data-theme="light"] {
       return { label: "Active", color: "#1a9c6e" };
     }
 
+    // MERGED (2026-08-21) — resolves the country every fetch below needs
+    // (admin/announcements.js has required `country` on GET and POST
+    // since Announcements became per-country content — see that file's
+    // header — but this page never actually sent one, a real pre-
+    // existing bug this pass found, same pattern as the Betting
+    // Resources Links admin panel in index.html). Returns null when the
+    // switcher isn't showing a single specific country (not logged in
+    // yet, or "All Countries" selected) — Announcements has no combined
+    // "all countries" view, each country's banner is genuinely separate
+    // config.
+    function currentCountry() {
+      const c = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      if (!c || (window.AgentCountry && window.AgentCountry.isAll(c))) return null;
+      return c;
+    }
+
     async function loadAnnouncements() {
-      const res = await authFetch("/api/admin/announcements");
+      const country = currentCountry();
+      if (!country) {
+        document.getElementById("formArea").innerHTML = `<p class="edit-modal-note err">Announcements are per-country — pick a specific country from the switcher (top right), not "All Countries", to view or edit these.</p>`;
+        document.getElementById("announceList").innerHTML = "";
+        document.getElementById("announceCount").textContent = "0";
+        return;
+      }
+      const res = await authFetch(`/api/admin/announcements?country=${encodeURIComponent(country)}`);
       const data = await res.json();
       if (!data.ok) {
         document.getElementById("formArea").innerHTML = `<p class="edit-modal-note err">${esc(data.error || "Failed to load.")}</p>`;
@@ -189,8 +213,10 @@ html[data-theme="light"] {
     // from server data). Save/Delete still call the full loadAnnouncements()
     // above afterward, since at that point there's nothing unsaved to lose.
     async function pollAnnouncements() {
+      const country = currentCountry();
+      if (!country) return; // nothing sensible to poll in "All Countries" mode
       try {
-        const res = await authFetch("/api/admin/announcements");
+        const res = await authFetch(`/api/admin/announcements?country=${encodeURIComponent(country)}`);
         const data = await res.json();
         if (!data.ok) return;
         announcements = data.announcements;
@@ -298,6 +324,8 @@ html[data-theme="light"] {
       const errEl = document.getElementById("formErr");
       errEl.textContent = "";
       if (!text) { errEl.textContent = "Message can't be empty."; return; }
+      const country = currentCountry();
+      if (!country) { errEl.textContent = `Pick a specific country from the switcher (top right) before saving.`; return; }
       const startAt = localInputToIso(document.getElementById("fStart").value);
       const endAt = localInputToIso(document.getElementById("fEnd").value);
       if (startAt && endAt && new Date(startAt) >= new Date(endAt)) {
@@ -307,7 +335,7 @@ html[data-theme="light"] {
       const id = mode === "edit" ? selectedId : null;
       const res = await authFetch("/api/admin/announcements", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save", id, text, topic, enabled, startAt, endAt }),
+        body: JSON.stringify({ action: "save", country, id, text, topic, enabled, startAt, endAt }),
       });
       const data = await res.json();
       if (!data.ok) {
@@ -330,9 +358,11 @@ html[data-theme="light"] {
 
     async function remove(id) {
       if (!confirm("Delete this announcement? This can't be undone.")) return;
+      const country = currentCountry();
+      if (!country) { showToast("Pick a specific country from the switcher (top right) first.", "err"); return; }
       const res = await authFetch("/api/admin/announcements", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete", id }),
+        body: JSON.stringify({ action: "delete", country, id }),
       });
       const data = await res.json();
       if (!data.ok) { showToast(data.error || "Delete failed.", "err"); return; }
@@ -356,6 +386,7 @@ html[data-theme="light"] {
 
     loadAnnouncements();
     setInterval(pollAnnouncements, 30000);
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => loadAnnouncements());
   </script>
 </body>
 </html>
