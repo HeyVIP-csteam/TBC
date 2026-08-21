@@ -155,8 +155,32 @@ export function rankOf(role) { return ROLE_RANK[role] ?? ROLE_RANK.agent; }
 // Request excluded, see _shared/issueSubmissionSheets.js). Same
 // superadmin-and-above default-fallthrough treatment as its Integration
 // Portal siblings.
-export const ADMIN_SECTIONS = ["createAccount", "whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "integrationPortal", "promoCodeSheet", "issueSubmissionSheet"];
-export const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet"];
+// "botToken" (2026-08-21) gates the "Bot Token Settings" panel under
+// Integration Portal — lets an authorized account overwrite (WRITE-ONLY,
+// never read back — see _shared/botTokenOverride.js) each country's
+// Telegram Bot Token live from the browser, instead of needing
+// Cloudflare dashboard access to rotate a secret. Deliberately NOT
+// superadmin-and-above by default like its siblings above — a Bot
+// Token grants full control of that Telegram bot (send as it, read
+// everything sent to it), a materially bigger blast radius than any
+// other section here, so per explicit business-owner decision this
+// stays OWNER-ONLY until an Owner explicitly grants it to a specific
+// account (even a SuperAdmin) — see OWNER_ONLY_BY_DEFAULT_SECTIONS
+// below, which is what actually enforces "not even superadmin's
+// 'all' implicitly includes this one."
+export const ADMIN_SECTIONS = ["createAccount", "whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "integrationPortal", "promoCodeSheet", "issueSubmissionSheet", "botToken"];
+export const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet", "botToken"];
+
+// Sections excluded from the "rank >= superadmin -> 'all' sections by
+// default" fallthrough in defaultSectionsForRank()/defaultEditForRank()
+// below — currently just "botToken" (2026-08-21, see that section's own
+// comment above for the full reasoning). Checked explicitly in
+// canSeeAdminSection()/canEditAdminSection() below since "all" as a
+// stored value is meant to mean "every section that exists, including
+// ones added later" everywhere else — this is the one deliberate
+// exception, so it has to be called out by name rather than solved by
+// changing what "all" means globally.
+const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken"];
 
 function defaultSectionsForRank(rank) {
   if (rank >= ROLE_RANK.superadmin) return "all";
@@ -175,6 +199,12 @@ export function canSeeAdminSection(account, sectionId) {
   if (!account) return true; // bootstrap/setup mode
   if (account.role === "owner") return true;
   const sections = account.allowedAdminSections !== undefined ? account.allowedAdminSections : defaultSectionsForRank(rankOf(account.role));
+  if (OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(sectionId)) {
+    // A rank-tiered "all" default must NOT implicitly include this
+    // section for anyone but Owner (already returned true above) — only
+    // an EXPLICIT array naming it, set by an Owner, counts.
+    return Array.isArray(sections) && sections.includes(sectionId);
+  }
   if (sections === "all") return true;
   return Array.isArray(sections) && sections.includes(sectionId);
 }
@@ -185,6 +215,9 @@ export function canEditAdminSection(account, sectionId) {
   if (account.role === "owner") return true;
   if (!canSeeAdminSection(account, sectionId)) return false;
   const edit = account.adminSectionEditAccess !== undefined ? account.adminSectionEditAccess : defaultEditForRank(rankOf(account.role));
+  if (OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(sectionId)) {
+    return Array.isArray(edit) && edit.includes(sectionId);
+  }
   if (edit === "all") return true;
   return Array.isArray(edit) && edit.includes(sectionId);
 }

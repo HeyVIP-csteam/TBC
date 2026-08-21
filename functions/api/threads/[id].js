@@ -156,7 +156,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   // specific action with a clear message instead of throwing.
   let botToken = null;
   try {
-    botToken = resolveBotToken(env, country);
+    botToken = await resolveBotToken(env, country);
   } catch {
     botToken = null;
   }

@@ -143,7 +143,7 @@ async function handleSubmit({ request, env, waitUntil }) {
   // 不再是单一的 env.TELEGRAM_BOT_TOKEN。
   let botToken;
   try {
-    botToken = resolveBotToken(env, brand.country);
+    botToken = await resolveBotToken(env, brand.country);
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }

@@ -38,7 +38,9 @@
  * resolve an old file_id, this route surfaces that as a clean error
  * rather than a broken image, see the response below.
  */
-import { verifyRequest } from "../../_shared/accounts.js";
+import { verifyRequest, canSeeCountry } from "../../_shared/accounts.js";
+import { isValidCountry } from "../../_shared/countries.js";
+import { resolveBotToken } from "../../_shared/routing.js";
 
 export async function onRequestGet(context) {
   try {
@@ -54,10 +56,32 @@ async function handleGet({ request, env, params }) {
 
   const fileId = params.fileId;
   if (!fileId) return new Response("Missing file id.", { status: 400 });
-  if (!env.TELEGRAM_BOT_TOKEN) return new Response("Server is missing TELEGRAM_BOT_TOKEN.", { status: 500 });
+
+  // MERGED (2026-08-21) — a Telegram file_id is only ever resolvable by
+  // the SAME bot that originally received it (Telegram scopes file_ids
+  // per-bot, not globally) — so this route needs to know which
+  // country's bot to call getFile with. The old single global
+  // TELEGRAM_BOT_TOKEN binding this used to read doesn't exist anymore
+  // post-merge (see routing.js's resolveBotToken, used everywhere else
+  // in this codebase) — this file was simply never updated when that
+  // binding was removed, meaning EVERY attachment view has been
+  // returning a hard 500 since then, not something this specific pass
+  // introduced. threads.html now sends `?country=` alongside the
+  // fileId (it already has the thread's own `.country` on hand — see
+  // that file's own 2026-08-21 comment).
+  const country = (new URL(request.url).searchParams.get("country") || "").toUpperCase();
+  if (!isValidCountry(country)) return new Response("Missing or invalid `country`.", { status: 400 });
+  if (!canSeeCountry(account, country)) return new Response("Not authorized for that country.", { status: 403 });
+
+  let botToken;
+  try {
+    botToken = await resolveBotToken(env, country);
+  } catch (e) {
+    return new Response(String(e.message || e), { status: 500 });
+  }
 
   const infoRes = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileId)}`
+    `https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(fileId)}`
   );
   const info = await infoRes.json();
   if (!info.ok) {
@@ -69,7 +93,7 @@ async function handleGet({ request, env, params }) {
   }
 
   const filePath = info.result.file_path;
-  const fileRes = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${filePath}`);
+  const fileRes = await fetch(`https://api.telegram.org/file/bot${botToken}/${filePath}`);
   if (!fileRes.ok || !fileRes.body) {
     return new Response("Telegram couldn't deliver this file.", { status: 502 });
   }

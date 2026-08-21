@@ -864,6 +864,7 @@ export const SCREENSHOT_R2_ENABLED = {
 // in submit.js — see the real change there.
 // ══════════════════════════════════════════════════════════════════
 import { getCountryConfig } from "./countries.js";
+import { resolveBotTokenWithOverride } from "./botTokenOverride.js";
 
 // Every merged brand key already carries its own `country` (see the
 // BRANDS object above) — this is just a named lookup for call sites
@@ -877,7 +878,15 @@ export function getBrandCountry(brandId) {
   return BRANDS[brandId]?.country || null;
 }
 
-export function resolveBotToken(env, country) {
+// MERGED (2026-08-21) — now async: checks for a live KV override first
+// (see _shared/botTokenOverride.js — Bot Token Settings admin page)
+// before falling back to the hardcoded TELEGRAM_BOT_TOKEN_<COUNTRY>
+// Cloudflare secret, same override-over-default layering every other
+// live-editable setting in this codebase uses. Every call site updated
+// to `await` this — it was synchronous before this pass.
+export async function resolveBotToken(env, country) {
+  const override = await resolveBotTokenWithOverride(env, country);
+  if (override) return override;
   const { botTokenEnvVar } = getCountryConfig(country);
   const token = env[botTokenEnvVar];
   if (!token) {

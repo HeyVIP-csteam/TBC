@@ -75,13 +75,24 @@
  * message above.
  *
  * NOT YET CONFIGURED (as Cloudflare secrets): set SECURITY_ALERTS_CHAT_ID
- * (and optionally SECURITY_ALERTS_TOPIC_ID) as Cloudflare environment
- * variables as a fallback default — until then this silently no-ops
- * (sendTelegramMessage() skips cleanly with no chat ID). These CAN also
- * be set live from the browser instead — see the "Security Alerts" row
+ * (and optionally SECURITY_ALERTS_TOPIC_ID), PLUS SECURITY_ALERTS_BOT_TOKEN
+ * (2026-08-21 — this feature's OWN bot token, separate from the 3
+ * per-country TELEGRAM_BOT_TOKEN_<CODE> secrets: a login security alert
+ * isn't tied to any one country, it can fire for staff logging in from
+ * any country against the shared ACCOUNTS_KV, so there's no single
+ * correct country's bot to reuse here — needs its own bot added to
+ * whichever Telegram group SECURITY_ALERTS_CHAT_ID points at) as
+ * Cloudflare environment variables as a fallback default — until then
+ * this silently no-ops (sendTelegramMessage() skips cleanly with no
+ * chat ID or no token). SECURITY_ALERTS_CHAT_ID/_TOPIC_ID CAN also be
+ * set live from the browser instead — see the "Security Alerts" row
  * on the TG Group / Channel admin page (functions/api/admin/routes.js),
  * which resolveSecurityAlertsRoute() below checks first and takes
  * priority over these env vars the moment it's been saved once.
+ * SECURITY_ALERTS_BOT_TOKEN itself is NOT live-editable from the
+ * browser (it's a genuine bot credential, not routing metadata — see
+ * the Bot Token Settings admin page's own header for why credentials
+ * get different treatment than chat IDs).
  */
 import { getAccount, verifyPassword, officeIpCheckPasses, getOffice, requestIP, setAccountLocked, issueToken } from "../../_shared/accounts.js";
 import { sendTelegramMessage } from "../../_shared/telegram.js";
@@ -285,7 +296,7 @@ async function notifyAccountLocked(env, { account, reason }) {
       `🔑 This account can no longer log in (or use any already-open session) until a SuperAdmin unlocks it under Account Management → Agent Profile, or accounts-admin.html.`,
     ];
     const route = await resolveSecurityAlertsRoute(env);
-    await sendTelegramMessage(env, {
+    await sendTelegramMessage(env.SECURITY_ALERTS_BOT_TOKEN, {
       chatId: route.chatId,
       topicId: route.topicId,
       text: lines.join("\n"),
@@ -333,7 +344,7 @@ async function notifyLoginFailure(env, { account, ip, request, reasonTitle }) {
       `🚫 Login was blocked as usual — this is just a heads-up.`,
     ];
     const route = await resolveSecurityAlertsRoute(env);
-    await sendTelegramMessage(env, {
+    await sendTelegramMessage(env.SECURITY_ALERTS_BOT_TOKEN, {
       chatId: route.chatId,
       topicId: route.topicId,
       text: lines.join("\n"),

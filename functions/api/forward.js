@@ -93,7 +93,7 @@ async function handlePost({ request, env }) {
 
   let botToken = null;
   try {
-    botToken = resolveBotToken(env, country);
+    botToken = await resolveBotToken(env, country);
   } catch {
     /* handled below via the null check */
   }

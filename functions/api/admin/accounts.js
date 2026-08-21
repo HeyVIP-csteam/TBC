@@ -168,6 +168,32 @@ async function handlePost({ request, env, waitUntil }) {
     if (!body.username) return json({ ok: false, error: "Username is required." }, 400);
     const targetUsername = body.username.toLowerCase();
     const existingTarget = await getAccount(env, targetUsername);
+    // "botToken" specifically: stricter than every other section — even
+    // a canManageOthersAdminAccess DELEGATE (a non-Owner someone was
+    // handed that flag by) must NOT be able to GRANT Bot Token access
+    // to a third party, only the literal Owner can (see
+    // OWNER_ONLY_BY_DEFAULT_SECTIONS in _shared/accounts.js for the
+    // full reasoning — a Bot Token is a real credential, not routing
+    // metadata). This is delta-aware, not a blanket "botToken anywhere
+    // in the body is forbidden" check: index.html's account-edit UI
+    // deliberately still RENDERS this checkbox (disabled) for non-Owner
+    // editors so an existing grant round-trips correctly on an
+    // unrelated save (e.g. just editing PID) instead of being silently
+    // revoked by a save that never meant to touch it — see that file's
+    // own comment on why. So only a genuine NEW addition (wasn't in
+    // existingTarget's stored array, is in the incoming one) trips this;
+    // preserving or removing an existing grant does not, since a
+    // non-Owner delegate legitimately might resave the target's other
+    // permissions without disturbing this one, and REMOVING access is
+    // not the dangerous direction here.
+    const existingAllowedSections = existingTarget?.allowedAdminSections;
+    const existingEditSections = existingTarget?.adminSectionEditAccess;
+    const botTokenNewlyGranted =
+      (Array.isArray(body.allowedAdminSections) && body.allowedAdminSections.includes("botToken") && !(Array.isArray(existingAllowedSections) && existingAllowedSections.includes("botToken"))) ||
+      (Array.isArray(body.adminSectionEditAccess) && body.adminSectionEditAccess.includes("botToken") && !(Array.isArray(existingEditSections) && existingEditSections.includes("botToken")));
+    if (botTokenNewlyGranted && auth.account?.role !== "owner") {
+      return json({ ok: false, error: "Only the account owner can grant Bot Token Settings access." }, 403);
+    }
     // Populated inside the "editing existing account" branch below when
     // this request touches Announcement access; read afterwards by the
     // saveAccount() call, so declared up here rather than block-scoped
