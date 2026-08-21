@@ -38,20 +38,15 @@ window.HOME_CARDS_BY_COUNTRY = {
   // announcements/betting_resources/active_agents) — index.html's own
   // init script reads this list to hide cards this country doesn't get.
   //
-  // Deposit Issue/Deposit Backup deliberately show for PKR ONLY here,
-  // NOT INR — this intentionally diverges from server-side
-  // countryModules.js's MODULES_BY_COUNTRY, which lists both modules
-  // for INR too (that's the confirmed PRODUCT decision — INR should
-  // eventually have this). But the actual feature isn't built for INR
-  // yet: _shared/depositSheets.js's storage and public/deposit-issue.html
-  // /deposit-backup.html's brand lists are still hardcoded PKR-only
-  // (see depositSheets.js's file header for the full reasoning — it's
-  // blocked on real INR Sheet data + a brand-id migration, not a
-  // decision). Showing the card to an INR agent today would send them
-  // to a page listing PKR's brands, which is actively misleading, not
-  // just "not ready yet". Move "INR" from the PKR-only line to the
-  // shared line below the moment that backend work actually ships.
-  INR: ["threads", "promo", "announcements", "betting_resources", "active_agents"],
+  // Deposit Issue/Deposit Backup now show for INR too (2026-08-21) —
+  // previously PKR-only here while the backend caught up (see git
+  // history on this file for the full story: depositSheets.js/
+  // depositColumns.js/deposit-issue.html/deposit-backup.html all needed
+  // real INR support first, not just a flag flip). That work shipped
+  // this same session — DEP_BRANDS spans both countries now, columns
+  // are resolved per-country, so there's no more "misleading page"
+  // concern this line was guarding against.
+  INR: ["threads", "deposit_issue", "deposit_backup", "promo", "announcements", "betting_resources", "active_agents"],
   PKR: ["threads", "deposit_issue", "deposit_backup", "promo", "announcements", "betting_resources", "active_agents"],
   PHP: ["threads", "promo", "announcements", "active_agents"],
 };

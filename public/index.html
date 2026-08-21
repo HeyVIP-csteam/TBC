@@ -41,7 +41,7 @@ html[data-theme="light"] {
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
 <script src="/assets/authguard.js?v=101bd636"></script>
 <script src="/assets/countries.js?v=78bdc076"></script>
-<script src="/assets/country-modules.js?v=4de67331"></script>
+<script src="/assets/country-modules.js?v=7caef210"></script>
 <script src="/assets/agent-country.js?v=d01804d8"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
@@ -83,6 +83,9 @@ html[data-theme="light"] {
       <div class="edit-modal-header-row">
         <p class="edit-modal-title" id="acctModalTitle">Account Management</p>
         <input type="text" id="acctProfileSearch" class="acct-profile-search" placeholder="🔍 Search username, full name, PSD…" autocomplete="off" style="display:none;" />
+        <select id="acctProfileCountryFilter" class="acct-role-filter" style="display:none;">
+          <option value="all">All currencies</option>
+        </select>
         <select id="acctProfileRoleFilter" class="acct-role-filter" style="display:none;">
           <option value="all">All roles</option>
           <option value="agent">Agent</option>
@@ -773,6 +776,7 @@ html[data-theme="light"] {
       document.getElementById("subIpPromoSheet").addEventListener("click", () => openAcctModal("promosheet"));
     }
     document.getElementById("acctProfileRoleFilter").addEventListener("change", () => renderAgentProfileTable());
+    document.getElementById("acctProfileCountryFilter").addEventListener("change", () => renderAgentProfileTable());
     document.getElementById("acctProfileSearch").addEventListener("input", () => renderAgentProfileTable());
 
 
@@ -864,6 +868,16 @@ html[data-theme="light"] {
       const roleFilterEl = document.getElementById("acctProfileRoleFilter");
       roleFilterEl.style.display = mode === "profile" ? "" : "none";
       if (mode === "profile") roleFilterEl.value = "all";
+      const countryFilterEl = document.getElementById("acctProfileCountryFilter");
+      countryFilterEl.style.display = mode === "profile" ? "" : "none";
+      if (mode === "profile") {
+        // Populated fresh each time the modal opens (not once at page
+        // load) — trivial cost, and means a 4th country added later
+        // needs zero changes here since COUNTRY_CODES already drives it.
+        const codes = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []);
+        countryFilterEl.innerHTML = `<option value="all">All currencies</option>` + codes.map((code) => `<option value="${code}">${code}</option>`).join("");
+        countryFilterEl.value = "all";
+      }
       const searchEl = document.getElementById("acctProfileSearch");
       searchEl.style.display = mode === "profile" ? "" : "none";
       if (mode === "profile") searchEl.value = "";
@@ -1000,15 +1014,35 @@ html[data-theme="light"] {
         return;
       }
       acctRoutesData = data;
-      if (!acctRoutesSelectedBrand || (acctRoutesSelectedBrand !== SECURITY_ROW_ID && !data.brands.some((b) => b.id === acctRoutesSelectedBrand))) {
-        acctRoutesSelectedBrand = data.brands[0]?.id || null;
+      const visibleBrands = getCountryScopedBrands(data.brands);
+      if (!acctRoutesSelectedBrand || (acctRoutesSelectedBrand !== SECURITY_ROW_ID && !visibleBrands.some((b) => b.id === acctRoutesSelectedBrand))) {
+        acctRoutesSelectedBrand = visibleBrands[0]?.id || null;
       }
       renderTgRoutes();
     }
 
+    // MERGED (2026-08-21) — every Integration Portal sub-page (TG Group/
+    // Channel, Issue Submission Gsheet, Deposit Sheet Link, Web Link)
+    // now filters its brand list down to the country switcher's current
+    // selection, same as the agent-facing pages already did — this was
+    // a real inconsistency flagged by the business owner: picking a
+    // specific country in the switcher only actually meant something on
+    // some pages, not others. "All Countries" still shows everything,
+    // same as elsewhere. Country labels are appended to each name too
+    // (only actually needed in "All Countries" mode, where two same-
+    // named brands from different countries can appear side by side —
+    // harmless clutter otherwise, not worth a second code path).
+    function getCountryScopedBrands(brands) {
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      if (!country || isAll) return brands;
+      return brands.filter((b) => b.country === country);
+    }
+
     function renderTgRoutes() {
       if (!acctRoutesData) return;
-      const { brands, modules, routes, securityAlerts } = acctRoutesData;
+      const { modules, routes, securityAlerts } = acctRoutesData;
+      const brands = getCountryScopedBrands(acctRoutesData.brands);
       const isSecuritySelected = acctRoutesSelectedBrand === SECURITY_ROW_ID;
       // TG Group/Channel never had a view-only tier before — it was
       // SuperAdmin-or-nothing. Now, like every other Account Management
@@ -1172,8 +1206,9 @@ html[data-theme="light"] {
         return;
       }
       acctIssueSheetsData = data;
-      if (!acctIssueSheetsSelectedBrand || !data.brands.some((b) => b.id === acctIssueSheetsSelectedBrand)) {
-        acctIssueSheetsSelectedBrand = data.brands[0]?.id || null;
+      const visibleBrands = getCountryScopedBrands(data.brands);
+      if (!acctIssueSheetsSelectedBrand || !visibleBrands.some((b) => b.id === acctIssueSheetsSelectedBrand)) {
+        acctIssueSheetsSelectedBrand = visibleBrands[0]?.id || null;
       }
       renderIssueSheets();
     }
@@ -1205,7 +1240,8 @@ html[data-theme="light"] {
 
     function renderIssueSheets() {
       if (!acctIssueSheetsData) return;
-      const { brands, modules, sheets, promotions } = acctIssueSheetsData;
+      const { modules, sheets, promotions } = acctIssueSheetsData;
+      const brands = getCountryScopedBrands(acctIssueSheetsData.brands);
       const canEdit = canEditAdminSection("issueSubmissionSheet");
 
       const brandListHtml = brands.map((b) => `
@@ -1332,8 +1368,10 @@ html[data-theme="light"] {
 
     // ---- Deposit Sheet Link (live-editable Google Sheet source, per brand) ----
     // Same brand-sidebar layout/pattern as TG Group/Channel above — one
-    // row per PKR brand, each independently overridable. Backed by
-    // /api/admin/deposit-sheets, same override-over-code-default layering.
+    // row per INR/PKR brand (DEPOSIT_BRANDS — Deposit Issue/Backup don't
+    // exist for PHP, see countryModules.js), each independently
+    // overridable. Backed by /api/admin/deposit-sheets, same
+    // override-over-code-default layering.
     let acctDepositSheetsData = null; // { brands, sheets }
     let acctDepositSheetsSelectedBrand = null;
 
@@ -1345,15 +1383,17 @@ html[data-theme="light"] {
         return;
       }
       acctDepositSheetsData = data;
-      if (!acctDepositSheetsSelectedBrand || !data.brands.some((b) => b.id === acctDepositSheetsSelectedBrand)) {
-        acctDepositSheetsSelectedBrand = data.brands[0]?.id || null;
+      const visibleBrands = getCountryScopedBrands(data.brands);
+      if (!acctDepositSheetsSelectedBrand || !visibleBrands.some((b) => b.id === acctDepositSheetsSelectedBrand)) {
+        acctDepositSheetsSelectedBrand = visibleBrands[0]?.id || null;
       }
       renderDepositSheets();
     }
 
     function renderDepositSheets() {
       if (!acctDepositSheetsData) return;
-      const { brands, sheets, backup } = acctDepositSheetsData;
+      const { sheets, backup } = acctDepositSheetsData;
+      const brands = getCountryScopedBrands(acctDepositSheetsData.brands);
       const canEdit = canEditAdminSection("depositSheets");
       const roAttr = canEdit ? "" : "disabled";
 
@@ -1520,14 +1560,14 @@ html[data-theme="light"] {
         acctBody.innerHTML = `<p class="edit-modal-note err">${acctEsc(e.message || "Failed to load.")}</p>`;
         return;
       }
-      if (!acctWebLinkSelectedBrand || !(window.BRANDS || []).some((b) => b.id === acctWebLinkSelectedBrand)) {
-        acctWebLinkSelectedBrand = (window.BRANDS || [])[0]?.id || null;
+      if (!acctWebLinkSelectedBrand || !getCountryScopedBrands(window.BRANDS || []).some((b) => b.id === acctWebLinkSelectedBrand)) {
+        acctWebLinkSelectedBrand = getCountryScopedBrands(window.BRANDS || [])[0]?.id || null;
       }
       renderWebLinks();
     }
 
     function renderWebLinks() {
-      const brands = window.BRANDS || [];
+      const brands = getCountryScopedBrands(window.BRANDS || []);
       const canEdit = canEditAdminSection("webLink");
       const roAttr = canEdit ? "" : "disabled";
 
@@ -1836,8 +1876,12 @@ html[data-theme="light"] {
 
     function renderAgentProfileTable() {
       const roleFilter = document.getElementById("acctProfileRoleFilter").value || "all";
+      const countryFilter = document.getElementById("acctProfileCountryFilter").value || "all";
       const searchTerm = document.getElementById("acctProfileSearch").value.trim().toLowerCase();
       let visibleAccounts = roleFilter === "all" ? acctAccounts : acctAccounts.filter((a) => a.role === roleFilter);
+      if (countryFilter !== "all") {
+        visibleAccounts = visibleAccounts.filter((a) => a.allowedCountries === "all" || (a.allowedCountries || []).includes(countryFilter));
+      }
       if (searchTerm) {
         visibleAccounts = visibleAccounts.filter((a) =>
           (a.username || "").toLowerCase().includes(searchTerm) ||
@@ -1863,6 +1907,12 @@ html[data-theme="light"] {
         const statusCell = a.locked
           ? `<span class="office-missing" title="${acctEsc(a.lockedReason || "Locked")}">🔒 Locked</span>`
           : `<span style="color:var(--ink-soft);">Active</span>`;
+        // NEW (2026-08-21) — this table had no country column at all
+        // before this pass, which made it genuinely hard to answer "who
+        // works PKR" for an Owner/SuperAdmin who can see every country —
+        // the Brands column alone doesn't answer that at a glance once
+        // brand names repeat across countries.
+        const countriesCell = a.allowedCountries === "all" ? "All" : ((a.allowedCountries || []).join(", ") || "—");
         const brandsCell = a.allowedBrands === "all" ? "All" : ((a.allowedBrands || []).join(", ") || "—");
         // Can-Edit(agentProfile) AND strictly outranking THIS row's
         // account — matches the server's lock/unlock check exactly. This
@@ -1886,6 +1936,7 @@ html[data-theme="light"] {
             <td>${usernameCell}</td>
             <td class="cell-role"><span class="role-tag">${acctEsc(a.role)}</span></td>
             <td class="cell-office">${officeCell}</td>
+            <td class="cell-brands">${acctEsc(countriesCell)}</td>
             <td class="cell-brands">${acctEsc(brandsCell)}</td>
             <td>${statusCell}</td>
             <td class="cell-fullname">${acctEsc(a.fullName || "—")}</td>
@@ -1896,8 +1947,8 @@ html[data-theme="light"] {
       acctBody.innerHTML = `
         <div class="agent-profile-table-wrap">
           <table class="agent-profile-table">
-            <thead><tr><th>Username</th><th>Role</th><th>Office</th><th>Brands</th><th>Status</th><th>Full Name</th><th>PSD</th><th></th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="8" style="color:var(--ink-soft);">No accounts match this filter.</td></tr>'}</tbody>
+            <thead><tr><th>Username</th><th>Role</th><th>Office</th><th>Currencies</th><th>Brands</th><th>Status</th><th>Full Name</th><th>PSD</th><th></th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="9" style="color:var(--ink-soft);">No accounts match this filter.</td></tr>'}</tbody>
           </table>
         </div>
         ${canEditAdminSection("agentProfile") ? "" : '<p class="edit-modal-note">View only.</p>'}`;
