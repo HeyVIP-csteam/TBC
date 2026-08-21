@@ -25,6 +25,16 @@
  */
 (function () {
   const COUNTRY_KEY = "agentCountry";
+  // Sentinel value for "show everything I'm allowed to see, not just one
+  // country" — added 2026-08-21 per business-owner request specifically
+  // so Owner (and anyone else with multi-country access) can view
+  // combined data instead of switching back and forth. Deliberately NOT
+  // a real country code (can't collide with a 4th country added later)
+  // and deliberately only ever offered when the account can actually
+  // see 2+ countries — an account scoped to exactly one country has
+  // nothing to combine, so it never sees this option at all (matches
+  // the existing "switcher hides itself entirely at 1 country" rule).
+  const ALL_COUNTRIES = "ALL";
 
   // Countries this account is allowed to operate in, resolved against
   // the live COUNTRY_CODES list — mirrors resolveAllowedCountries() in
@@ -63,6 +73,11 @@
     // a stale localStorage value must not keep leaking a country this
     // account can no longer see (server-side endpoints still enforce
     // this independently either way, but the UI shouldn't even try).
+    // ALL_COUNTRIES only stays valid while 2+ countries are still
+    // allowed — if narrowed down to exactly one, "All" no longer means
+    // anything different from that one country, so it falls back to the
+    // single-country default below instead of a meaningless "All" state.
+    if (stored === ALL_COUNTRIES && allowed.length > 1) return ALL_COUNTRIES;
     if (stored && allowed.includes(stored)) return stored;
     // No valid stored choice — default to the first allowed country
     // (stable, not random) and persist that as the new default so the
@@ -73,6 +88,11 @@
 
   function setCountry(code) {
     const allowed = getAllowedCountries();
+    if (code === ALL_COUNTRIES) {
+      if (allowed.length <= 1) return false; // nothing to combine
+      try { localStorage.setItem(COUNTRY_KEY, ALL_COUNTRIES); } catch { /* ignore */ }
+      return true;
+    }
     if (!allowed.includes(code)) return false;
     try { localStorage.setItem(COUNTRY_KEY, code); } catch { /* ignore */ }
     return true;
@@ -95,7 +115,9 @@
       const sel = code === current ? " selected" : "";
       return `<option value="${code}"${sel}>${c.name} (${code})</option>`;
     }).join("");
-    el.innerHTML = `<select class="country-switcher" id="__countrySwitcherSelect">${opts}</select>`;
+    const allSel = current === ALL_COUNTRIES ? " selected" : "";
+    const allOption = `<option value="${ALL_COUNTRIES}"${allSel}>All Countries</option>`;
+    el.innerHTML = `<select class="country-switcher" id="__countrySwitcherSelect">${allOption}${opts}</select>`;
     const sel = document.getElementById("__countrySwitcherSelect");
     sel.addEventListener("change", function () {
       setCountry(sel.value);
@@ -108,5 +130,7 @@
     setCountry: setCountry,
     getAllowedCountries: getAllowedCountries,
     renderSwitcher: renderSwitcher,
+    ALL_COUNTRIES: ALL_COUNTRIES,
+    isAll: function (country) { return country === ALL_COUNTRIES; },
   };
 })();

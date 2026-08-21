@@ -18,7 +18,7 @@
     return;
   }
 
-  // MERGED (2026-08-20) — the agent's current country (see
+  // MERGED (2026-08-20/21) — the agent's current country (see
   // assets/agent-country.js) decides which of this module's field sets
   // to render. `fields`/`moduleExtra` below are resolved ONCE here and
   // used everywhere the rest of this file used to read
@@ -26,15 +26,41 @@
   // longer exist as flat properties on modules whose fields vary by
   // country (see schemas.js's file header for why), so every reference
   // below was updated to use these resolved values instead.
+  //
+  // ALL_COUNTRIES (2026-08-21) — the submission FORM can't actually
+  // render "all countries at once" (account_issue/withdraw_issue/
+  // risk_issue/promotion_request genuinely have different fields per
+  // country — there's no single merged form that would be correct for
+  // all of them simultaneously). So when the switcher is set to "All",
+  // this picks ONE country to actually render the form for —
+  // `effectiveCountry` below, the first of this module's supported
+  // countries that's also in the agent's own allowedCountries — and the
+  // brand-change handler further down (see `checkCountryMismatch`)
+  // blocks Submit with a clear message if the agent then picks a brand
+  // from a DIFFERENT country than that, instead of silently building
+  // the wrong country's Telegram message/Sheet row for it. Picking a
+  // SPECIFIC country from the switcher (not "All") avoids this
+  // entirely — this only matters in "All" mode.
   const currentCountry = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-  if (currentCountry && module.countries && !module.countries.includes(currentCountry)) {
+  const isAllCountries = window.AgentCountry && window.AgentCountry.isAll(currentCountry);
+  const allowedCountries = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
+  if (isAllCountries && module.countries && !module.countries.some((c) => allowedCountries.includes(c))) {
+    titleEl.textContent = "Not available";
+    hintEl.textContent = `${module.name} isn't offered for any of your allowed countries.`;
+    formCard.querySelector("form").style.display = "none";
+    return;
+  }
+  if (!isAllCountries && currentCountry && module.countries && !module.countries.includes(currentCountry)) {
     titleEl.textContent = "Not available";
     hintEl.textContent = `${module.name} isn't offered for your current country. Use the country switcher (top right) if you also work another country.`;
     formCard.querySelector("form").style.display = "none";
     return;
   }
-  const fields = window.getModuleFields ? window.getModuleFields(module, currentCountry) : (module.fields || []);
-  const moduleExtra = window.getModuleExtra ? window.getModuleExtra(module, currentCountry) : {};
+  const effectiveCountry = isAllCountries
+    ? (module.countries || allowedCountries).find((c) => allowedCountries.includes(c)) || allowedCountries[0] || null
+    : currentCountry;
+  const fields = window.getModuleFields ? window.getModuleFields(module, effectiveCountry) : (module.fields || []);
+  const moduleExtra = window.getModuleExtra ? window.getModuleExtra(module, effectiveCountry) : {};
 
   // Real enforcement, not just hiding it from the sidebar — an agent
   // scoped away from this Topic (account.allowedModules, see
@@ -310,9 +336,34 @@
   fields.forEach((f) => {
     if (f.type === "select") fieldEls[f.key].control.addEventListener("change", refreshConditionals);
   });
+
+  // ALL_COUNTRIES (2026-08-21) — see the big comment near the top of
+  // this file for why this exists. Only ever does anything when the
+  // switcher is set to "All" — in any specific-country mode, every
+  // brand in the dropdown already belongs to that one country (see
+  // authguard.js's filterAllowedBrands), so this check can never fire.
+  const countryMismatchNote = document.createElement("p");
+  countryMismatchNote.className = "field-note err";
+  countryMismatchNote.style.display = "none";
+  formCard.querySelector("form").insertBefore(countryMismatchNote, formCard.querySelector("form").firstChild);
+  function checkCountryMismatch() {
+    if (!isAllCountries || !brandSelect.value) { countryMismatchNote.style.display = "none"; return true; }
+    const selectedBrand = (window.BRANDS || []).find((b) => b.id === brandSelect.value);
+    if (selectedBrand && selectedBrand.country !== effectiveCountry) {
+      const c = (window.COUNTRIES && window.COUNTRIES[selectedBrand.country]) || { name: selectedBrand.country };
+      countryMismatchNote.textContent = `This form is showing ${module.name}'s ${effectiveCountry} fields, but ${selectedBrand.name} is a ${c.name} brand — its fields may differ. Switch the country picker (top right) to ${c.name} (${selectedBrand.country}) first, then come back to this form.`;
+      countryMismatchNote.style.display = "";
+      return false;
+    }
+    countryMismatchNote.style.display = "none";
+    return true;
+  }
+
   brandSelect.addEventListener("change", () => {
     refreshBrandDependentOptions();
     refreshConditionals();
+    const ok = checkCountryMismatch();
+    document.getElementById("submitBtn").disabled = !ok || (tidDuplicateInfo != null);
   });
   refreshBrandDependentOptions();
   refreshConditionals();
@@ -444,6 +495,18 @@
     e.preventDefault();
     status.textContent = "";
     status.className = "status-msg";
+
+    // Safety net for the ALL_COUNTRIES field-mismatch check above — the
+    // brand-change handler already disables Submit for this, but a
+    // disabled button doesn't stop a form's native Enter-to-submit in
+    // every browser/situation, so this re-checks right before doing
+    // anything real instead of trusting only the disabled attribute.
+    if (!checkCountryMismatch()) {
+      status.textContent = "Fix the country mismatch above before submitting.";
+      status.className = "status-msg err";
+      return;
+    }
+
     btn.disabled = true;
     btn.textContent = "Submitting…";
 

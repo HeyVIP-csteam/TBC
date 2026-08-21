@@ -145,7 +145,16 @@
     filterAllowedBrands: function (brands) {
       const a = getAuth();
       const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const byCountry = country ? (brands || []).filter(function (b) { return b.country === country; }) : (brands || []);
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      // ALL_COUNTRIES (2026-08-21) — shows every brand from every
+      // country THIS ACCOUNT is allowed to see (not literally every
+      // brand that exists — an account scoped to INR+PKR picking "All"
+      // must still never see PHP's brands). getAllowedCountries()
+      // already resolves "all" role-wide access down to the live
+      // country list, so this is just an .includes() against that.
+      const byCountry = isAll
+        ? (brands || []).filter(function (b) { return window.AgentCountry.getAllowedCountries().includes(b.country); })
+        : country ? (brands || []).filter(function (b) { return b.country === country; }) : (brands || []);
       if (!a || a.allowedBrands === "all") return byCountry;
       const allowed = new Set(a.allowedBrands || []);
       return byCountry.filter(function (b) { return allowed.has(b.name) || allowed.has(b.id); });
@@ -168,7 +177,10 @@
     filterAllowedModules: function (modules) {
       const a = getAuth();
       const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
-      const byCountry = country ? (modules || []).filter(function (m) { return !m.countries || m.countries.includes(country); }) : (modules || []);
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      const byCountry = isAll
+        ? (modules || []).filter(function (m) { return !m.countries || m.countries.some(function (c) { return window.AgentCountry.getAllowedCountries().includes(c); }); })
+        : country ? (modules || []).filter(function (m) { return !m.countries || m.countries.includes(country); }) : (modules || []);
       if (!a || !a.allowedModules || a.allowedModules === "all") return byCountry;
       const allowed = new Set(a.allowedModules);
       return byCountry.filter(function (m) { return allowed.has(m.id); });
