@@ -44,7 +44,13 @@
  * per-heartbeat granularity is exactly what made it expensive.
  */
 
-const HEARTBEAT_INTERVAL_MS = 15000;
+const HEARTBEAT_INTERVAL_MS = 180000;
+// CAPACITY (2026-08-21) — bumped from 15s to 3 minutes, same change +
+// same reasoning as the client-side copy of this constant in
+// public/assets/presence-heartbeat.js (see that file's comment) — this
+// project runs 24/7, so heartbeat volume scales with concurrent-online-
+// headcount × the full day, not × an 8h shift. MUST match that file's
+// value exactly, and the two thresholds below are sized relative to it.
 // KV WRITE THROTTLE — the biggest cost driver by far: the client POSTs a
 // heartbeat every 15s (HEARTBEAT_INTERVAL_MS) while a tab is online, and
 // an earlier version of this function did an unconditional KV put() on
@@ -57,26 +63,35 @@ const HEARTBEAT_INTERVAL_MS = 15000;
 // since the last real write — only write when status/device truly
 // changes, OR when MIN_KV_WRITE_INTERVAL_MS has elapsed since the last
 // write (a periodic "keep-alive" so a genuinely-online agent's data
-// doesn't go stale between real transitions). The client-side 15s
-// heartbeat cadence is UNCHANGED — presence-heartbeat.js doesn't need
-// touching, this is a server-only optimization.
+// doesn't go stale between real transitions). Now that
+// HEARTBEAT_INTERVAL_MS itself is 180000 (3 min, well above this 60s
+// throttle window), this throttle is mostly a no-op in practice — nearly
+// every heartbeat already exceeds it and writes anyway — but it's left
+// in place as a harmless safety net rather than removed, since it costs
+// nothing to keep and protects against a future interval decrease.
 const MIN_KV_WRITE_INTERVAL_MS = 60000;
 // Both offline thresholds below must stay comfortably ABOVE
-// MIN_KV_WRITE_INTERVAL_MS — since a real write can now legitimately lag
-// up to that long behind the actual heartbeat, a threshold shorter than
-// (or too close to) the throttle window would make a genuinely-present
-// agent flicker to "offline" every throttle cycle, which is exactly the
-// kind of self-inflicted flapping this whole file exists to avoid.
-const ONLINE_OFFLINE_AFTER_MS = 90000; // 60s throttle window + 1 heartbeat (15s) + margin
-// A BACKGROUNDED tab is a different situation on top of the throttle
-// above: browsers (Chrome in particular, once a tab has been hidden for
-// a while) throttle setInterval in hidden tabs down to roughly once per
+// HEARTBEAT_INTERVAL_MS (2026-08-21: not just above MIN_KV_WRITE_INTERVAL_MS
+// anymore, now that the client interval is the larger of the two) —
+// otherwise a genuinely-online agent would flicker to "offline" in the
+// normal gap between two heartbeats, which is exactly the kind of
+// self-inflicted flapping this whole file exists to avoid. Sized as
+// 2x the heartbeat interval (tolerates ONE missed/delayed heartbeat —
+// a slow network blip, a backgrounded-tab hiccup — without a false
+// "offline") plus a flat margin on top.
+const ONLINE_OFFLINE_AFTER_MS = 420000; // 2 x 180s heartbeat + 60s margin = 7 min
+// A BACKGROUNDED tab is a different situation on top of the above:
+// browsers (Chrome in particular, once a tab has been hidden for a
+// while) throttle setInterval in hidden tabs down to roughly once per
 // MINUTE regardless of what interval the page asked for — this is the
 // browser's own power-saving behavior, not something presence-
-// heartbeat.js can work around client-side. That ~60s client-side
-// throttle STACKS with the ~60s server-side write throttle above, so
-// this threshold needs more headroom than the online one.
-const INACTIVE_OFFLINE_AFTER_MS = 120000;
+// heartbeat.js can work around client-side. That no longer really binds
+// now that HEARTBEAT_INTERVAL_MS (180s) is already well above that ~60s
+// floor, but this threshold still carries a bit more headroom than the
+// online one as a deliberate safety margin, not because the stacking
+// reasoning from the old 15s-interval version still applies at full
+// force.
+const INACTIVE_OFFLINE_AFTER_MS = 480000; // 8 min
 
 function pad2(n) { return String(n).padStart(2, "0"); }
 function dateKey(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
@@ -149,16 +164,23 @@ export async function recordHeartbeat(kv, username, { status, device, browser, o
   if (status === "online") {
     const daily = await getDaily(kv, username, date);
     // Credit the ACTUAL elapsed time since the last recorded write, not
-    // a fixed HEARTBEAT_INTERVAL_MS — writes no longer land every 15s
-    // now that unchanged heartbeats are skipped, so a fixed credit would
-    // silently under-count "today's online time" the longer an agent
-    // stays steadily online. Capped at 4x the throttle window as a
-    // sanity bound (protects against a clock skew or missed-write edge
-    // case wildly over-crediting a single write) — for the very first
-    // heartbeat ever recorded (no `current`), there's nothing to measure
-    // elapsed time from yet, so it just credits one heartbeat interval.
+    // a fixed HEARTBEAT_INTERVAL_MS — writes no longer land every
+    // heartbeat tick now that unchanged heartbeats are skipped (in
+    // practice, post-2026-08-21, they mostly DO land every tick again
+    // since HEARTBEAT_INTERVAL_MS now exceeds MIN_KV_WRITE_INTERVAL_MS —
+    // see that constant's comment — but a fixed credit would still
+    // silently under/over-count "today's online time" whenever a
+    // heartbeat lands early/late for any other reason). Capped at 2x
+    // HEARTBEAT_INTERVAL_MS as a sanity bound (protects against a clock
+    // skew or missed-write edge case wildly over-crediting a single
+    // write, while still tolerating one genuinely delayed heartbeat
+    // without under-counting it — tied to HEARTBEAT_INTERVAL_MS rather
+    // than MIN_KV_WRITE_INTERVAL_MS since the former is now the larger,
+    // binding constant) — for the very first heartbeat ever recorded (no
+    // `current`), there's nothing to measure elapsed time from yet, so
+    // it just credits one heartbeat interval.
     const creditSeconds = current
-      ? Math.min(elapsedSinceWriteMs, MIN_KV_WRITE_INTERVAL_MS * 4) / 1000
+      ? Math.min(elapsedSinceWriteMs, HEARTBEAT_INTERVAL_MS * 2) / 1000
       : HEARTBEAT_INTERVAL_MS / 1000;
     daily.totalOnlineSeconds += creditSeconds;
     daily.lastActiveAt = nowIso;
