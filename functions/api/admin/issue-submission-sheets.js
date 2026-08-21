@@ -84,7 +84,10 @@ async function handleGet({ request, env }) {
   const promoModuleIds = brandIds.flatMap((b) => (PROMOTIONS_BY_BRAND[b] || []).map((p) => promotionModuleId(p)));
   const overrides = await getAllIssueSheetOverrides(env, brandIds, [...moduleIds, ...promoModuleIds]);
 
-  const brands = brandIds.map((id) => ({ id, name: BRANDS[id].name }));
+  // country included (2026-08-21) — the admin UI now filters this list
+  // by the country switcher's current selection, same as every other
+  // Integration Portal sub-page (see index.html's getCountryScopedBrands()).
+  const brands = brandIds.map((id) => ({ id, name: BRANDS[id].name, country: BRANDS[id].country }));
   const modules = moduleIds.map((id) => ({ id, name: MODULE_META[id].name, emoji: MODULE_META[id].emoji }));
 
   const sheets = {};
