@@ -23,6 +23,14 @@ export const COUNTRIES = {
     // betting resources. Does NOT hold accounts/offices/sessions/presence
     // — see ACCOUNTS_KV note below for why those live in one shared place.
     threadsKvBinding: "THREADS_KV_INR",
+    // MERGED (2026-08-21) — INR's TG Reply Threads storage was migrated
+    // to D1 in INR's original project (before this merge existed) —
+    // ported back in this pass, see threads.js's file header for the
+    // full hybrid-storage design. `null` (not a binding name) for
+    // PKR/PHP means "this country has no D1 database at all" — they
+    // stay pure-KV, exactly as they always have, see
+    // resolveThreadsDb() below for how that null is handled.
+    threadsDbBinding: "THREADS_DB_INR",
     screenshotsBucketBinding: "SCREENSHOTS_BUCKET_INR",
   },
   PKR: {
@@ -31,6 +39,7 @@ export const COUNTRIES = {
     currencySymbol: "₨",
     botTokenEnvVar: "TELEGRAM_BOT_TOKEN_PKR",
     threadsKvBinding: "THREADS_KV_PKR",
+    threadsDbBinding: null,
     screenshotsBucketBinding: "SCREENSHOTS_BUCKET_PKR",
   },
   PHP: {
@@ -39,6 +48,7 @@ export const COUNTRIES = {
     currencySymbol: "₱",
     botTokenEnvVar: "TELEGRAM_BOT_TOKEN_PHP",
     threadsKvBinding: "THREADS_KV_PHP",
+    threadsDbBinding: null,
     screenshotsBucketBinding: "SCREENSHOTS_BUCKET_PHP",
   },
 };
@@ -107,4 +117,28 @@ export function getCountryConfig(code) {
 export function resolveThreadsKv(env, code) {
   const { threadsKvBinding } = getCountryConfig(code);
   return env[threadsKvBinding] || null;
+}
+
+// MERGED (2026-08-21) — returns null both for a country with no D1
+// database at all (threadsDbBinding is literally `null` in COUNTRIES —
+// PKR/PHP) AND for a country that HAS one configured but it isn't bound
+// yet in this environment (same graceful-degradation shape as
+// resolveThreadsKv above) — callers never need to tell those two "no
+// D1" cases apart, both just mean "use the KV-only path for this
+// country".
+export function resolveThreadsDb(env, code) {
+  const { threadsDbBinding } = getCountryConfig(code);
+  if (!threadsDbBinding) return null;
+  return env[threadsDbBinding] || null;
+}
+
+// Bundles both storage handles for a country into the one object
+// threads.js's functions now take as their first argument — see that
+// file's header for the full design. `db` is null for any country
+// without a D1 database (or one not bound yet), in which case every
+// function in threads.js transparently falls back to its original
+// KV-only behavior; PKR/PHP are UNCHANGED by this — this is additive,
+// not a replacement of the KV path.
+export function resolveThreadsStore(env, code) {
+  return { kv: resolveThreadsKv(env, code), db: resolveThreadsDb(env, code), country: code };
 }

@@ -15,7 +15,7 @@
 import { getMentionCandidates } from "../_shared/threads.js";
 import { verifyRequest, canSeeCountry } from "../_shared/accounts.js";
 import { getBrandCountry } from "../_shared/routing.js";
-import { resolveThreadsKv } from "../_shared/countries.js";
+import { resolveThreadsStore } from "../_shared/countries.js";
 
 // MERGED — brandId already implies which country's KV to search
 // (getBrandCountry() reads it straight off routing.js's BRANDS entry),
@@ -41,10 +41,10 @@ async function handleGet({ request, env }) {
   const country = getBrandCountry(brandId);
   if (!country || !canSeeCountry(account, country)) return json({ ok: true, candidates: [] });
 
-  const kv = resolveThreadsKv(env, country);
-  if (!kv) return json({ ok: true, candidates: [] });
+  const store = resolveThreadsStore(env, country);
+  if (!store.kv) return json({ ok: true, candidates: [] });
 
-  const candidates = await getMentionCandidates(kv, brandId, moduleId);
+  const candidates = await getMentionCandidates(store, brandId, moduleId);
   return json({ ok: true, candidates });
 }
 

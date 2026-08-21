@@ -36,7 +36,7 @@
  * setWebhook per bot above to point at the new per-country URLs.
  */
 import { findThreadIdByMessage, appendMessage, editIncomingMessageInThread } from "../../_shared/threads.js";
-import { isValidCountry, resolveThreadsKv } from "../../_shared/countries.js";
+import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
 
 export async function onRequestPost({ request, env, params }) {
   const country = (params.country || "").toUpperCase();
@@ -53,11 +53,11 @@ export async function onRequestPost({ request, env, params }) {
     }
   }
 
-  const kv = resolveThreadsKv(env, country);
+  const store = resolveThreadsStore(env, country);
   // Not bound yet (e.g. THREADS_KV_PHP before that namespace exists) —
   // still return 200 so Telegram doesn't treat this as a failing
   // webhook and start backing off/retrying; there's just nothing to do.
-  if (!kv) return new Response("ok");
+  if (!store.kv) return new Response("ok");
 
   let update;
   try {
@@ -67,7 +67,7 @@ export async function onRequestPost({ request, env, params }) {
   }
 
   try {
-    await handleUpdate(kv, update);
+    await handleUpdate(store, update);
   } catch {
     // Swallow errors — a broken reply-sync should never make Telegram think
     // the webhook is unhealthy and start retrying/backing off.
@@ -75,8 +75,8 @@ export async function onRequestPost({ request, env, params }) {
   return new Response("ok");
 }
 
-async function handleUpdate(kv, update) {
-  if (update.edited_message) return handleEditedMessage(kv, update.edited_message);
+async function handleUpdate(store, update) {
+  if (update.edited_message) return handleEditedMessage(store, update.edited_message);
   const msg = update.message;
   if (!msg || msg.from?.is_bot) return;
   const hasContent = msg.text || msg.caption || msg.photo || msg.document || msg.video || msg.voice || msg.sticker;
@@ -87,7 +87,7 @@ async function handleUpdate(kv, update) {
   const isGenuineReply = replyTarget && !isAutoTopicReply;
   if (!isGenuineReply) return; // Not a deliberate reply — ignore, don't guess.
 
-  const threadId = await findThreadIdByMessage(kv, msg.chat.id, replyTarget.message_id);
+  const threadId = await findThreadIdByMessage(store, msg.chat.id, replyTarget.message_id);
   if (!threadId) return; // Reply to something we're not tracking.
 
   const name = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "Unknown";
@@ -111,7 +111,7 @@ async function handleUpdate(kv, update) {
     attachmentName = "sticker";
   }
 
-  await appendMessage(kv, threadId, {
+  await appendMessage(store, threadId, {
     from: name,
     handle: msg.from?.username ? `@${msg.from.username}` : null,
     text: msg.text || msg.caption || (attachmentFileId ? `📎 ${attachmentName}` : "(attachment)"),
@@ -125,7 +125,7 @@ async function handleUpdate(kv, update) {
   });
 }
 
-async function handleEditedMessage(kv, msg) {
+async function handleEditedMessage(store, msg) {
   if (!msg || msg.from?.is_bot) return;
 
   let attachmentFileId = null;
@@ -150,10 +150,10 @@ async function handleEditedMessage(kv, msg) {
   const hasContent = msg.text || msg.caption || attachmentFileId;
   if (!hasContent) return; // nothing left to show at all — ignore
 
-  const threadId = await findThreadIdByMessage(kv, msg.chat.id, msg.message_id);
+  const threadId = await findThreadIdByMessage(store, msg.chat.id, msg.message_id);
   if (!threadId) return; // editing something we're not tracking — ignore, don't guess
 
   const text = msg.text || msg.caption || (attachmentFileId ? `📎 ${attachmentName}` : "");
   const attachment = attachmentFileId ? { fileId: attachmentFileId, name: attachmentName } : null;
-  await editIncomingMessageInThread(kv, threadId, msg.message_id, text, attachment);
+  await editIncomingMessageInThread(store, threadId, msg.message_id, text, attachment);
 }

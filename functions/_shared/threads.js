@@ -5,51 +5,82 @@
  * that was sent to Telegram, plus every reply that lands in that Telegram
  * thread (via webhook) or is sent back out from the dashboard.
  *
- * Backed by Cloudflare KV (binding: THREADS_KV — see wrangler.toml).
- * Two kinds of keys:
+ * Backed by Cloudflare KV (binding: THREADS_KV_<COUNTRY> — see
+ * wrangler.toml) for every country BY DEFAULT. Two kinds of keys:
  *   thread:<id>          → full thread record (JSON), with a lightweight
  *                           summary attached as this key's KV *metadata*
  *   msgid:<chatId>:<mid>  → thread id (string) — lets the Telegram webhook
  *                           find which thread a reply belongs to in O(1)
  *
- * NO SHARED "index" KEY ANYMORE. Every write used to also rewrite one
- * single `"index"` JSON blob (the sidebar's data source) — but Cloudflare
- * KV allows at most 1 write/sec to the SAME key, and every reply/submit/
+ * MERGED (2026-08-21) — INR migrated this feature to a HYBRID D1+KV
+ * design in its own original project (before this merge existed), ported
+ * back in this pass. Every exported function below now takes a `store`
+ * object — `{ kv, db, country }`, built by _shared/countries.js's
+ * resolveThreadsStore(env, country) — instead of a bare `kv` namespace.
+ * `db` is the country's D1 binding (THREADS_DB_INR today; null for
+ * PKR/PHP, which have no D1 database at all — see countries.js). EVERY
+ * function below checks `if (store.db)` before doing anything
+ * D1-specific; when it's null/falsy, behavior is BYTE-IDENTICAL to this
+ * file's pre-D1 KV-only implementation — PKR/PHP are completely
+ * unaffected by this change, this is additive only.
+ *
+ * When `store.db` IS set (INR today):
+ *   - A thread's full JSON record lives in D1's `threads` table (one row
+ *     per thread), not as the KV value — D1 is a single strongly-
+ *     consistent primary, so a write from the webhook is immediately
+ *     visible to the very next read from the dashboard, with no waiting
+ *     on Cloudflare KV's per-edge propagation delay (up to ~60s, not
+ *     configurable lower) — that delay is what used to make replies show
+ *     up late/inconsistently, or occasionally get silently overwritten
+ *     when two replies landed within the same window.
+ *   - The `thread:<id>` KV key still exists, but its VALUE becomes just
+ *     the placeholder string `"1"` — the real data moved to D1; KV's job
+ *     narrows to holding this key's *metadata* (the lightweight summary),
+ *     which is still all the sidebar's list() scan needs (see the
+ *     LIST_CACHE section further down — that part is UNCHANGED and
+ *     stays KV-only for every country, D1 included; see its own
+ *     "list-cache cluster stays pure KV" note below for why).
+ *   - A second D1 table, `message_index` (chat_id, message_id) →
+ *     thread_id, replaces `msgid:<chatId>:<mid>` KV keys for D1-backed
+ *     countries — same O(1) job, just strongly consistent.
+ *   - Writes to D1 go through a small retry-with-jittered-backoff helper
+ *     (d1UpsertWithRetry) and are SEQUENCED before the KV metadata write
+ *     (D1 first, then KV) — a transient D1 failure must never leave a
+ *     ticket "visible in the sidebar but 404s the instant you open it"
+ *     (KV metadata write succeeded, D1 row didn't). If D1 fails after
+ *     retries, the whole save throws — same as any other failed write
+ *     already did before this change.
+ *   - BACKWARD COMPAT within a D1-backed country: any thread saved
+ *     before D1 support existed for INR only exists in KV as a full JSON
+ *     value (not yet migrated). getThread()/findThreadIdByMessage() below
+ *     transparently fall back to that legacy KV shape and heal it forward
+ *     into D1 the first time it's touched — same "heal on read" idea this
+ *     file already used for the metadata migration, just one layer lower.
+ *
+ * ---- list-cache cluster stays pure KV, for every country, D1 included ----
+ * NO SHARED "index" KEY. Every write used to also rewrite one single
+ * "index" JSON blob (the sidebar's data source) — but Cloudflare KV
+ * allows at most 1 write/sec to the SAME key, and every reply/submit/
  * solve-toggle/edit was hitting that one key, so concurrent agents could
- * genuinely 429 each other. Instead, each thread's own summary now rides
+ * genuinely 429 each other. Instead, each thread's own summary rides
  * along as *metadata* on that thread's own `put()` — a different key per
  * thread, so two agents touching two different tickets never contend with
- * each other at all (only two edits to the exact same ticket in the same
- * second still could, which is a much smaller, much rarer surface). The
- * sidebar is built with `THREADS_KV.list({ prefix: "thread:" })`, which
- * returns every thread's metadata without fetching the full record —
- * cheap per-call, BUT Cloudflare's free plan caps `list()` at 1,000
- * calls/day, completely separate from (and far stricter than) the
- * 100,000 reads/day budget. A naive "call list() on every listThreads()"
- * (the original version of this redesign) blew through that in a
- * couple of hours of normal 6-second sidebar polling — see the
- * LIST_CACHE_KEY / LIST_CACHE_TTL_MS / DAILY_SCAN_LIMIT section below for
- * the fix (a real list() scan now only happens at most once every 2
- * minutes, cached in between, AND is hard-capped at 800 real scans per
- * UTC day no matter what). Keep this in mind before adding any OTHER list() calls
- * anywhere in this codebase — they all share the same 1,000/day budget.
- *
- * Trade-off: `list()` is only *eventually* consistent across Cloudflare's
- * edge (per Cloudflare's docs, propagation is usually fast but isn't
- * instant/global like a single-key read), so a brand-new ticket can take
- * a little longer to appear in someone else's sidebar than it used to.
- * Given the previous alternative was writes silently dropped/delayed
- * under contention, this is a straightforward trade in the sidebar's
- * favor. Any `thread:<id>` key saved before this change has no metadata
- * yet — `listThreads()` below transparently falls back to reading that
- * one thread's full record and re-saves it with metadata attached so it
- * only ever needs to do that once per pre-existing ticket. That healing is
- * capped per call (MAX_HEAL_PER_CALL, near listThreads() below) — right
- * after this ships, EVERY pre-existing ticket needs healing at once, and
- * Cloudflare caps how many subrequests one call can make, so healing them
- * all in a single call risked 503ing the whole page (this actually
- * happened during testing). The sidebar catches up over a few 6-second
- * polls instead — a one-time, self-resolving cost.
+ * each other at all. The sidebar is built with
+ * `THREADS_KV.list({ prefix: "thread:" })`, which returns every thread's
+ * metadata without fetching the full record — cheap per-call, BUT
+ * Cloudflare's free plan caps `list()` at 1,000 calls/day, completely
+ * separate from (and far stricter than) the 100,000 reads/day budget. A
+ * naive "call list() on every listThreads()" blew through that in a
+ * couple of hours of normal polling — see the LIST_CACHE_KEY /
+ * LIST_CACHE_TTL_MS / DAILY_SCAN_LIMIT section below for the fix (a real
+ * list() scan now only happens at most once every 10 minutes, cached in
+ * between, AND is hard-capped at 800 real scans per UTC day no matter
+ * what). This part of the design deliberately never moved to D1 for INR
+ * either — a KV `list()` scan is exactly the right tool for "give me
+ * every summary cheaply", D1 would need its own equivalent-cost query
+ * pattern for no real benefit, so this section keeps working from raw
+ * `kv` (never `store`) below, completely unaffected by the D1 change
+ * above it.
  *
  * AUTO-CLEANUP — controls how many KV "writes"/"deletes" you burn per day
  * (see the free-plan limits: 1,000 writes/day, 1,000 deletes/day). Adjust
@@ -89,6 +120,32 @@ async function kvPutWithRetry(kv, key, value, attempts = 3) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Same retry-with-jittered-backoff shape as kvPutWithRetry above, for the
+// D1 upsert in saveThread() — ported from INR's original project. D1 is
+// the source of truth for a D1-backed country's full thread record (see
+// getThread()) — a transient failure here must not be silently swallowed
+// (a prior version of this idea let a ticket end up "visible in the
+// sidebar" via a successful KV metadata write while D1 had no matching
+// row, 404ing the instant an agent opened it — see saveThread()'s own
+// comment on why the two writes are now sequenced, not parallel, to
+// prevent exactly that).
+async function d1UpsertWithRetry(db, id, json, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await db.prepare(
+        `INSERT INTO threads (id, data) VALUES (?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET data = excluded.data`
+      ).bind(id, json).run();
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await sleep(150 * (i + 1) + Math.floor(Math.random() * 100));
+    }
+  }
+  throw lastErr;
 }
 
 // Cloudflare KV metadata is capped at 1024 bytes (serialized) per key —
@@ -134,27 +191,54 @@ function summarize(thread) {
   };
 }
 
-// Every write to a thread's own record goes through this — saves the full
-// JSON as the value, and the lightweight summary as this key's metadata,
-// in one KV write. No second key touched, so no shared hot key.
-async function saveThread(kv, thread) {
-  await kv.put(`thread:${thread.id}`, JSON.stringify(thread), {
-    metadata: summarize(thread),
-  });
+// Every write to a thread's own record goes through this.
+//
+// KV-ONLY country (store.db is null — PKR/PHP today): UNCHANGED from
+// before this pass — saves the full JSON as the KV value, with the
+// lightweight summary as this key's metadata, in one write.
+//
+// D1-BACKED country (store.db set — INR today): the full JSON goes to
+// D1 (with retry — see d1UpsertWithRetry), and ONLY THEN does the KV
+// write happen, with a "1" placeholder value (not the full JSON — D1 is
+// the source of truth now) and the same metadata summary as always.
+// SEQUENCED ON PURPOSE, not Promise.all() — if the D1 write is still
+// failing after retries, this whole function throws and the KV write
+// never happens at all, so a thread can never end up "visible in the
+// sidebar" (KV metadata present) while being un-openable (no D1 row).
+async function saveThread(store, thread) {
+  const { kv, db } = store;
+  const json = JSON.stringify(thread);
+  if (db) {
+    await d1UpsertWithRetry(db, thread.id, json);
+    await kv.put(`thread:${thread.id}`, "1", { metadata: summarize(thread) });
+  } else {
+    await kv.put(`thread:${thread.id}`, json, { metadata: summarize(thread) });
+  }
 }
 
-// Deletes a thread's KV record plus every msgid: pointer that leads to it
-// (the root submission message, and any reply sent back out from the
-// dashboard). Parallelized (Promise.all) instead of one-at-a-time — these
-// are all different keys, so there's no per-key rate limit to worry about
-// here, only wall-clock time, and a thread with many messages/attachments
-// could otherwise mean a long chain of sequential round-trips.
-async function purgeThread(kv, thread) {
+// Deletes a thread's record plus every msgid:/message_index pointer that
+// leads to it (the root submission message, and any reply sent back out
+// from the dashboard). Parallelized (Promise.all) — these are all
+// different keys/rows, so there's no per-key rate limit to worry about
+// here, only wall-clock time. For a D1-backed country, also deletes the
+// D1 `threads` row and every `message_index` row for this thread — the
+// KV `thread:<id>`/`msgid:*` deletes still happen too (harmless no-ops
+// for a thread that only ever lived in D1; real cleanup for one still on
+// the legacy KV-only shape, or for a country with no D1 at all).
+async function purgeThread(store, thread) {
+  const { kv, db } = store;
   const ids = thread.msgIds || [];
-  await Promise.all([
+  const deletes = [
     kv.delete(`thread:${thread.id}`),
     ...ids.map((mid) => kv.delete(`msgid:${thread.chatId}:${mid}`)),
-  ]);
+  ];
+  if (db) {
+    deletes.push(
+      db.prepare(`DELETE FROM threads WHERE id = ?1`).bind(thread.id).run(),
+      db.prepare(`DELETE FROM message_index WHERE thread_id = ?1`).bind(thread.id).run()
+    );
+  }
+  await Promise.all(deletes);
 }
 
 function isExpired(t, now) {
@@ -173,7 +257,7 @@ function isExpired(t, now) {
 // extra KV round-trips on every single sidebar refresh.
 const SWEEP_SAMPLE_RATE = 0.05;
 
-async function sweepExpired(kv, list) {
+async function sweepExpired(store, list) {
   if (Math.random() >= SWEEP_SAMPLE_RATE) return list;
   const now = Date.now();
   const keep = [];
@@ -185,15 +269,16 @@ async function sweepExpired(kv, list) {
   if (expiredIds.length) {
     await Promise.all(
       expiredIds.map(async (id) => {
-        const thread = await getThread(kv, id);
-        if (thread) await purgeThread(kv, thread);
+        const thread = await getThread(store, id);
+        if (thread) await purgeThread(store, thread);
       })
     );
   }
   return keep;
 }
 
-export async function createThread(kv, { module: moduleId, moduleName, icon, accent, brand, brandId, title, submitter, chatId, topicId, rootMessageId, rootMessageIds, rootText, hasMedia, attachmentFileIds, summary, fieldMap, screenshotLink, sheetRef, forwardedFrom }) {
+export async function createThread(store, { module: moduleId, moduleName, icon, accent, brand, brandId, title, submitter, chatId, topicId, rootMessageId, rootMessageIds, rootText, hasMedia, attachmentFileIds, summary, fieldMap, screenshotLink, sheetRef, forwardedFrom }) {
+  const { kv, db } = store;
   const now = new Date().toISOString();
   // A ticket sent as a multi-photo Telegram album (sendMediaGroup) gets
   // ONE message_id per photo, only the FIRST of which carries the
@@ -275,22 +360,112 @@ export async function createThread(kv, { module: moduleId, moduleName, icon, acc
     forwardedTo: [],
   };
   await Promise.all([
-    saveThread(kv, thread),
-    // One msgid: pointer per photo in the album (not just the first) —
-    // so a reply to ANY of them (not only the first/captioned one) still
-    // correctly resolves back to this thread via the webhook.
-    ...allRootIds.map((mid) => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id)),
+    saveThread(store, thread),
+    // Every Telegram message_id belonging to the original submission gets
+    // its own reverse-lookup pointer, so a reply to ANY of them (not just
+    // the first/captioned one in a multi-photo album) still resolves back
+    // to this thread. D1-backed country: message_index rows (INSERT OR
+    // IGNORE — createThread only ever inserts brand-new ids, never
+    // updates an existing pointer). KV-only country: msgid: keys, exactly
+    // as before this pass.
+    ...(db
+      ? allRootIds.map((mid) =>
+          db.prepare(`INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`)
+            .bind(thread.chatId, mid, thread.id).run()
+        )
+      : allRootIds.map((mid) => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id))
+    ),
   ]);
   await patchListCache(kv, thread); // instant sidebar visibility — see that function's comment for why
   return thread;
 }
 
-export async function getThread(kv, id) {
+// Reads a thread by id.
+//
+// KV-ONLY country: unchanged — reads the full JSON straight from KV.
+//
+// D1-BACKED country: reads from D1 first (the source of truth there).
+// If D1 has no row, falls back to the legacy pre-D1-migration KV shape
+// (a full JSON *value*, not the "1" placeholder saveThread() writes now)
+// — only ever hit for a thread that hasn't been touched since D1 support
+// shipped for this country. Heals itself: once found via the legacy KV
+// fallback, writes it through to D1 (plus its message_index rows) so
+// every read after this one takes the fast D1 path instead. A raw KV
+// value that parses to something OTHER than a real thread object (e.g.
+// the "1" placeholder itself, parsed as the number 1) means D1 genuinely
+// has no row for this id (e.g. its write failed) rather than "just needs
+// healing" — nothing to reconstruct from KV in that case, so this
+// returns null rather than guessing.
+export async function getThread(store, id) {
+  const { kv, db } = store;
+  if (db) {
+    const row = await db.prepare(`SELECT data FROM threads WHERE id = ?1`).bind(id).first();
+    if (row) return JSON.parse(row.data);
+    const raw = await kv.get(`thread:${id}`);
+    if (!raw) return null;
+    let legacyThread;
+    try {
+      legacyThread = JSON.parse(raw);
+    } catch {
+      return null; // corrupt — nothing to heal
+    }
+    if (!legacyThread || typeof legacyThread !== "object" || Array.isArray(legacyThread)) return null;
+    if (legacyThread.id) {
+      try {
+        const ids = (legacyThread.msgIds && legacyThread.msgIds.length ? legacyThread.msgIds : [legacyThread.rootMessageId]).filter(Boolean);
+        await Promise.all([
+          db.prepare(
+            `INSERT INTO threads (id, data) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET data = excluded.data`
+          ).bind(legacyThread.id, raw).run(),
+          ...ids.map((mid) =>
+            db.prepare(
+              `INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`
+            ).bind(legacyThread.chatId, mid, legacyThread.id).run()
+          ),
+        ]);
+      } catch {
+        // Non-fatal — it'll just get healed again on a future read.
+      }
+    }
+    return legacyThread;
+  }
   const raw = await kv.get(`thread:${id}`);
   return raw ? JSON.parse(raw) : null;
 }
 
-export async function findThreadIdByMessage(kv, chatId, messageId) {
+// A thread that's visible in the sidebar (its `thread:<id>` KV
+// key/metadata exists — that's all listThreads() needs) but comes back
+// null from getThread() above (D1-backed country, no D1 row, and no
+// legacy full-JSON KV fallback either) is an orphan — saveThread()
+// sequences D1-before-KV specifically so new writes can't produce this,
+// but a thread from before that sequencing existed could still be one.
+// There's nothing to repair (the real data was never captured anywhere
+// reachable), only to remove, so functions/api/threads/[id].js calls
+// this the moment it sees a genuine getThread() miss on an id the
+// sidebar still shows, so the ticket stops reappearing every poll.
+// Returns true if it actually found and removed a stray KV entry (worth
+// telling the agent about), false if there was nothing there at all (a
+// genuinely-unknown/mistyped id).
+export async function purgeOrphanIfStray(store, id) {
+  const { kv } = store;
+  const existing = await kv.get(`thread:${id}`);
+  if (existing === null) return false;
+  await kv.delete(`thread:${id}`);
+  return true;
+}
+
+export async function findThreadIdByMessage(store, chatId, messageId) {
+  const { kv, db } = store;
+  if (db) {
+    const row = await db.prepare(
+      `SELECT thread_id FROM message_index WHERE chat_id = ?1 AND message_id = ?2`
+    ).bind(String(chatId), messageId).first();
+    if (row) return row.thread_id;
+  }
+  // Falls back to the legacy KV pointer (see getThread()'s comment for
+  // the fuller reasoning) — not healed here, unlike getThread() above;
+  // the thread this points to gets its message_index rows backfilled the
+  // next time IT is read via getThread(), which covers this same pointer.
   return kv.get(`msgid:${chatId}:${messageId}`);
 }
 
@@ -538,10 +713,15 @@ async function getFreshOrCachedEntries(kv) {
 
 // Sidebar list — served from the cache above almost all the time; only
 // touches KV's list() directly when that cache is missing or stale.
-export async function listThreads(kv, { q } = {}) {
-  const results = await getFreshOrCachedEntries(kv);
+// Sidebar list — served from the cache above almost all the time; only
+// touches KV's list() directly when that cache is missing or stale.
+// Takes `store` now (not bare `kv`) — sweepExpired() below needs the
+// full store to purge an expired thread from D1 too, on a D1-backed
+// country; the list-cache read/scan itself stays on store.kv, unchanged.
+export async function listThreads(store, { q } = {}) {
+  const results = await getFreshOrCachedEntries(store.kv);
 
-  const swept = await sweepExpired(kv, results);
+  const swept = await sweepExpired(store, results);
   const visible = swept.filter((t) => !t.deleted);
   visible.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
@@ -576,7 +756,15 @@ function mentionRegistryKey(brandId, moduleId) {
   return `mention-registry:${brandId}:${moduleId}`;
 }
 
-export async function getMentionCandidates(kv, brandId, moduleId) {
+// MERGED (2026-08-21) — takes `store` now (not bare `kv`) purely for
+// consistency with every other exported function in this file (so a
+// caller never has to remember "this one wants store.kv specifically,
+// that one wants the whole store") — the mention registry itself never
+// moves to D1 for any country (see this file's header: it's KV-only by
+// design, same reasoning as the list-cache cluster), so this still just
+// destructures store.kv and proceeds exactly as before.
+export async function getMentionCandidates(store, brandId, moduleId) {
+  const { kv } = store;
   if (!brandId || !moduleId) return [];
   const raw = await kv.get(mentionRegistryKey(brandId, moduleId));
   if (!raw) return [];
@@ -597,7 +785,8 @@ export async function getMentionCandidates(kv, brandId, moduleId) {
 // against KV's 1,000 writes/day budget (see the big comment at the top
 // of this file). Best-effort only: a missed mention-candidate write
 // should never break the actual message/reply it rode in on.
-export async function rememberMentionCandidate(kv, brandId, moduleId, handle, from) {
+export async function rememberMentionCandidate(store, brandId, moduleId, handle, from) {
+  const { kv } = store;
   if (!brandId || !moduleId || !handle) return;
   try {
     const key = mentionRegistryKey(brandId, moduleId);
@@ -616,86 +805,145 @@ export async function rememberMentionCandidate(kv, brandId, moduleId, handle, fr
 // functions/api/admin/mention-backfill.js, which drives this one page
 // (100 threads) at a time so a large ticket history never risks hitting
 // Cloudflare Pages Functions' execution time limit in a single request.
-// Reads full thread records directly (not the summary cache) since only
-// the full record has each message's handle/from.
-export async function backfillMentionCandidatesPage(kv, cursor) {
+//
+// MERGED (2026-08-21) — goes through getThread(store, id) now rather
+// than reading each key's raw KV value directly. For a D1-backed
+// country, a thread's KV value is just the "1" placeholder (the real
+// data lives in D1 — see this file's header) — reading it directly (the
+// old approach) would silently see only "1" for every already-migrated
+// thread and backfill nothing useful for that country. getThread() is
+// what already knows to check D1 first. Reads fan out concurrently
+// (Promise.all) since this is a plain read-only pass — no per-key write
+// limit to respect here, unlike the KV writes elsewhere in this file.
+export async function backfillMentionCandidatesPage(store, cursor) {
+  const { kv } = store;
   const page = await kv.list({ prefix: "thread:", cursor, limit: 100 });
-  const raws = await Promise.all(page.keys.map((k) => kv.get(k.name)));
+  const threads = await Promise.all(page.keys.map((k) => getThread(store, k.name.slice("thread:".length))));
   let scanned = 0;
-  for (const raw of raws) {
-    if (!raw) continue;
-    let t;
-    try {
-      t = JSON.parse(raw);
-    } catch {
-      continue;
-    }
+  for (const t of threads) {
+    if (!t) continue;
     scanned += 1;
     if (!t.brandId || !t.module) continue;
     for (const m of t.messages || []) {
       if (m.self || !m.handle) continue;
-      await rememberMentionCandidate(kv, t.brandId, t.module, m.handle, m.from);
+      await rememberMentionCandidate(store, t.brandId, t.module, m.handle, m.from);
     }
   }
   return { scanned, nextCursor: page.list_complete ? null : page.cursor };
 }
 
-export async function appendMessage(kv, threadId, message) {
-  const thread = await getThread(kv, threadId);
-  if (!thread) return null;
-  thread.messages.push(message);
-  thread.lastActivity = message.ts;
-  // Any new message on an already-solved ticket is a "still need to talk
-  // about this" signal and gets auto-reopened — whether it's a genuine
-  // incoming reply from Telegram (see telegram-webhook.js) OR the agent
-  // themselves replying from this dashboard to a ticket that was already
-  // marked Solved (2026-08 — replying used to leave `solved: true` in
-  // place, which meant the ticket stayed buried in Solved Chat History
-  // even though there was now a fresh, unread reply on it). No special
-  // case needed for message.self here anymore — either direction reopens
-  // the same way.
-  if (thread.solved) {
-    thread.solved = false;
-    thread.solvedAt = null;
-  }
-  // Track this outbound message's id(s) (if Telegram returned any) so
-  // replies-to-replies still resolve back to the same thread, and so
-  // cleanup can find and delete every msgid: pointer for this thread.
-  // A multi-attachment reply lands in Telegram as an ALBUM — one
-  // message_id PER attachment, not just one for the whole reply — so
-  // message.messageIds (plural, see sendTelegramReplyAttachments in
-  // threads/[id].js) carries all of them when present. Without this, a
-  // reply to any photo in the album OTHER than the first would silently
-  // fail to resolve back to this thread. Falls back to the single
-  // messageId for plain text/single-attachment replies, which only ever
-  // have the one id anyway.
+// MERGED (2026-08-21) — takes `store` now (not bare `kv`).
+//
+// D1-BACKED country: appends the new message via an ATOMIC SQL
+// UPDATE (SQLite's json_insert/json_set), not a read-modify-write from
+// JS — this is the actual point of the D1 migration for THIS function:
+// two replies landing within the same millisecond now serialize as two
+// independent UPDATEs instead of racing to read-then-clobber each
+// other's write (the exact bug this design fixes — see this file's
+// header). The "reopen if solved" step is its own conditional UPDATE
+// (checked via json_extract) rather than an in-memory if-check, since
+// there's no in-memory copy of the thread at this point. Every message
+// id also gets its message_index row in the same D1 batch(). SQL
+// ported byte-for-byte from INR's original project — deliberately not
+// "cleaned up" or rephrased, to minimize the risk of introducing a typo
+// in SQL this file's author can't run-test against a live D1 database
+// before shipping.
+//
+// KV-ONLY country: falls back to the original read-modify-write path,
+// unchanged from before this pass.
+export async function appendMessage(store, threadId, message) {
+  const { kv, db } = store;
   const allIds = message.messageIds && message.messageIds.length ? message.messageIds : (message.messageId ? [message.messageId] : []);
-  if (allIds.length) {
-    thread.msgIds = [...(thread.msgIds || [thread.rootMessageId]), ...allIds];
+
+  if (db) {
+    // Ensures a D1 row exists for this thread before the atomic UPDATE
+    // below (heals a pre-D1-migration thread that hasn't been read
+    // since D1 support shipped — see getThread()'s heal-on-read logic;
+    // an UPDATE matching zero rows is NOT an error, so without this a
+    // reply to a not-yet-healed thread would silently vanish instead of
+    // being recorded). Also gives us `chatId` for the message_index
+    // inserts below without a second read.
+    const existing = await getThread(store, threadId);
+    if (!existing) return null;
+
+    const stmts = [
+      db.prepare(
+        `UPDATE threads
+         SET data = json_set(json_insert(data, '$.messages[#]', json(?1)), '$.lastActivity', ?2)
+         WHERE id = ?3`
+      ).bind(JSON.stringify(message), message.ts, threadId),
+    ];
+    // Only genuine, explicit replies ever reach here for non-self
+    // messages (see telegram-webhook.js) — so if one lands on an
+    // already-solved ticket, that's a deliberate "actually, still need
+    // to talk about this" signal, safe to reopen.
+    if (!message.self) {
+      stmts.push(
+        db.prepare(
+          `UPDATE threads
+           SET data = json_set(data, '$.solved', json('false'), '$.solvedAt', NULL)
+           WHERE id = ?1 AND json_extract(data, '$.solved') = 1`
+        ).bind(threadId)
+      );
+    }
+    for (const mid of allIds) {
+      stmts.push(
+        db.prepare(
+          `INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`
+        ).bind(String(existing.chatId ?? ""), mid, threadId)
+      );
+    }
+    await db.batch(stmts);
   }
-  const writes = [saveThread(kv, thread)];
-  for (const mid of allIds) {
-    writes.push(kv.put(`msgid:${thread.chatId}:${mid}`, thread.id));
+
+  // Read back the now-current thread — a single consistent D1 read for
+  // a D1-backed country, or (for a country with no D1 at all) the plain
+  // KV get() this always was.
+  const thread = await getThread(store, threadId);
+  if (!thread) return null;
+
+  if (!db) {
+    // No D1 for this country — original KV read-modify-write path,
+    // byte-for-byte unchanged from before this pass.
+    thread.messages.push(message);
+    thread.lastActivity = message.ts;
+    if (thread.solved) {
+      thread.solved = false;
+      thread.solvedAt = null;
+    }
+    if (allIds.length) {
+      thread.msgIds = [...(thread.msgIds || [thread.rootMessageId]), ...allIds];
+    }
+    const writes = [saveThread(store, thread)];
+    for (const mid of allIds) {
+      writes.push(kv.put(`msgid:${thread.chatId}:${mid}`, thread.id));
+    }
+    if (!message.self && message.handle) {
+      writes.push(rememberMentionCandidate(store, thread.brandId, thread.module, message.handle, message.from));
+    }
+    await Promise.all(writes);
   }
-  // @ Tag Username — remember "this person has replied in this brand +
-  // module before" so the reply box's @ autocomplete can suggest them
-  // later. Only for genuine incoming replies (never our own outgoing
-  // ones) that actually carry a Telegram @handle.
-  if (!message.self && message.handle) {
-    writes.push(rememberMentionCandidate(kv, thread.brandId, thread.module, message.handle, message.from));
-  }
-  await Promise.all(writes);
+
   await patchListCache(kv, thread); // instant sidebar update — reply count / reopened status
+
+  // D1 path's mention-candidate remembering happens here instead of
+  // inside the `writes` array above (that array only exists on the
+  // KV-only path) — fire-and-forget, same as INR's original: this is a
+  // nice-to-have suggestion list, never worth slowing down (or failing)
+  // the reply-recording above for.
+  if (db && !message.self && message.handle) {
+    rememberMentionCandidate(store, thread.brandId, thread.module, message.handle, message.from).catch(() => {});
+  }
   return thread;
 }
 
-export async function setSolved(kv, threadId, solved) {
-  const thread = await getThread(kv, threadId);
+export async function setSolved(store, threadId, solved) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   thread.solved = solved;
   thread.solvedAt = solved ? new Date().toISOString() : null;
-  await saveThread(kv, thread);
-  await patchListCache(kv, thread); // instant sidebar update — solved/unsolved toggle
+  await saveThread(store, thread);
+  await patchListCache(store.kv, thread); // instant sidebar update — solved/unsolved toggle
   return thread;
 }
 
@@ -704,13 +952,13 @@ export async function setSolved(kv, threadId, solved) {
 // rows) was captured once at submit time and can't be safely re-parsed
 // out of free-form edited text, so we flag the thread as edited — the
 // dashboard shows this raw text instead of the now-possibly-stale summary.
-export async function updateRootText(kv, threadId, text) {
-  const thread = await getThread(kv, threadId);
+export async function updateRootText(store, threadId, text) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   thread.rootText = text;
   thread.rootEdited = true;
   thread.lastActivity = new Date().toISOString();
-  await saveThread(kv, thread);
+  await saveThread(store, thread);
   return thread;
 }
 
@@ -723,8 +971,8 @@ export async function updateRootText(kv, threadId, text) {
 // updateRootText above, this DOES call patchListCache() — title/summary
 // are exactly what the sidebar shows, so a stale cache here would mean
 // agents see outdated info until the next scan.
-export async function updateThreadDetails(kv, threadId, { fieldMap, rootText, title, summary }) {
-  const thread = await getThread(kv, threadId);
+export async function updateThreadDetails(store, threadId, { fieldMap, rootText, title, summary }) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   if (fieldMap !== undefined) thread.fieldMap = fieldMap;
   if (rootText !== undefined) {
@@ -734,8 +982,8 @@ export async function updateThreadDetails(kv, threadId, { fieldMap, rootText, ti
   if (title !== undefined) thread.title = title;
   if (summary !== undefined) thread.summary = summary;
   thread.lastActivity = new Date().toISOString();
-  await saveThread(kv, thread);
-  await patchListCache(kv, thread);
+  await saveThread(store, thread);
+  await patchListCache(store.kv, thread);
   return thread;
 }
 
@@ -746,11 +994,11 @@ export async function updateThreadDetails(kv, threadId, { fieldMap, rootText, ti
 // is clickable to jump straight to the new ticket. Doesn't call
 // patchListCache() — forwardedTo isn't part of the sidebar's summary/
 // title, so there's nothing there that would go stale.
-export async function addForwardedToLink(kv, threadId, link) {
-  const thread = await getThread(kv, threadId);
+export async function addForwardedToLink(store, threadId, link) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   thread.forwardedTo = [...(thread.forwardedTo || []), link];
-  await saveThread(kv, thread);
+  await saveThread(store, thread);
   return thread;
 }
 
@@ -760,19 +1008,22 @@ export async function addForwardedToLink(kv, threadId, link) {
 // Not linked from anywhere in the agent-facing UI. Low-frequency
 // (admin-only actions), so left as one shared key with a retry — see the
 // note on kvPutWithRetry above for why this one's different from the old
-// "index" key.
+// "index" key. Deliberately KV-only for every country — same reasoning
+// as the mention registry (see that section's comment): low enough
+// volume that D1's consistency guarantees add nothing here.
 const DELETION_LOG_KEY = "deletion-log";
 const MAX_LOG_SIZE = 500;
 
-export async function logDeletion(kv, entry) {
+export async function logDeletion(store, entry) {
+  const { kv } = store;
   const raw = await kv.get(DELETION_LOG_KEY);
   const list = raw ? JSON.parse(raw) : [];
   list.unshift({ id: newId(), ts: new Date().toISOString(), by: entry.by || null, ...entry });
   await kvPutWithRetry(kv, DELETION_LOG_KEY, JSON.stringify(list.slice(0, MAX_LOG_SIZE)));
 }
 
-export async function listDeletions(kv) {
-  const raw = await kv.get(DELETION_LOG_KEY);
+export async function listDeletions(store) {
+  const raw = await store.kv.get(DELETION_LOG_KEY);
   return raw ? JSON.parse(raw) : [];
 }
 
@@ -780,24 +1031,24 @@ export async function listDeletions(kv) {
 // (conversation history, sheet row, etc. are untouched) but flag it so the
 // dashboard can show "original message recalled" instead of pretending it's
 // still there.
-export async function markRootRecalled(kv, threadId) {
-  const thread = await getThread(kv, threadId);
+export async function markRootRecalled(store, threadId) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   thread.rootRecalled = true;
   thread.lastActivity = new Date().toISOString();
-  await saveThread(kv, thread);
+  await saveThread(store, thread);
   return thread;
 }
 
 // A self-sent reply was edited on Telegram — update its stored text.
-export async function editMessageInThread(kv, threadId, messageId, text) {
-  const thread = await getThread(kv, threadId);
+export async function editMessageInThread(store, threadId, messageId, text) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   const msg = thread.messages.find((m) => m.self && m.messageId === messageId);
   if (!msg) return null;
   msg.text = text;
   msg.editedAt = new Date().toISOString();
-  await saveThread(kv, thread);
+  await saveThread(store, thread);
   return thread;
 }
 
@@ -821,8 +1072,8 @@ export async function editMessageInThread(kv, threadId, messageId, text) {
 // the edit WAS being recorded — the photo itself never made it in.
 // Passing null clears any attachment that used to be there (matches
 // Telegram: editMessageMedia can remove media just as it can add it).
-export async function editIncomingMessageInThread(kv, threadId, messageId, text, attachment = undefined) {
-  const thread = await getThread(kv, threadId);
+export async function editIncomingMessageInThread(store, threadId, messageId, text, attachment = undefined) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   const msg = thread.messages.find((m) => !m.self && m.messageId === messageId);
   if (!msg) return null; // not a message we're tracking for this thread — ignore
@@ -838,25 +1089,25 @@ export async function editIncomingMessageInThread(kv, threadId, messageId, text,
     thread.solved = false;
     thread.solvedAt = null;
   }
-  await saveThread(kv, thread);
-  await patchListCache(kv, thread); // instant sidebar update — lastActivity / reopened status
+  await saveThread(store, thread);
+  await patchListCache(store.kv, thread); // instant sidebar update — lastActivity / reopened status
   return thread;
 }
 
 // A self-sent reply was recalled from Telegram — remove it from the
 // conversation (matches how Telegram itself just removes it, no trace).
-export async function removeMessageFromThread(kv, threadId, messageId) {
-  const thread = await getThread(kv, threadId);
+export async function removeMessageFromThread(store, threadId, messageId) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
   thread.messages = thread.messages.filter((m) => !(m.self && m.messageId === messageId));
-  await saveThread(kv, thread);
+  await saveThread(store, thread);
   return thread;
 }
 
-export async function softDeleteThread(kv, threadId) {
-  const thread = await getThread(kv, threadId);
+export async function softDeleteThread(store, threadId) {
+  const thread = await getThread(store, threadId);
   if (!thread) return null;
-  await purgeThread(kv, thread);
-  await patchListCache(kv, thread, { remove: true }); // instant sidebar update — drop it immediately, don't wait for the next scan to notice it's gone
+  await purgeThread(store, thread);
+  await patchListCache(store.kv, thread, { remove: true }); // instant sidebar update — drop it immediately, don't wait for the next scan to notice it's gone
   return thread;
 }

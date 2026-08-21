@@ -53,7 +53,7 @@ import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry } from "../_sha
 import { buildTicketMessage, buildTitleAndSummary, resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY } from "../_shared/messageBuilders.js";
 import { getRouteOverride } from "../_shared/routes.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
-import { isValidCountry, resolveThreadsKv } from "../_shared/countries.js";
+import { isValidCountry, resolveThreadsStore } from "../_shared/countries.js";
 
 export async function onRequestPost(context) {
   try {
@@ -88,8 +88,8 @@ async function handlePost({ request, env }) {
   if (!isValidCountry(country) || !canSeeCountry(account, country)) {
     return json({ ok: false, error: "Source ticket not found." }, 404);
   }
-  const kv = resolveThreadsKv(env, country);
-  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+  const store = resolveThreadsStore(env, country);
+  if (!store.kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
 
   let botToken = null;
   try {
@@ -105,7 +105,7 @@ async function handlePost({ request, env }) {
     return json({ ok: false, error: `You don't have access to submit ${meta.name} tickets.` }, 403);
   }
 
-  const sourceThread = await getThread(kv, sourceThreadId);
+  const sourceThread = await getThread(store, sourceThreadId);
   if (!sourceThread) return json({ ok: false, error: "Source ticket not found." }, 404);
   if (sourceThread.module === moduleId) {
     return json({ ok: false, error: "This ticket is already in that Topic — nothing to forward." }, 400);
@@ -254,7 +254,7 @@ async function handlePost({ request, env }) {
 
   let newThread;
   try {
-    newThread = await createThread(kv, {
+    newThread = await createThread(store, {
       module: moduleId,
       moduleName: meta.name,
       icon: meta.emoji,
@@ -284,7 +284,7 @@ async function handlePost({ request, env }) {
   }
 
   try {
-    await addForwardedToLink(kv, sourceThreadId, {
+    await addForwardedToLink(store, sourceThreadId, {
       threadId: newThread.id,
       module: moduleId,
       moduleName: meta.name,

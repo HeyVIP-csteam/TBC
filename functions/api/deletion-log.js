@@ -17,7 +17,7 @@
 import { listDeletions } from "../_shared/threads.js";
 import { authenticateAdmin } from "../_shared/accounts.js";
 import { resolveAllowedCountries } from "../_shared/countryAccess.js";
-import { COUNTRIES, COUNTRY_CODES } from "../_shared/countries.js";
+import { COUNTRY_CODES, resolveThreadsStore } from "../_shared/countries.js";
 
 // MERGED — same "query every allowed country's own KV in parallel, tag
 // + merge" shape as functions/api/threads.js (the reference
@@ -42,9 +42,9 @@ async function handleGet({ request, env }) {
 
   const perCountry = await Promise.all(
     allowedCountries.map(async (country) => {
-      const kv = env[COUNTRIES[country].threadsKvBinding];
-      if (!kv) return [];
-      const entries = await listDeletions(kv);
+      const store = resolveThreadsStore(env, country);
+      if (!store.kv) return [];
+      const entries = await listDeletions(store);
       return entries.map((e) => ({ ...e, country }));
     })
   );

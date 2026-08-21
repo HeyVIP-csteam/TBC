@@ -51,11 +51,11 @@
 import {
   getThread, setSolved, softDeleteThread, appendMessage,
   updateRootText, updateThreadDetails, markRootRecalled, editMessageInThread, removeMessageFromThread,
-  logDeletion,
+  logDeletion, purgeOrphanIfStray,
 } from "../../_shared/threads.js";
 import { verifyRequest, canSeeBrand, canSeeCountry, requestIP } from "../../_shared/accounts.js";
 import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken } from "../../_shared/routing.js";
-import { isValidCountry, resolveThreadsKv } from "../../_shared/countries.js";
+import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
 import { updateRowByColumns } from "../../_shared/googleSheets.js";
 import { buildTicketMessage, buildTitleAndSummary, resolveColumnValues } from "../../_shared/messageBuilders.js";
 import { compressImageForTelegram } from "../../_shared/telegramImageCompress.js";
@@ -77,11 +77,27 @@ export async function onRequestGet({ request, env, params }) {
   if (!account) return json({ ok: false, error: "Login required." }, 401);
   const country = (new URL(request.url).searchParams.get("country") || "").toUpperCase();
   if (!isValidCountry(country) || !canSeeCountry(account, country)) return json({ ok: false, error: "Not found." }, 404);
-  const kv = resolveThreadsKv(env, country);
-  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
-  const thread = await getThread(kv, params.id);
-  if (!thread || thread.deleted || !canSeeBrand(account, thread.brand)) return json({ ok: false, error: "Not found." }, 404);
-  return json({ ok: true, thread: { ...thread, country } });
+  const store = resolveThreadsStore(env, country);
+  if (!store.kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+  const thread = await getThread(store, params.id);
+  if (thread && !thread.deleted && canSeeBrand(account, thread.brand)) {
+    return json({ ok: true, thread: { ...thread, country } });
+  }
+  // thread === null means genuinely no record anywhere (not just a
+  // brand-visibility filter or a soft-delete, both of which legitimately
+  // leave `thread` non-null) — that's the one case worth checking for a
+  // stray orphaned sidebar entry (D1-backed country only — see
+  // purgeOrphanIfStray()'s comment in threads.js for the full story on
+  // when this can happen and why saveThread() now sequences its writes
+  // specifically to prevent NEW orphans; this only ever cleans up one
+  // from before that sequencing existed).
+  if (!thread) {
+    const wasOrphan = await purgeOrphanIfStray(store, params.id).catch(() => false);
+    if (wasOrphan) {
+      return json({ ok: false, error: "This ticket's record never finished saving and can't be recovered — it's been removed from your list." }, 404);
+    }
+  }
+  return json({ ok: false, error: "Not found." }, 404);
 }
 
 // Top-level safety net — same reasoning as submit.js: everything below
@@ -127,8 +143,8 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   if (!isValidCountry(country) || !canSeeCountry(account, country)) {
     return json({ ok: false, error: "Not found." }, 404);
   }
-  const kv = resolveThreadsKv(env, country);
-  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+  const store = resolveThreadsStore(env, country);
+  if (!store.kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
 
   // MERGED — resolved once per request from the thread's own country
   // rather than the old single env.TELEGRAM_BOT_TOKEN (that binding no
@@ -147,13 +163,22 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
 
   // Every action operates on an existing thread the account must be
   // allowed to see — check once up front instead of in every branch.
-  const existingThread = await getThread(kv, id);
+  const existingThread = await getThread(store, id);
   if (!existingThread || existingThread.deleted || !canSeeBrand(account, existingThread.brand)) {
+    // Same orphan cleanup as the GET handler above — only fires when
+    // existingThread is genuinely null (no record anywhere), never for a
+    // thread that's merely soft-deleted or outside this account's brands.
+    if (!existingThread) {
+      const wasOrphan = await purgeOrphanIfStray(store, id).catch(() => false);
+      if (wasOrphan) {
+        return json({ ok: false, error: "This ticket's record never finished saving and can't be recovered — it's been removed from your list." }, 404);
+      }
+    }
     return json({ ok: false, error: "Not found." }, 404);
   }
 
   if (action === "solve" || action === "unsolve") {
-    const thread = await setSolved(kv, id, action === "solve");
+    const thread = await setSolved(store, id, action === "solve");
     if (!thread) return json({ ok: false, error: "Not found." }, 404);
     // "Solved" was removed from the audit trail (2026-08) — same reasoning
     // as "Ticket Created" and "Reply Sent" above: it's a routine, very
@@ -169,9 +194,9 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
 
   if (action === "delete") {
     const before = existingThread;
-    const thread = await softDeleteThread(kv, id);
+    const thread = await softDeleteThread(store, id);
     if (!thread) return json({ ok: false, error: "Not found." }, 404);
-    await logDeletion(kv, {
+    await logDeletion(store, {
       type: "delete-thread",
       threadId: id,
       threadTitle: before?.title || thread.title,
@@ -239,7 +264,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     // new attachmentFileIds/attachmentNames (arrays) — just [0] of the
     // array — so nothing else in this project that might still read the
     // singular fields breaks.
-    const updated = await appendMessage(kv, id, {
+    const updated = await appendMessage(store, id, {
       from: account.username,
       handle: null,
       text: text || (attachments.length > 1 ? `📎 ${attachments.length} attachments` : `📎 ${attachments[0]?.name || "attachment"}`),
@@ -279,7 +304,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const tg = await callTelegram(botToken, method, payload);
     if (!tg.ok) return json({ ok: false, error: telegramEditError(tg) }, 502);
 
-    const updated = await updateRootText(kv, id, text);
+    const updated = await updateRootText(store, id, text);
     logThread({ action: "Ticket Edited", detail: `"${thread.title || id}" (${thread.brand}): ${thread.rootText || "(no text)"} → ${text}` });
     return json({ ok: true, thread: updated });
   }
@@ -346,7 +371,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     }
 
     const { title, summary } = buildTitleAndSummary({ meta, brand, fieldMap, fields });
-    const updated = await updateThreadDetails(kv, id, { fieldMap, rootText: text, title, summary });
+    const updated = await updateThreadDetails(store, id, { fieldMap, rootText: text, title, summary });
     logThread({ action: "Ticket Edited", detail: `"${thread.title || id}" (${thread.brand}), field sync: ${thread.rootText || "(no text)"} → ${text}` });
     return json({ ok: true, thread: updated, sheetHasRef: !!thread.sheetRef, sheetSynced, sheetError });
   }
@@ -370,8 +395,8 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const firstFailure = results.find((r) => !r.ok);
     if (firstFailure) return json({ ok: false, error: telegramDeleteError(firstFailure) }, 502);
 
-    const updated = await markRootRecalled(kv, id);
-    await logDeletion(kv, {
+    const updated = await markRootRecalled(store, id);
+    await logDeletion(store, {
       type: "recall-root",
       threadId: id,
       threadTitle: thread.title,
@@ -393,7 +418,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     if (!tg.ok) return json({ ok: false, error: telegramEditError(tg) }, 502);
 
     const oldMsg = existingThread.messages.find((m) => m.self && m.messageId === messageId);
-    const updated = await editMessageInThread(kv, id, messageId, text);
+    const updated = await editMessageInThread(store, id, messageId, text);
     logThread({ action: "Reply Edited", detail: `"${existingThread.title || id}" (${existingThread.brand}): ${oldMsg?.text || "(no text)"} → ${text}` });
     return json({ ok: true, thread: updated });
   }
@@ -414,8 +439,8 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const firstFailure = results.find((r) => !r.ok);
     if (firstFailure) return json({ ok: false, error: telegramDeleteError(firstFailure) }, 502);
 
-    const updated = await removeMessageFromThread(kv, id, messageId);
-    await logDeletion(kv, {
+    const updated = await removeMessageFromThread(store, id, messageId);
+    await logDeletion(store, {
       type: "recall-reply",
       threadId: id,
       threadTitle: thread.title,

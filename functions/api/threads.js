@@ -25,7 +25,7 @@
  */
 import { verifyRequest, canSeeBrand, canSeeCountry } from "../_shared/accounts.js";
 import { resolveAllowedCountries } from "../_shared/countryAccess.js";
-import { COUNTRIES, COUNTRY_CODES } from "../_shared/countries.js";
+import { COUNTRY_CODES, resolveThreadsStore } from "../_shared/countries.js";
 import { listThreads } from "../_shared/threads.js";
 
 export async function onRequestGet(context) {
@@ -51,19 +51,19 @@ async function handleGet({ request, env }) {
     return json({ ok: true, active: [], solved: [], notConfigured: false });
   }
 
-  // Query each allowed country's own KV binding in parallel. A country
-  // whose binding isn't set up yet (e.g. PHP before its THREADS_KV_PHP
-  // namespace is created — see wrangler.toml) is skipped with a soft
-  // warning rather than throwing and taking down the whole merged
-  // response for the countries that DO work.
+  // Query each allowed country's own storage (KV, or KV+D1 for INR —
+  // see resolveThreadsStore()/threads.js's file header) in parallel. A
+  // country whose KV binding isn't set up yet (e.g. PHP before its
+  // THREADS_KV_PHP namespace is created — see wrangler.toml) is skipped
+  // with a soft warning rather than throwing and taking down the whole
+  // merged response for the countries that DO work.
   const perCountryResults = await Promise.all(
     allowedCountries.map(async (country) => {
-      const bindingName = COUNTRIES[country].threadsKvBinding;
-      const kv = env[bindingName];
-      if (!kv) {
+      const store = resolveThreadsStore(env, country);
+      if (!store.kv) {
         return { country, threads: [], notConfigured: true };
       }
-      const threads = await listThreads(kv, { q });
+      const threads = await listThreads(store, { q });
       // Tag every thread with which country it came from — the
       // frontend needs this to show a country badge/filter, and it's
       // also what a future canSeeCountry() re-check downstream (e.g.

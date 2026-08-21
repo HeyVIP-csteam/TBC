@@ -7,7 +7,7 @@ import { getRouteOverride } from "../_shared/routes.js";
 import { getIssueSheetOverride, resolveWriteTab, promotionModuleId } from "../_shared/issueSubmissionSheets.js";
 import { resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY, buildTicketMessage, buildTitleAndSummary } from "../_shared/messageBuilders.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
-import { resolveThreadsKv } from "../_shared/countries.js";
+import { resolveThreadsStore } from "../_shared/countries.js";
 
 // MERGED (2026-08-20) — excludes DEPOSIT_CHANNEL_PSEUDO_MODULES from
 // what a submission can claim as its moduleId. Those ids exist in
@@ -114,7 +114,17 @@ async function handleSubmit({ request, env, waitUntil }) {
   // both the idempotency dedupe cache below and the real createThread()
   // call further down — both belong in the SAME country's storage as
   // the ticket itself.
-  const kv = resolveThreadsKv(env, brand.country);
+  //
+  // 2026-08-21 — resolveThreadsStore() (not resolveThreadsKv()) now,
+  // bundling both the KV namespace AND (for INR) the D1 database — see
+  // threads.js's file header for the full hybrid-storage design.
+  // `kv` is destructured out immediately since the idempotency dedupe
+  // cache below stays pure KV regardless of country (same reasoning as
+  // threads.js's mention registry/deletion log: low-volume, D1's
+  // consistency guarantee adds nothing here); `store` (the whole thing)
+  // is what goes to createThread() further down.
+  const store = resolveThreadsStore(env, brand.country);
+  const { kv } = store;
 
   if (idempotencyKey && kv) {
     const dedupeKey = `submit_dedupe:${idempotencyKey}`;
@@ -310,7 +320,7 @@ async function handleSubmit({ request, env, waitUntil }) {
   if (kv) {
     try {
       const { title, summary } = buildTitleAndSummary({ meta, brand, fieldMap, fields });
-      const thread = await createThread(kv, {
+      const thread = await createThread(store, {
         module: moduleId,
         moduleName: meta.name,
         icon: meta.emoji,

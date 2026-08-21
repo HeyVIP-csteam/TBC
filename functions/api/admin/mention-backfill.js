@@ -36,7 +36,7 @@
 import { authenticateStaff, ROLE_RANK, canEditAdminSection, canSeeCountry, requestIP } from "../../_shared/accounts.js";
 import { backfillMentionCandidatesPage } from "../../_shared/threads.js";
 import { logActivity } from "../../_shared/activityLog.js";
-import { isValidCountry, resolveThreadsKv } from "../../_shared/countries.js";
+import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
 
 export async function onRequestPost(context) {
   try {
@@ -64,10 +64,10 @@ async function handlePost({ request, env, waitUntil }) {
   const country = typeof body.country === "string" ? body.country.toUpperCase() : "";
   if (!isValidCountry(country)) return json({ ok: false, error: "A valid `country` is required." }, 400);
   if (!canSeeCountry(auth.account, country)) return json({ ok: false, error: "Not authorized for that country." }, 403);
-  const kv = resolveThreadsKv(env, country);
-  if (!kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
+  const store = resolveThreadsStore(env, country);
+  if (!store.kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
 
-  const { scanned, nextCursor } = await backfillMentionCandidatesPage(kv, body.cursor || undefined);
+  const { scanned, nextCursor } = await backfillMentionCandidatesPage(store, body.cursor || undefined);
   const done = !nextCursor;
   // Only logged once, on the FINAL page — a multi-page backfill run would
   // otherwise flood the audit trail with one entry per 100-thread page.
