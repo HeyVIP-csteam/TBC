@@ -35,14 +35,14 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=ea9e36f7" />
+<link rel="stylesheet" href="/assets/style.css?v=89fadda5" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
 <script src="/assets/authguard.js?v=101bd636"></script>
 <script src="/assets/countries.js?v=78bdc076"></script>
 <script src="/assets/country-modules.js?v=7caef210"></script>
-<script src="/assets/agent-country.js?v=d01804d8"></script>
+<script src="/assets/agent-country.js?v=2ea8b4a1"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
 <script src="/assets/schemas.js?v=3f70df87"></script>
@@ -136,7 +136,7 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <script src="/assets/hub-nav.js?v=b4fd698d"></script>
+  <script src="/assets/hub-nav.js?v=047e8200"></script>
   <script src="/assets/brand-row.js?v=ea371f55"></script>
   <script>
     window.HubNav.mount("hubNavMount", {});
@@ -874,7 +874,7 @@ html[data-theme="light"] {
           const attachmentButtons = fileIds.length ? `
             <div class="thread-summary-attachments">
               ${fileIds.map((fid, i) => `
-                <div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="ticket-attachment-${i + 1}">
+                <div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="ticket-attachment-${i + 1}" data-attachment-country="${escapeAttr(t.country || "")}">
                   <div class="inline-attach-loading">Loading attachment…</div>
                 </div>
               `).join("")}
@@ -1358,11 +1358,11 @@ html[data-theme="light"] {
       const attachTag = m.hasAttachment
         ? (m.attachmentFileIds && m.attachmentFileIds.length > 1
             ? `<div class="msg-multi-attach">${m.attachmentFileIds.map((fid, i) => `
-                <div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="${escapeAttr((m.attachmentNames && m.attachmentNames[i]) || `attachment-${i + 1}`)}">
+                <div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="${escapeAttr((m.attachmentNames && m.attachmentNames[i]) || `attachment-${i + 1}`)}" data-attachment-country="${escapeAttr((selectedThread && selectedThread.country) || "")}">
                   <div class="inline-attach-loading">Loading attachment…</div>
                 </div>`).join("")}</div>`
             : (m.attachmentFileId
-                ? `<div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(m.attachmentFileId)}" data-attachment-name="${escapeAttr(m.attachmentName || "attachment")}"><div class="inline-attach-loading">Loading attachment…</div></div>`
+                ? `<div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(m.attachmentFileId)}" data-attachment-name="${escapeAttr(m.attachmentName || "attachment")}" data-attachment-country="${escapeAttr((selectedThread && selectedThread.country) || "")}"><div class="inline-attach-loading">Loading attachment…</div></div>`
                 : '<span class="msg-attach-tag" title="Sent before this dashboard could look attachments back up — check the Telegram group for it.">📎 attachment</span>'))
         : "";
       return `
@@ -1684,7 +1684,7 @@ html[data-theme="light"] {
       const carriedFileIds = source.attachmentFileIds || [];
       const carriedWrap = overlay.querySelector("#fwdCarriedAttachments");
       carriedWrap.innerHTML = carriedFileIds.length
-        ? carriedFileIds.map((fid, i) => `<div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="carried-${i + 1}"><div class="inline-attach-loading">Loading…</div></div>`).join("")
+        ? carriedFileIds.map((fid, i) => `<div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="carried-${i + 1}" data-attachment-country="${escapeAttr(source.country || "")}"><div class="inline-attach-loading">Loading…</div></div>`).join("")
         : `<p style="font-size:12.5px; color:var(--ink-soft); margin:4px 0 0;">This ticket has no attachments to carry over.</p>`;
       loadInlineAttachments();
 
@@ -1878,7 +1878,14 @@ html[data-theme="light"] {
           const r = await authFetch("/api/forward", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sourceThreadId: source.id, targetModule: targetModule.id, fields, fieldMap, reporter, newAttachments }),
+            // MERGED (2026-08-21) — sourceCountry was required server-
+            // side (forward.js) but never actually sent here — a real
+            // pre-existing bug this pass found (Generate & Send has been
+            // unconditionally failing with a country-authorization error
+            // the whole time, not something this pass introduced).
+            // `source` already carries `.country` (see GET /api/threads'
+            // own comment on why every thread is tagged with it).
+            body: JSON.stringify({ sourceThreadId: source.id, sourceCountry: source.country, targetModule: targetModule.id, fields, fieldMap, reporter, newAttachments }),
           });
           res = await r.json();
         } catch {
@@ -2039,10 +2046,22 @@ html[data-theme="light"] {
     // at once) share one fetch instead of firing two.
     const attachmentCache = new Map(); // fileId -> Promise<{url, type}>
 
-    function getAttachmentUrl(fileId, name) {
-      if (!attachmentCache.has(fileId)) {
-        attachmentCache.set(fileId, (async () => {
-          const qs = name ? `?name=${encodeURIComponent(name)}` : "";
+    function getAttachmentUrl(fileId, name, country) {
+      // MERGED (2026-08-21) — cache key now includes country: a
+      // Telegram file_id is only ever resolvable by the SAME bot that
+      // originally received it (Telegram scopes file_ids per-bot), so
+      // the request MUST tell the server which country's bot token to
+      // use — this endpoint had no way to know that at all before this
+      // pass (real bug: viewing ANY ticket attachment has been broken
+      // since the single global TELEGRAM_BOT_TOKEN binding was removed
+      // in the merge, not something this specific pass introduced).
+      const cacheKey = `${country || ""}:${fileId}`;
+      if (!attachmentCache.has(cacheKey)) {
+        attachmentCache.set(cacheKey, (async () => {
+          const params = new URLSearchParams();
+          if (name) params.set("name", name);
+          if (country) params.set("country", country);
+          const qs = params.toString() ? `?${params.toString()}` : "";
           const res = await authFetch(`/api/attachment/${encodeURIComponent(fileId)}${qs}`);
           if (!res.ok) {
             const msg = await res.text().catch(() => "");
@@ -2060,7 +2079,7 @@ html[data-theme="light"] {
           return { url: URL.createObjectURL(blob), type };
         })());
       }
-      return attachmentCache.get(fileId);
+      return attachmentCache.get(cacheKey);
     }
 
     // Fills every not-yet-loaded ".inline-attach-slot" on the page (the
@@ -2072,8 +2091,9 @@ html[data-theme="light"] {
       document.querySelectorAll(".inline-attach-slot[data-attachment-file]:not([data-filled])").forEach((slot) => {
         const fileId = slot.dataset.attachmentFile;
         const name = slot.dataset.attachmentName || "attachment";
+        const country = slot.dataset.attachmentCountry || (selectedThread && selectedThread.country) || "";
         slot.setAttribute("data-filled", "1"); // mark now so a poll landing mid-fetch doesn't double-trigger
-        getAttachmentUrl(fileId, name).then(({ url, type }) => {
+        getAttachmentUrl(fileId, name, country).then(({ url, type }) => {
           if (!document.body.contains(slot)) return; // a newer poll already replaced this DOM before we resolved
           if (type.startsWith("video/")) {
             slot.innerHTML = `<video src="${url}" controls class="inline-attach-media"></video>`;
@@ -2109,7 +2129,7 @@ html[data-theme="light"] {
           // lightbox, for a closer look — small bonus on top of what
           // was actually asked for, reuses the cache so it's instant.
           const media = slot.querySelector("img.inline-attach-media, video.inline-attach-media");
-          if (media) media.addEventListener("click", () => viewAttachment(fileId, name));
+          if (media) media.addEventListener("click", () => viewAttachment(fileId, name, country));
         }).catch((err) => {
           if (!document.body.contains(slot)) return;
           slot.innerHTML = `<div class="inline-attach-error">⚠️ Couldn't load this attachment.</div>`;
@@ -2117,11 +2137,11 @@ html[data-theme="light"] {
       });
     }
 
-    async function viewAttachment(fileId, name) {
+    async function viewAttachment(fileId, name, country) {
       attachLightbox.classList.add("is-open");
       attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Loading…</div>`;
       try {
-        const { url, type } = await getAttachmentUrl(fileId, name);
+        const { url, type } = await getAttachmentUrl(fileId, name, country || (selectedThread && selectedThread.country));
         if (type.startsWith("video/")) {
           attachLightboxBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
         } else if (type.startsWith("image/")) {

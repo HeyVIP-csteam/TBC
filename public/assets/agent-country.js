@@ -207,5 +207,26 @@
     renderSwitcher: renderSwitcher,
     ALL_COUNTRIES: ALL_COUNTRIES,
     isAll: function (country) { return country === ALL_COUNTRIES; },
+    // MERGED (2026-08-21) — real gap this closes: allowedCountries has
+    // NO "missing field = unrestricted" backfill server-side (see
+    // countryAccess.js's canSeeCountry — deliberately different from
+    // canSeeBrand/canSeeModule, which DO backfill), but this file's own
+    // getAllowedCountries() above DOES show every country as a switcher
+    // option for such an account (so the switcher itself isn't hidden
+    // for an account that hasn't been migrated yet — see that
+    // function's comment for why bricking the switcher entirely would
+    // be worse). The result: an account with allowedCountries never
+    // explicitly set can SELECT a country in the switcher that the
+    // server then 403s on ("Not authorized for that country.") — a real
+    // bug report from the business owner. Rather than remove the
+    // switcher's optimism (which would leave such an account with no
+    // switcher at all, and no way to reach Account Management's country
+    // checkbox to self-fix), this turns that one specific server error
+    // into an actionable message wherever it's displayed — see the call
+    // sites in announcements.html/index.html's Betting Resources Links.
+    explainCountryAuthError: function (message) {
+      if (message !== "Not authorized for that country.") return message;
+      return "Not authorized for that country — your account's country access was never explicitly set. Go to Account Management, edit your own account, and check \"Can see all countries\" (or the specific countries you need), then try again.";
+    },
   };
 })();

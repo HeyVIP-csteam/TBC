@@ -413,6 +413,19 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
   gap: 10px;
   width: max-content;
   animation: brandRowScroll 26s linear infinite;
+  /* MERGED (2026-08-21) — hints the browser to put this element on its
+     own compositor layer, so its transform animation keeps running
+     smoothly on the GPU even when the rest of the page is busy (e.g.
+     the 15s/30s background polls this page already had, now competing
+     with more JS overall since the multi-country merge) — a real
+     periodic-stutter report from the business owner prompted this;
+     transform-only animations SHOULD already be compositor-only in
+     modern browsers, but this makes it explicit rather than relying on
+     the browser to infer it, which is the standard fix for exactly
+     this symptom. Cheap for a single always-visible element like this
+     one — NOT something to sprinkle on many elements at once, since
+     each will-change layer costs GPU memory. */
+  will-change: transform;
 }
 .brand-row:hover .brand-row-track { animation-play-state: paused; }
 @keyframes brandRowScroll {
@@ -589,6 +602,16 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
   color: var(--ink);
 }
 .agent-profile-module-check input[disabled] { cursor: not-allowed; }
+/* MERGED (2026-08-21) — "botToken" row when the viewer isn't Owner —
+   see adminSectionChecksHtml()'s own comment for why it's disabled-not-
+   hidden. Slightly dimmed + a small badge, same visual language as
+   "disabled" elsewhere in this app rather than a new pattern. */
+.ap-force-disabled { opacity: 0.55; }
+.ap-owner-only-tag {
+  font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--ink-soft); background: var(--field-bg); border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 999px; margin-left: 2px;
+}
 
 /* ---- TG Group / Channel (live-editable Telegram routing) ---- */
 .tgroute-layout { display: flex; gap: 14px; max-height: 78vh; }
@@ -615,6 +638,15 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
 .tgroute-brand.tgroute-security.selected {
   border-color: var(--accent-gold);
 }
+/* MERGED (2026-08-21) — "All Countries" mode's country group headers in
+   the brand sidebar (see groupedBrandListHtml() in index.html) — a
+   plain label, not a clickable pill, sitting between groups of brand
+   items so a mixed-country list is scannable instead of one flat blob. */
+.tgroute-brand-group-label {
+  font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ink-soft); opacity: 0.65; padding: 10px 4px 2px;
+}
+.tgroute-brand-group-label:first-child { padding-top: 0; }
 .tgroute-modules { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .tgroute-row {
   border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px 12px;
@@ -654,6 +686,10 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
 @media (max-width: 720px) {
   .tgroute-layout { flex-direction: column; max-height: 70vh; }
   .tgroute-brands { width: 100%; flex-direction: row; flex-wrap: wrap; }
+  /* Force the group label onto its own full-width line in this wrapped
+     row layout — without this it would just size to its text content
+     and sit inline between brand pills like just another pill. */
+  .tgroute-brand-group-label { flex-basis: 100%; }
   .tgroute-fields { flex-wrap: wrap; }
   .tgroute-row-actions { width: 100%; justify-content: flex-end; }
 }

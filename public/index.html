@@ -35,14 +35,14 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=ea9e36f7" />
+<link rel="stylesheet" href="/assets/style.css?v=89fadda5" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
 <script src="/assets/authguard.js?v=101bd636"></script>
 <script src="/assets/countries.js?v=78bdc076"></script>
 <script src="/assets/country-modules.js?v=7caef210"></script>
-<script src="/assets/agent-country.js?v=d01804d8"></script>
+<script src="/assets/agent-country.js?v=2ea8b4a1"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
 </head>
@@ -188,6 +188,7 @@ html[data-theme="light"] {
           <div class="sidebar-subitem" id="subIpBettingLinks" style="--sub-accent:#c8912f33; display:none;"><span class="sub-icon">🔗</span> Betting Resources Links</div>
           <div class="sidebar-subitem" id="subIpWebLink" style="--sub-accent:#f3c46333; display:none;"><span class="sub-icon">🌐</span> Web Link</div>
           <div class="sidebar-subitem" id="subIpPromoSheet" style="--sub-accent:#f472b633; display:none;"><span class="sub-icon">📋</span> Promo Code Gsheet</div>
+          <div class="sidebar-subitem" id="subIpBotToken" style="--sub-accent:#ef444433; display:none;"><span class="sub-icon">🔐</span> Bot Token Settings</div>
         </div>
       </div>
 
@@ -677,8 +678,18 @@ html[data-theme="light"] {
       { id: "bettingLinks", name: "Betting Resources Links", icon: "🔗" },
       { id: "webLink", name: "Web Link", icon: "🌐" },
       { id: "promoCodeSheet", name: "Promo Code Gsheet", icon: "📋" },
+      // MERGED (2026-08-21) — "botToken" always appears in this list
+      // (never hidden — see adminSectionChecksHtml()'s own comment for
+      // why), but only an Owner-viewer can actually toggle it; anyone
+      // else sees it rendered disabled, reflecting the target's real
+      // current state so an unrelated save can't accidentally revoke
+      // it. Actual enforcement is server-side (functions/api/admin/
+      // accounts.js) regardless of what this UI does — this disabling
+      // is just so a non-Owner editor isn't shown a checkbox that would
+      // silently fail if they tried to check it.
+      { id: "botToken", name: "Bot Token Settings", icon: "🔐" },
     ];
-    const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet"];
+    const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet", "botToken"];
     // Must match defaultSectionsForRank()/defaultEditForRank() in
     // functions/_shared/accounts.js exactly:
     //   agent -> nothing, senior -> createAccount,
@@ -698,10 +709,22 @@ html[data-theme="light"] {
     // Generic form — takes an arbitrary account object, used both for
     // "me" (authInfo) and for rendering someone ELSE's checkboxes in the
     // Agent Profile modal (see openAgentProfileModal).
+    //
+    // MERGED (2026-08-21) — mirrors _shared/accounts.js's
+    // OWNER_ONLY_BY_DEFAULT_SECTIONS exception: "botToken" must NOT be
+    // implied by a rank-tiered "all" default the way every other
+    // section is — only an explicit array naming it counts (Owner is
+    // already handled above this check). Keep this list in sync with
+    // the server file's own constant of the same name if it ever grows
+    // past just "botToken".
+    const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken"];
     function accountCanSeeAdminSection(acc, sectionId) {
       if (!acc) return false;
       if (acc.role === "owner") return true;
       const sections = acc.allowedAdminSections !== undefined ? acc.allowedAdminSections : defaultSectionsForRank(ROLE_RANK[acc.role] ?? 0);
+      if (OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(sectionId)) {
+        return Array.isArray(sections) && sections.includes(sectionId);
+      }
       if (sections === "all") return true;
       return Array.isArray(sections) && sections.includes(sectionId);
     }
@@ -710,6 +733,9 @@ html[data-theme="light"] {
       if (acc.role === "owner") return true;
       if (!accountCanSeeAdminSection(acc, sectionId)) return false;
       const edit = acc.adminSectionEditAccess !== undefined ? acc.adminSectionEditAccess : defaultEditForRank(ROLE_RANK[acc.role] ?? 0);
+      if (OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(sectionId)) {
+        return Array.isArray(edit) && edit.includes(sectionId);
+      }
       if (edit === "all") return true;
       return Array.isArray(edit) && edit.includes(sectionId);
     }
@@ -760,6 +786,7 @@ html[data-theme="light"] {
       document.getElementById("subIpBettingLinks").style.display = canSeeAdminSection("bettingLinks") ? "flex" : "none";
       document.getElementById("subIpWebLink").style.display = canSeeAdminSection("webLink") ? "flex" : "none";
       document.getElementById("subIpPromoSheet").style.display = canSeeAdminSection("promoCodeSheet") ? "flex" : "none";
+      document.getElementById("subIpBotToken").style.display = canSeeAdminSection("botToken") ? "flex" : "none";
 
       const ipToggle = document.getElementById("integrationPortalToggle");
       const ipSubitems = document.getElementById("integrationPortalSubitems");
@@ -774,6 +801,7 @@ html[data-theme="light"] {
       document.getElementById("subIpBettingLinks").addEventListener("click", () => openAcctModal("bettinglinks"));
       document.getElementById("subIpWebLink").addEventListener("click", () => openAcctModal("weblink"));
       document.getElementById("subIpPromoSheet").addEventListener("click", () => openAcctModal("promosheet"));
+      document.getElementById("subIpBotToken").addEventListener("click", () => openAcctModal("bottoken"));
     }
     document.getElementById("acctProfileRoleFilter").addEventListener("change", () => renderAgentProfileTable());
     document.getElementById("acctProfileCountryFilter").addEventListener("change", () => renderAgentProfileTable());
@@ -848,7 +876,7 @@ html[data-theme="light"] {
       acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
       acctBackdrop.classList.add("is-open");
       const modalEl = acctBackdrop.querySelector(".edit-modal");
-      modalEl.classList.toggle("wide", mode === "profile" || mode === "tgroutes" || mode === "depositsheets" || mode === "settings" || mode === "whitelist" || mode === "bettinglinks" || mode === "weblink" || mode === "promosheet" || mode === "issuesheets");
+      modalEl.classList.toggle("wide", mode === "profile" || mode === "tgroutes" || mode === "depositsheets" || mode === "settings" || mode === "whitelist" || mode === "bettinglinks" || mode === "weblink" || mode === "promosheet" || mode === "issuesheets" || mode === "bottoken");
       // "profile", "tgroutes", "depositsheets", "settings", and
       // "whitelist" (IP Access) all use per-row/per-action inline
       // buttons instead of one global footer Save — too many
@@ -862,7 +890,7 @@ html[data-theme="light"] {
       // in acctBettingLinksData for the whole time the modal is open
       // (see syncBettingLinksFormIntoData() below) so switching the left
       // category list doesn't discard whichever side wasn't visible.
-      const showFooterSave = mode !== "profile" && mode !== "tgroutes" && mode !== "depositsheets" && mode !== "settings" && mode !== "whitelist" && mode !== "weblink" && mode !== "promosheet" && mode !== "issuesheets";
+      const showFooterSave = mode !== "profile" && mode !== "tgroutes" && mode !== "depositsheets" && mode !== "settings" && mode !== "whitelist" && mode !== "weblink" && mode !== "promosheet" && mode !== "issuesheets" && mode !== "bottoken";
       document.getElementById("acctModalSave").style.display = showFooterSave ? "" : "none";
       document.getElementById("acctModalActions").style.display = showFooterSave ? "" : "none";
       const roleFilterEl = document.getElementById("acctProfileRoleFilter");
@@ -989,6 +1017,11 @@ html[data-theme="light"] {
         acctTitle.textContent = "Promo Code Gsheet";
         await loadPromoSheet();
       }
+
+      if (mode === "bottoken") {
+        acctTitle.textContent = "Bot Token Settings";
+        await loadBotTokenPanel();
+      }
     }
 
     // ---- TG Group / Channel (live-editable Telegram routing) ----
@@ -1005,6 +1038,34 @@ html[data-theme="light"] {
     // functions/api/admin/routes.js exactly.
     const SECURITY_ROW_ID = "_security";
     const SECURITY_MODULE_ID = "alerts";
+
+    // MERGED (2026-08-21) — shared by all 4 Integration Portal brand
+    // sidebars (TG Group/Channel, Issue Submission Gsheet, Deposit
+    // Sheet Link, Web Link). In "All Countries" mode, a flat list of
+    // 14+ brands with same-named entries from different countries next
+    // to each other was genuinely hard to scan (business owner's own
+    // words: "避免我看了全部混合头晕" — avoid getting dizzy from
+    // everything mixed together). Groups by country with a small
+    // sticky-ish label header between groups, in COUNTRY_CODES order
+    // (stable, not alphabetical-by-brand-name) — matches the order the
+    // country switcher itself lists them in. A single specific country
+    // selected needs no headers at all (nothing to group), so this only
+    // adds them when `brands` actually spans more than one country.
+    function groupedBrandListHtml(brands, selectedId) {
+      const countriesPresent = [...new Set(brands.map((b) => b.country))];
+      const itemHtml = (b) => `<div class="tgroute-brand${b.id === selectedId ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>`;
+      if (countriesPresent.length <= 1) {
+        return brands.map(itemHtml).join("");
+      }
+      const codes = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : countriesPresent);
+      return codes
+        .filter((code) => countriesPresent.includes(code))
+        .map((code) => {
+          const label = (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? COUNTRIES[code].name : code;
+          const groupItems = brands.filter((b) => b.country === code).map(itemHtml).join("");
+          return `<div class="tgroute-brand-group-label">${acctEsc(label)} (${acctEsc(code)})</div>${groupItems}`;
+        }).join("");
+    }
 
     async function loadTgRoutes() {
       const res = await window.AgentAuth.authFetch("/api/admin/routes");
@@ -1051,9 +1112,7 @@ html[data-theme="light"] {
       const canEditRoutes = canEditAdminSection("tgRoutes");
       const roAttr = canEditRoutes ? "" : "disabled";
 
-      const brandListHtml = brands.map((b) => `
-        <div class="tgroute-brand${b.id === acctRoutesSelectedBrand ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>
-      `).join("") + `
+      const brandListHtml = groupedBrandListHtml(brands, acctRoutesSelectedBrand) + `
         <div class="tgroute-brand tgroute-security${isSecuritySelected ? " selected" : ""}" data-brand="${SECURITY_ROW_ID}">🔒 Security Alerts</div>
       `;
 
@@ -1244,9 +1303,7 @@ html[data-theme="light"] {
       const brands = getCountryScopedBrands(acctIssueSheetsData.brands);
       const canEdit = canEditAdminSection("issueSubmissionSheet");
 
-      const brandListHtml = brands.map((b) => `
-        <div class="tgroute-brand${b.id === acctIssueSheetsSelectedBrand ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>
-      `).join("");
+      const brandListHtml = groupedBrandListHtml(brands, acctIssueSheetsSelectedBrand);
 
       const moduleRowsHtml = modules.map((m) => issueSheetRowHtml({
         icon: m.emoji, name: m.name, key: m.id, canEdit,
@@ -1397,9 +1454,7 @@ html[data-theme="light"] {
       const canEdit = canEditAdminSection("depositSheets");
       const roAttr = canEdit ? "" : "disabled";
 
-      const brandListHtml = brands.map((b) => `
-        <div class="tgroute-brand${b.id === acctDepositSheetsSelectedBrand ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>
-      `).join("");
+      const brandListHtml = groupedBrandListHtml(brands, acctDepositSheetsSelectedBrand);
 
       const slot = sheets[acctDepositSheetsSelectedBrand] || { sheetId: "", tabNames: [], isOverride: false };
       const bkp = backup[acctDepositSheetsSelectedBrand] || { thisMonth: null, lastMonth: null };
@@ -1571,9 +1626,7 @@ html[data-theme="light"] {
       const canEdit = canEditAdminSection("webLink");
       const roAttr = canEdit ? "" : "disabled";
 
-      const brandListHtml = brands.map((b) => `
-        <div class="tgroute-brand${b.id === acctWebLinkSelectedBrand ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>
-      `).join("");
+      const brandListHtml = groupedBrandListHtml(brands, acctWebLinkSelectedBrand);
 
       const entry = brandConfig[acctWebLinkSelectedBrand] || {};
       const hasLink = !!entry.link;
@@ -1712,6 +1765,100 @@ html[data-theme="light"] {
       renderPromoSheet();
     }
 
+    // ---- Bot Token Settings (2026-08-21) — per-country, WRITE-ONLY.
+    // See _shared/botTokenOverride.js's file header for the full design
+    // reasoning (this is a real Telegram credential, not routing
+    // metadata like every other Integration Portal panel — the status
+    // endpoint below NEVER returns the actual token, only whether one's
+    // configured + its last 4 characters). Owner-only by default (see
+    // the "botToken" section note in _shared/accounts.js) — this panel
+    // itself doesn't need to re-check that client-side beyond the
+    // normal canEditAdminSection() gate every other panel already uses;
+    // the server enforces the stricter Owner-only rule independently.
+    let acctBotTokenStatus = null; // { configured, last4, updatedAt, updatedBy }
+
+    async function loadBotTokenPanel() {
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      if (!country || isAll) {
+        acctBody.innerHTML = `<p class="edit-modal-note err">Bot Token Settings are per-country — pick a specific country from the switcher (top right), not "All Countries".</p>`;
+        return;
+      }
+      acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
+      const res = await window.AgentAuth.authFetch(`/api/admin/bot-token?country=${encodeURIComponent(country)}`);
+      const data = await res.json();
+      if (!data.ok) {
+        acctBody.innerHTML = `<p class="edit-modal-note err">${acctEsc(data.error || "Failed to load.")}</p>`;
+        return;
+      }
+      acctBotTokenStatus = data;
+      renderBotTokenPanel(country);
+    }
+
+    function renderBotTokenPanel(country) {
+      if (!acctBotTokenStatus) return;
+      const s = acctBotTokenStatus;
+      const canEdit = canEditAdminSection("botToken");
+      const roAttr = canEdit ? "" : "disabled";
+      const countryName = (window.COUNTRIES && window.COUNTRIES[country]) ? window.COUNTRIES[country].name : country;
+
+      const statusLine = s.configured
+        ? `<span class="route-tag custom">custom</span> Configured — ending in <code>••${acctEsc(s.last4 || "????")}</code>${s.updatedAt ? ` · last changed ${acctEsc(new Date(s.updatedAt).toLocaleString())}${s.updatedBy ? ` by ${acctEsc(s.updatedBy)}` : ""}` : ""}`
+        : `<span class="route-tag">default</span> Not configured here — using the ${acctEsc(country)}'s TELEGRAM_BOT_TOKEN_${acctEsc(country)} Cloudflare secret.`;
+
+      acctBody.innerHTML = `
+        <div class="tgroute-modules">
+          <div class="tgroute-row">
+            <div class="tgroute-mod-name">🔐 ${acctEsc(countryName)} (${acctEsc(country)}) Bot Token</div>
+            <p class="edit-modal-note">${statusLine}</p>
+            <p class="edit-modal-note" style="opacity:0.75;">This is a real credential — whoever holds it can send/receive messages as this Telegram bot. The field below is write-only: pasting a new token and saving overwrites it immediately; the current value is never shown here, even to you, once saved.</p>
+            <div class="tgroute-fields" style="flex-direction:column; align-items:stretch;">
+              <input type="password" id="botTokenInput" placeholder="Paste a new Bot Token here to replace it — e.g. 123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ${roAttr} autocomplete="off" style="width:100%;" />
+              ${canEdit ? `<div class="tgroute-row-actions" style="margin-top:8px;">
+                <button type="button" class="tgroute-action-btn" id="botTokenSave">Save new token</button>
+                ${s.configured ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary" id="botTokenClear">Revert to Cloudflare secret</button>' : ""}
+              </div>` : ""}
+            </div>
+          </div>
+        </div>
+        ${canEdit ? "" : '<p class="edit-modal-note">View only.</p>'}`;
+
+      document.getElementById("botTokenSave")?.addEventListener("click", () => saveBotToken(country));
+      document.getElementById("botTokenClear")?.addEventListener("click", () => clearBotToken(country));
+    }
+
+    async function saveBotToken(country) {
+      const input = document.getElementById("botTokenInput");
+      const token = input.value.trim();
+      if (!token) return setAcctNote("Paste a token before saving.", "err");
+      if (!confirm(`Overwrite ${country}'s Bot Token right now? Every message this hub sends for ${country} will immediately start using the new one — make sure it's correct.`)) return;
+      setAcctNote("Saving…");
+      const res = await window.AgentAuth.authFetch("/api/admin/bot-token", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", country, token }),
+      });
+      const data = await res.json();
+      if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
+      acctBotTokenStatus = data;
+      input.value = ""; // never leave the pasted value sitting in the DOM after a successful save
+      setAcctNote("Bot Token updated.", "ok");
+      renderBotTokenPanel(country);
+    }
+
+    async function clearBotToken(country) {
+      if (!confirm(`Revert ${country} back to its Cloudflare secret default? The custom token you saved here will stop being used immediately.`)) return;
+      setAcctNote("Reverting…");
+      const res = await window.AgentAuth.authFetch("/api/admin/bot-token", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clear", country }),
+      });
+      const data = await res.json();
+      if (!data.ok) return setAcctNote(data.error || "Failed.", "err");
+      acctBotTokenStatus = data;
+      setAcctNote("Reverted to the Cloudflare secret default.", "ok");
+      renderBotTokenPanel(country);
+    }
+
     // ---- Settings ----
     // Used to also hold a Maintenance/Coming soon toggle per module
     // (backed by /api/admin/feature-status) — removed 2026-08 per direct
@@ -1728,14 +1875,29 @@ html[data-theme="light"] {
     // modal.
     function renderSettingsPanel() {
       const canEdit = canEditAdminSection("settings");
+      // MERGED (2026-08-21) — both sections below are per-country
+      // (mention-backfill.js explicitly runs one country per call, no
+      // fan-out — see that file's own header; announcement-settings.js
+      // needed the same country param the Betting Resources Links loader
+      // above does). Neither call ever actually sent a country before
+      // this pass — a real pre-existing bug (not something the country
+      // switcher introduced) that meant BOTH of these silently failed
+      // with a "not authorized" error the whole time. Now both key off
+      // the switcher's current selection, with a clear label showing
+      // which country "Run backfill" will actually scan.
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      const countryLabel = country && !isAll ? ((window.COUNTRIES && window.COUNTRIES[country]) ? window.COUNTRIES[country].name : country) : null;
+      const backfillDisabled = !canEdit || !countryLabel;
       acctBody.innerHTML = `
         <div class="mention-backfill-row">
           <div class="mention-backfill-copy">
             <div class="mention-backfill-title">@ Tag Username — historical backfill</div>
             <p class="edit-modal-note">One-time scan of every existing ticket so agents who replied before this feature shipped are also suggested when typing @ in TG Reply Threads. Safe to run more than once. Don't close this window or refresh while it's running.</p>
+            ${countryLabel ? "" : '<p class="edit-modal-note err">Pick a specific country from the switcher (top right) — this runs one country at a time.</p>'}
           </div>
           <div class="mention-backfill-action">
-            <button type="button" class="tgroute-action-btn" id="mentionBackfillBtn" ${canEdit ? "" : "disabled"}>Run backfill</button>
+            <button type="button" class="tgroute-action-btn" id="mentionBackfillBtn" ${backfillDisabled ? "disabled" : ""}>Run backfill${countryLabel ? ` — ${acctEsc(countryLabel)}` : ""}</button>
             <p class="edit-modal-note" id="mentionBackfillStatus"></p>
           </div>
         </div>
@@ -1780,6 +1942,12 @@ html[data-theme="light"] {
 
     async function runMentionBackfill(btn) {
       const statusEl = document.getElementById("mentionBackfillStatus");
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      if (!country || isAll) {
+        showToast("Pick a specific country from the switcher (top right) first.", "err");
+        return;
+      }
       btn.disabled = true;
       let cursor = null;
       let total = 0;
@@ -1789,7 +1957,7 @@ html[data-theme="light"] {
         for (;;) {
           const res = await window.AgentAuth.authFetch("/api/admin/mention-backfill", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cursor }),
+            body: JSON.stringify({ country, cursor }),
           });
           const data = await res.json();
           if (!data.ok) {
@@ -1817,8 +1985,21 @@ html[data-theme="light"] {
       const unitEl = document.getElementById("rotateUnit");
       const statusEl = document.getElementById("rotateStatus");
       if (!amountEl) return;
+      // MERGED (2026-08-21) — announcement-settings.js has required
+      // `country` since Announcements became per-country content (same
+      // pattern as the Betting Resources Links loader above), but this
+      // call never sent one — a real pre-existing bug this pass found,
+      // not something introduced by the country switcher itself.
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      if (!country || isAll) {
+        statusEl.textContent = `Pick a specific country from the switcher (top right) — this setting is per-country.`;
+        statusEl.className = "edit-modal-note err";
+        document.getElementById("rotateSaveBtn")?.addEventListener("click", saveAnnounceRotateSetting);
+        return;
+      }
       try {
-        const res = await window.AgentAuth.authFetch("/api/admin/announcement-settings");
+        const res = await window.AgentAuth.authFetch(`/api/admin/announcement-settings?country=${encodeURIComponent(country)}`);
         const data = await res.json();
         if (!data.ok) { statusEl.textContent = data.error || "Failed to load."; statusEl.className = "edit-modal-note err"; return; }
         const ms = data.rotateIntervalMs;
@@ -1845,10 +2026,16 @@ html[data-theme="light"] {
         showToast("Enter a number greater than 0.", "err");
         return;
       }
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      if (!country || isAll) {
+        showToast(`Pick a specific country from the switcher (top right) before saving.`, "err");
+        return;
+      }
       const rotateIntervalMs = Math.round(amount * (unit === "minutes" ? 60000 : 1000));
       const res = await window.AgentAuth.authFetch("/api/admin/announcement-settings", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rotateIntervalMs }),
+        body: JSON.stringify({ country, rotateIntervalMs }),
       });
       const data = await res.json();
       if (!data.ok) { showToast(data.error || "Save failed.", "err"); return; }
@@ -2136,17 +2323,25 @@ html[data-theme="light"] {
       function adminSectionChecksHtml(list) {
         return list.map((s) => {
           const isChecked = accountCanSeeAdminSection(a, s.id);
+          // MERGED (2026-08-21) — "botToken" is the one section in
+          // either list that a non-Owner viewer can never toggle, even
+          // if they otherwise have full canManageOthersAdminAccess —
+          // see this section's own note where it's defined in
+          // INTEGRATION_PORTAL_SECTIONS_LIST. Rendered disabled (not
+          // hidden) so it still reflects the target's real current
+          // state and round-trips correctly on an unrelated save.
+          const forceDisabled = s.id === "botToken" && authInfo?.role !== "owner";
           const checkboxHtml = `
-          <label class="agent-profile-module-check">
-            <input type="checkbox" class="ap-admin-section-checkbox" value="${acctEsc(s.id)}" ${isChecked ? "checked" : ""} />
-            ${s.icon} ${acctEsc(s.name)}
+          <label class="agent-profile-module-check${forceDisabled ? " ap-force-disabled" : ""}">
+            <input type="checkbox" class="ap-admin-section-checkbox" value="${acctEsc(s.id)}" ${isChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} />
+            ${s.icon} ${acctEsc(s.name)}${forceDisabled ? ' <span class="ap-owner-only-tag">Owner only</span>' : ""}
           </label>`;
           if (!EDITABLE_ADMIN_SECTIONS.includes(s.id)) return checkboxHtml;
           const isEditChecked = accountCanEditAdminSection(a, s.id);
           return checkboxHtml + `
           <div class="agent-profile-edit-level-row" data-for-section="${acctEsc(s.id)}" style="${isChecked ? "" : "display:none;"}">
-            <label><input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="view" ${isEditChecked ? "" : "checked"} /> View only</label>
-            <label><input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="edit" ${isEditChecked ? "checked" : ""} /> Can Edit</label>
+            <label><input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="view" ${isEditChecked ? "" : "checked"} ${forceDisabled ? "disabled" : ""} /> View only</label>
+            <label><input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="edit" ${isEditChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} /> Can Edit</label>
           </div>`;
         }).join("");
       }
@@ -3299,6 +3494,7 @@ html[data-theme="light"] {
         // Fixed alongside adding "weblink" for the new Web Link panel.
         bettinglinks: "bettingLinks", weblink: "webLink", promosheet: "promoCodeSheet",
         issuesheets: "issueSubmissionSheet",
+        bottoken: "botToken",
         reset: null, // no permission gate, same as the Reset Password sidebar item
       };
       if (!(mode in modeToSection)) return;

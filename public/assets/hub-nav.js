@@ -37,6 +37,15 @@
     if (!acc) return false;
     if (acc.role === "owner") return true;
     const sections = acc.allowedAdminSections !== undefined ? acc.allowedAdminSections : defaultSectionsForRank(ROLE_RANK[acc.role] ?? 0);
+    // MERGED (2026-08-21) — mirrors _shared/accounts.js's
+    // OWNER_ONLY_BY_DEFAULT_SECTIONS exception: "botToken" must NOT be
+    // implied by a rank-tiered "all" default the way every other
+    // section is — see index.html's own copy of this same fix for the
+    // fuller reasoning (this file and index.html each keep their own
+    // client-side replica of the server's canSeeAdminSection logic).
+    if (sectionId === "botToken") {
+      return Array.isArray(sections) && sections.includes(sectionId);
+    }
     if (sections === "all") return true;
     return Array.isArray(sections) && sections.includes(sectionId);
   }
@@ -84,6 +93,7 @@
     { sectionId: "bettingLinks", mode: "bettinglinks", label: "Betting Resources Links", icon: "🔗", accent: "#c8912f33" },
     { sectionId: "webLink", mode: "weblink", label: "Web Link", icon: "🌐", accent: "#f3c46333" },
     { sectionId: "promoCodeSheet", mode: "promosheet", label: "Promo Code Gsheet", icon: "📋", accent: "#f472b633" },
+    { sectionId: "botToken", mode: "bottoken", label: "Bot Token Settings", icon: "🔐", accent: "#ef444433" },
   ];
 
   function escapeAttr(s) {
