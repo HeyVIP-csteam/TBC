@@ -19,74 +19,43 @@
  *      until a link is saved via the "Deposit Sheet Link" admin page's
  *      Deposit Backup rows.
  *
- * Column layout confirmed identical to Deposit Issue's own sheet (same
- * A–W layout, same header order) from the real "CXPKR ~ July 2026-BACK-UP"
- * screenshot — reusing search.js's COLS mapping as-is. Each month's sheet
- * has (at least) two tabs, e.g. "Success" and "Trx error" — both go in
- * that month's tabNames, same comma-separated config field Deposit Issue
- * already uses for multi-tab brands like Crickex.
+ * MERGED (2026-08-21) — column layout is now resolved PER COUNTRY (see
+ * _shared/depositColumns.js), not hardcoded to PKR's A–W layout for
+ * everyone. PKR's Deposit Backup layout is confirmed identical to its
+ * Deposit Issue layout (real "CXPKR ~ July 2026-BACK-UP" screenshot);
+ * INR's Deposit Backup layout DIVERGES from its own Deposit Issue
+ * layout starting at column O (see depositColumns.js's file header) —
+ * ported from INR's original project, which already had this file.
  */
 import { getAccessToken } from "../../_shared/googleOAuth.js";
-import { verifyRequest, canSeeBrand } from "../../_shared/accounts.js";
-import { PKR_BRANDS, getDepositBackup } from "../../_shared/depositSheets.js";
+import { verifyRequest, canSeeBrand, canSeeCountry } from "../../_shared/accounts.js";
+import { DEPOSIT_BRANDS, getDepositBackup } from "../../_shared/depositSheets.js";
+import { getBackupColumns } from "../../_shared/depositColumns.js";
 
-// Same column layout as Deposit Issue's search.js — keep these two in
-// sync if a department's sheet is ever reordered (confirmed identical
-// for Deposit Backup from the real screenshot as of this writing).
-const COLS = {
-  transactionId: "A",
-  requestTime: "B",
-  channel: "C",
-  agentNumber: "D",
-  username: "E",
-  date: "F",
-  imageLink: "G",
-  transactionError: "H",
-  statusPG: "I",
-  cartId: "J",
-  reference: "K",
-  cashOutNumber: "L",
-  amount: "M",
-  supportPIC: "N",
-  pg: "O",
-  csPIC: "P",
-  playerContactNo: "Q",
-  statusCS: "R",
-  correctUid: "S",
-  playersCartId: "T",
-  paymentStatus: "U",
-  pytPsd: "V",
-  remark: "W",
-};
-const LAST_COL = "W";
 const MAX_RESULTS = 500; // global cap across This Month + Last Month combined
 
 function normalizeTabName(name) {
   return String(name).normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-// Sheet stores Date (col F, e.g. "2026-06-28") and Request Time (col B,
-// time-only, e.g. "9:28:31") as two separate columns. Combined for
-// display into a single "DD/MM/YYYY HH:MM:SS" string, day-first to match
-// the rest of the hub (Deposit Issue's own sheet uses the same day/month/
-// year convention). Falls back gracefully if either half is missing or
-// isn't in the expected shape — never throws, worst case just shows
-// whatever raw text was in the cell.
-function formatRequestDateTime(dateRaw, timeRaw) {
+// PKR's display format is "Date + Request Time" concatenated as-is;
+// INR's is "Date (YYYY-MM-DD -> DD/MM/YYYY) + Time" combined — same
+// split as deposit-issue/search.js, see that file's comment for why.
+function formatRequestDateTimePKR(dateRaw, requestTimeRaw) {
+  return [dateRaw, requestTimeRaw].filter(Boolean).join(" ");
+}
+function formatRequestDateTimeINR(dateRaw, timeRaw) {
   let d = String(dateRaw || "").trim();
   const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (m) d = `${m[3]}/${m[2]}/${m[1]}`;
   const t = String(timeRaw || "").trim();
-  if (d && t) return `${d} ${t}`;
-  return d || t;
+  return d && t ? `${d} ${t}` : d || t;
 }
 
-// Sortable epoch-ms timestamp built from the same raw Date (col F) +
-// Request Time (col B) values used above — results are sorted newest
-// first before being returned (see bottom of handleSearch). Rows with
-// an unparseable/missing date sort to the very bottom (return 0 —
-// effectively "1970", always older than any real row) rather than
-// throwing or being dropped.
+// Sortable epoch-ms timestamp — same implementation as deposit-issue/
+// search.js (kept duplicated rather than shared, same reasoning as
+// that file: these two search.js's already don't share a module, and a
+// tiny date-math helper isn't worth introducing one just for this).
 function sortTimestamp(dateRaw, timeRaw) {
   const dm = String(dateRaw || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!dm) return 0;
@@ -139,18 +108,21 @@ async function handleSearch({ request, env }) {
   const requestedBrand = ((body && body.brand) || "").trim();
 
   // Unlike Deposit Issue, there's no "fan out across everything" fallback
-  // here at all — searching always requires a specific brand. (~100
-  // brands × up to 2 sheets × up to N tabs each makes an unscoped search
-  // even less viable than Deposit Issue's already-removed "All Brands"
-  // search was.)
+  // here at all — searching always requires a specific brand.
   if (!requestedBrand) {
     return json({ ok: false, error: "Please select a specific brand before searching." }, 400);
   }
-  const brandMeta = PKR_BRANDS.find((b) => b.id === requestedBrand);
+  const brandMeta = DEPOSIT_BRANDS.find((b) => b.id === requestedBrand);
   if (!brandMeta) return json({ ok: false, error: `Unknown brand "${requestedBrand}".` }, 400);
-  if (!canSeeBrand(account, brandMeta.name)) {
+  // Both checks — see deposit-issue/search.js's 2026-08-21 comment for
+  // why brand-only gating isn't enough once two countries share this
+  // endpoint's brand-name space.
+  if (!canSeeCountry(account, brandMeta.country) || !canSeeBrand(account, requestedBrand)) {
     return json({ ok: false, error: "You don't have access to this brand." }, 403);
   }
+
+  const cols = getBackupColumns(brandMeta.country);
+  if (!cols) return json({ ok: false, error: `No known column layout for ${brandMeta.country}.` }, 500);
 
   const queries = raw.split(/[\n,]+/).map((q) => q.trim()).filter(Boolean).map((q) => q.toLowerCase());
   if (!queries.length) return json({ ok: false, error: "No valid search terms." }, 400);
@@ -192,7 +164,7 @@ async function handleSearch({ request, env }) {
 
     for (const { title: tab, gid } of tabsToQuery) {
       if (results.length >= MAX_RESULTS) break;
-      const range = `'${tab.replace(/'/g, "''")}'!A2:${LAST_COL}`;
+      const range = `'${tab.replace(/'/g, "''")}'!A2:${cols.lastCol}`;
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${month.sheetId}/values/${encodeURIComponent(range)}`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
       const data = await res.json();
@@ -203,47 +175,80 @@ async function handleSearch({ request, env }) {
       const rows = data.values || [];
       rows.forEach((row, i) => {
         if (results.length >= MAX_RESULTS) return;
-        const get = (colLetter) => row[colIndex(colLetter)] || "";
-        const transactionId = get(COLS.transactionId);
-        const reference = get(COLS.reference);
-        const username = get(COLS.username);
-        const agentNumber = get(COLS.agentNumber);
-        const haystack = (transactionId + " " + reference + " " + username + " " + agentNumber).toLowerCase();
-        const isMatch = queries.some((q) => haystack.includes(q));
-        if (!isMatch) return;
+        const get = (colLetter) => (colLetter ? row[colIndex(colLetter)] || "" : "");
+
+        let haystack, transactionLabel, requestTimeDisplay, sortTs;
+        if (brandMeta.country === "PKR") {
+          const transactionId = get(cols.transactionId);
+          const reference = get(cols.reference);
+          const username = get(cols.username);
+          const agentNumber = get(cols.agentNumber);
+          haystack = (transactionId + " " + reference + " " + username + " " + agentNumber).toLowerCase();
+          transactionLabel = transactionId;
+          requestTimeDisplay = formatRequestDateTimePKR(get(cols.date), get(cols.requestTime));
+          sortTs = sortTimestamp(get(cols.date), get(cols.requestTime));
+        } else {
+          const pgTid = get(cols.pgTid);
+          const utr = get(cols.utr);
+          const username = get(cols.username);
+          const orderId = get(cols.orderId);
+          haystack = (pgTid + " " + utr + " " + username + " " + orderId).toLowerCase();
+          transactionLabel = pgTid;
+          requestTimeDisplay = formatRequestDateTimeINR(get(cols.date), get(cols.time));
+          sortTs = sortTimestamp(get(cols.date), get(cols.time));
+        }
+        if (!queries.some((q) => haystack.includes(q))) return;
 
         const rowIndex = i + 2;
         results.push({
-          _sortTs: sortTimestamp(get(COLS.date), get(COLS.requestTime)),
+          _sortTs: sortTs,
           brand: requestedBrand,
           brandName: brandMeta.name,
+          country: brandMeta.country,
           month: month.key,
           monthLabel: month.label,
           tabName: tab,
           sheetId: month.sheetId,
           rowIndex,
           sheetUrl: `https://docs.google.com/spreadsheets/d/${month.sheetId}/edit#gid=${gid}&range=A${rowIndex}`,
-          transaction: transactionId,
-          requestTime: formatRequestDateTime(get(COLS.date), get(COLS.requestTime)),
-          channel: get(COLS.channel),
-          agentNumber: get(COLS.agentNumber),
-          username: get(COLS.username),
-          date: get(COLS.date),
-          imageLink: get(COLS.imageLink),
-          transactionError: get(COLS.transactionError),
-          statusPG: get(COLS.statusPG),
-          cartId: get(COLS.cartId),
-          reference,
-          cashOutNumber: get(COLS.cashOutNumber),
-          amount: get(COLS.amount),
-          supportPIC: get(COLS.supportPIC),
-          pg: get(COLS.pg),
-          csPIC: get(COLS.csPIC),
-          playerContactNo: get(COLS.playerContactNo),
-          statusCS: get(COLS.statusCS),
-          correctUid: get(COLS.correctUid),
-          playersCartId: get(COLS.playersCartId),
-          paymentStatus: get(COLS.paymentStatus),
+          transaction: transactionLabel,
+          requestTime: requestTimeDisplay,
+          // PKR fields
+          channel: get(cols.channel),
+          agentNumber: get(cols.agentNumber),
+          username: get(cols.username),
+          date: get(cols.date),
+          imageLink: get(cols.imageLink),
+          transactionError: get(cols.transactionError),
+          statusPG: get(cols.statusPG),
+          cartId: get(cols.cartId),
+          reference: get(cols.reference),
+          cashOutNumber: get(cols.cashOutNumber),
+          amount: get(cols.amount),
+          supportPIC: get(cols.supportPIC),
+          pg: get(cols.pg),
+          csPIC: get(cols.csPIC),
+          playerContactNo: get(cols.playerContactNo),
+          statusCS: get(cols.statusCS),
+          correctUid: get(cols.correctUid),
+          playersCartId: get(cols.playersCartId),
+          paymentStatus: get(cols.paymentStatus),
+          // INR fields
+          utr: get(cols.utr),
+          slip: get(cols.slip),
+          pgStaffName: get(cols.pgStaffName),
+          pgTid: get(cols.pgTid),
+          slipAmount: get(cols.slipAmount),
+          status: get(cols.status),
+          followUpTimes: get(cols.followUpTimes),
+          chatIds: get(cols.chatIds),
+          agentUpi: get(cols.agentUpi),
+          orderId: get(cols.orderId),
+          picName: get(cols.picName),
+          remarkPic: get(cols.remarkPic),
+          csRemarks: get(cols.csRemarks),
+          memo: get(cols.memo),
+          condition: get(cols.condition),
         });
       });
     }

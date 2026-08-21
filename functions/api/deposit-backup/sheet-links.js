@@ -11,8 +11,8 @@
  * Same canSeeBrand() filtering as search.js — an agent scoped to one
  * brand only ever gets that brand back.
  */
-import { verifyRequest, canSeeBrand } from "../../_shared/accounts.js";
-import { PKR_BRANDS, getDepositBackup } from "../../_shared/depositSheets.js";
+import { verifyRequest, canSeeBrand, canSeeCountry } from "../../_shared/accounts.js";
+import { DEPOSIT_BRANDS, getDepositBackup } from "../../_shared/depositSheets.js";
 
 export async function onRequestGet(context) {
   try {
@@ -26,7 +26,9 @@ async function handleGet({ request, env }) {
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
 
-  const visibleBrands = PKR_BRANDS.filter((b) => canSeeBrand(account, b.name));
+  // MERGED (2026-08-21) — canSeeCountry() paired alongside canSeeBrand(),
+  // same reasoning as deposit-issue/search.js's matching comment.
+  const visibleBrands = DEPOSIT_BRANDS.filter((b) => canSeeCountry(account, b.country) && canSeeBrand(account, b.id));
 
   const brands = await Promise.all(
     visibleBrands.map(async (b) => {

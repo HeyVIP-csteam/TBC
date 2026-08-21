@@ -1,6 +1,7 @@
 import { getAccessToken } from "../../_shared/googleOAuth.js";
-import { verifyRequest, canSeeBrand } from "../../_shared/accounts.js";
-import { PKR_BRANDS, getDepositSheetOverride } from "../../_shared/depositSheets.js";
+import { verifyRequest, canSeeBrand, canSeeCountry } from "../../_shared/accounts.js";
+import { DEPOSIT_BRANDS, getDepositSheetOverride } from "../../_shared/depositSheets.js";
+import { getIssueColumns } from "../../_shared/depositColumns.js";
 
 // Stable identifier for this module's slot in the "Deposit Sheet Link"
 // admin page — must match MODULE_SLOT in functions/api/admin/deposit-sheets.js.
@@ -8,55 +9,28 @@ const MODULE_SLOT = "depositIssue";
 
 /**
  * ══════════════════════════════════════════════════════════════════
- *  HARDCODED DEFAULT — only used for Crickex, and only if nothing's
- *  been saved for Crickex through the "Deposit Sheet Link" admin page
- *  yet. Every other brand has NO hardcoded fallback: until someone
- *  saves a link for that brand in the admin page, searching that brand
- *  returns "not configured" rather than guessing.
+ *  HARDCODED DEFAULT — only used for PKR's Crickex (crickex_pkr), and
+ *  only if nothing's been saved for it through the "Deposit Sheet Link"
+ *  admin page yet. Every other brand (including every INR brand — see
+ *  depositSheets.js's file header: INR's own original project never
+ *  had a hardcoded default for ANY brand either) has NO hardcoded
+ *  fallback: until someone saves a link for that brand in the admin
+ *  page, searching that brand returns "not configured" rather than
+ *  guessing.
  * ══════════════════════════════════════════════════════════════════
  */
-const DEFAULT_CRICKEX = { sheetId: "1HByPuZMuuYZL9S5fPPGjb8RAmCwNVgKXvuLgVBbVM-E", tabNames: ["CX PKR"] };
+const DEFAULT_CRICKEX_PKR = { sheetId: "1HByPuZMuuYZL9S5fPPGjb8RAmCwNVgKXvuLgVBbVM-E", tabNames: ["CX PKR"] };
 
 // Resolves the { sheetId, tabNames } to use for ONE brand: live KV
-// override if one exists, else the hardcoded Crickex default, else null
-// ("not configured yet" — every non-Crickex brand until it's set up).
+// override if one exists, else the hardcoded PKR-Crickex default, else
+// null ("not configured yet").
 async function resolveBrandSheet(env, brandId) {
   const override = await getDepositSheetOverride(env, MODULE_SLOT, brandId);
   if (override) return { sheetId: override.sheetId, tabNames: override.tabNames };
-  if (brandId === "crickex") return DEFAULT_CRICKEX;
+  if (brandId === "crickex_pkr") return DEFAULT_CRICKEX_PKR;
   return null;
 }
 
-// Column layout confirmed from the real sheet (row 1 = headers, data
-// starts row 2). If a department ever reorders columns, update here.
-// (Assumes every brand's sheet uses this same layout — true for Crickex
-// today; revisit if a future brand's sheet turns out to differ.)
-const COLS = {
-  transactionId: "A",
-  requestTime: "B",
-  channel: "C",
-  agentNumber: "D",
-  username: "E",
-  date: "F",
-  imageLink: "G",
-  transactionError: "H",
-  statusPG: "I",
-  cartId: "J",
-  reference: "K",
-  cashOutNumber: "L",
-  amount: "M",
-  supportPIC: "N",
-  pg: "O",
-  csPIC: "P",
-  playerContactNo: "Q",
-  statusCS: "R",
-  correctUid: "S",
-  playersCartId: "T",
-  paymentStatus: "U",
-  pytPsd: "V",
-  remark: "W",
-};
-const LAST_COL = "W"; // must match the last key in COLS above
 const MAX_RESULTS = 500; // global cap across ALL brands searched in one request
 
 // Same normalization promo-search.js uses — folds invisible differences
@@ -66,10 +40,11 @@ function normalizeTabName(name) {
   return String(name).normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-// Sortable epoch-ms timestamp built from Date (col F) + Request Time
-// (col B) — results are sorted newest first before being returned (see
-// bottom of handleSearch), instead of staying grouped by
-// brand/tab/sheet-row order. Rows with an unparseable/missing date sort
+// Sortable epoch-ms timestamp — MERGED (2026-08-21): PKR's Date+Request
+// Time and INR's Date+Time are both "YYYY-MM-DD" + a time string, so one
+// implementation covers both country's raw column values as long as the
+// caller passes the right pair for that target's country (see the
+// row-building loop below). Rows with an unparseable/missing date sort
 // to the very bottom (return 0 — effectively "1970") rather than
 // throwing or being dropped.
 function sortTimestamp(dateRaw, timeRaw) {
@@ -81,6 +56,21 @@ function sortTimestamp(dateRaw, timeRaw) {
   const ss = tm ? tm[3] || "00" : "00";
   const ts = Date.parse(`${dm[1]}-${dm[2]}-${dm[3]}T${hh}:${mm}:${ss}`);
   return Number.isNaN(ts) ? 0 : ts;
+}
+
+// PKR's display format is "Date + Request Time" concatenated as-is
+// (Request Time already includes its own formatting); INR's is "Date
+// (YYYY-MM-DD -> DD/MM/YYYY) + Time" combined — see each country's
+// original project for why these two display conventions differ.
+function formatRequestDateTimePKR(dateRaw, requestTimeRaw) {
+  return [dateRaw, requestTimeRaw].filter(Boolean).join(" ");
+}
+function formatRequestDateTimeINR(dateRaw, timeRaw) {
+  let d = String(dateRaw || "").trim();
+  const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) d = `${m[3]}/${m[2]}/${m[1]}`;
+  const t = String(timeRaw || "").trim();
+  return d && t ? `${d} ${t}` : d || t;
 }
 
 // Sheet's real tab titles rarely change — cache per Worker isolate for a
@@ -138,23 +128,28 @@ async function handleSearch({ request, env }) {
   if (!queries.length) return json({ ok: false, error: "No valid search terms." }, 400);
 
   // Figure out which brand(s) to actually search, and resolve each one's
-  // { sheetId, tabNames } up front. Brand-level permission (same
-  // canSeeBrand() used by submit.js) is enforced here — an agent scoped
-  // to only Crickex, for example, can't search or see any other brand's
-  // Deposit Issue data, same as every other module in the hub.
+  // { sheetId, tabNames } up front. Brand-level permission (canSeeBrand)
+  // AND country-level permission (canSeeCountry) are BOTH enforced here
+  // — MERGED (2026-08-21): this is the exact pairing depositSheets.js's
+  // file header flagged as the missing piece before INR support could
+  // be added safely (brand NAMES collide across countries — both INR
+  // and PKR have a "Crickex" — so brand-only gating alone isn't enough
+  // once two countries' brands share this endpoint).
   if (requestedBrand) {
-    const brandMeta = PKR_BRANDS.find((b) => b.id === requestedBrand);
+    const brandMeta = DEPOSIT_BRANDS.find((b) => b.id === requestedBrand);
     if (!brandMeta) return json({ ok: false, error: `Unknown brand "${requestedBrand}".` }, 400);
-    if (!canSeeBrand(account, brandMeta.name)) return json({ ok: false, error: "You don't have access to this brand." }, 403);
+    if (!canSeeCountry(account, brandMeta.country) || !canSeeBrand(account, requestedBrand)) {
+      return json({ ok: false, error: "You don't have access to this brand." }, 403);
+    }
   }
-  const brandsToSearch = (requestedBrand ? PKR_BRANDS.filter((b) => b.id === requestedBrand) : PKR_BRANDS)
-    .filter((b) => canSeeBrand(account, b.name));
+  const brandsToSearch = (requestedBrand ? DEPOSIT_BRANDS.filter((b) => b.id === requestedBrand) : DEPOSIT_BRANDS)
+    .filter((b) => canSeeCountry(account, b.country) && canSeeBrand(account, b.id));
 
-  const targets = []; // { brandId, brandName, sheetId, tabNames }
+  const targets = []; // { brandId, brandName, country, sheetId, tabNames }
   const unconfiguredBrands = [];
   for (const b of brandsToSearch) {
     const sheet = await resolveBrandSheet(env, b.id);
-    if (sheet) targets.push({ brandId: b.id, brandName: b.name, sheetId: sheet.sheetId, tabNames: sheet.tabNames });
+    if (sheet) targets.push({ brandId: b.id, brandName: b.name, country: b.country, sheetId: sheet.sheetId, tabNames: sheet.tabNames });
     else unconfiguredBrands.push(b.name);
   }
 
@@ -170,6 +165,9 @@ async function handleSearch({ request, env }) {
 
   for (const target of targets) {
     if (results.length >= MAX_RESULTS) break;
+
+    const cols = getIssueColumns(target.country);
+    if (!cols) continue; // shouldn't happen — DEPOSIT_BRANDS only ever contains INR/PKR — but never guess a layout
 
     let realTabs;
     try {
@@ -192,7 +190,7 @@ async function handleSearch({ request, env }) {
 
     for (const { title: tab, gid } of tabsToQuery) {
       if (results.length >= MAX_RESULTS) break;
-      const range = `'${tab.replace(/'/g, "''")}'!A2:${LAST_COL}`;
+      const range = `'${tab.replace(/'/g, "''")}'!A2:${cols.lastCol}`;
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${target.sheetId}/values/${encodeURIComponent(range)}`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
       const data = await res.json();
@@ -203,51 +201,90 @@ async function handleSearch({ request, env }) {
       const rows = data.values || [];
       rows.forEach((row, i) => {
         if (results.length >= MAX_RESULTS) return;
-        const get = (colLetter) => row[colIndex(colLetter)] || "";
-        const transactionId = get(COLS.transactionId);
-        const reference = get(COLS.reference);
-        const username = get(COLS.username);
-        const agentNumber = get(COLS.agentNumber);
-        // Match if ANY query is a substring of Transaction ID, Reference,
-        // Username, or Agent Number.
-        const haystack = (transactionId + " " + reference + " " + username + " " + agentNumber).toLowerCase();
-        const isMatch = queries.some((q) => haystack.includes(q));
-        if (!isMatch) return;
+        // A column this country's layout doesn't define (e.g. `channel`
+        // for INR, which has no such column) safely returns "" instead
+        // of reading the wrong cell or throwing — `get()` no-ops on an
+        // undefined column letter.
+        const get = (colLetter) => (colLetter ? row[colIndex(colLetter)] || "" : "");
+
+        let haystack, transactionLabel, requestTimeDisplay, sortTs;
+        if (target.country === "PKR") {
+          const transactionId = get(cols.transactionId);
+          const reference = get(cols.reference);
+          const username = get(cols.username);
+          const agentNumber = get(cols.agentNumber);
+          haystack = (transactionId + " " + reference + " " + username + " " + agentNumber).toLowerCase();
+          transactionLabel = transactionId;
+          requestTimeDisplay = formatRequestDateTimePKR(get(cols.date), get(cols.requestTime));
+          sortTs = sortTimestamp(get(cols.date), get(cols.requestTime));
+        } else {
+          const pgTid = get(cols.pgTid);
+          const utr = get(cols.utr);
+          const username = get(cols.username);
+          const orderId = get(cols.orderId);
+          haystack = (pgTid + " " + utr + " " + username + " " + orderId).toLowerCase();
+          transactionLabel = pgTid;
+          requestTimeDisplay = formatRequestDateTimeINR(get(cols.date), get(cols.time));
+          sortTs = sortTimestamp(get(cols.date), get(cols.time));
+        }
+        if (!queries.some((q) => haystack.includes(q))) return;
 
         const rowIndex = i + 2; // actual row number in the sheet (header is row 1)
+        // Unified result shape spanning BOTH countries' field vocabularies
+        // — a field a given country's layout doesn't have just comes back
+        // "" via get()'s undefined-column-letter guard above, same
+        // approach INR's original project already used (see
+        // depositColumns.js's file header). The frontend picks which
+        // fields to actually DISPLAY based on `country`, not by checking
+        // which fields happen to be non-empty.
         results.push({
-          _sortTs: sortTimestamp(get(COLS.date), get(COLS.requestTime)),
+          _sortTs: sortTs,
           brand: target.brandId,
           brandName: target.brandName,
+          country: target.country,
           sheetName: target.brandName,
           tabName: tab,
           sheetId: target.sheetId,
           rowIndex,
-          // Direct link to this exact row, in this exact tab — Google
-          // Sheets understands #gid=<tab> + range=<cell> in the URL and
-          // will jump straight there, scroll included.
           sheetUrl: `https://docs.google.com/spreadsheets/d/${target.sheetId}/edit#gid=${gid}&range=A${rowIndex}`,
-          transaction: transactionId,
-          requestTime: get(COLS.requestTime),
-          channel: get(COLS.channel),
-          agentNumber: get(COLS.agentNumber),
-          username: get(COLS.username),
-          date: get(COLS.date),
-          imageLink: get(COLS.imageLink),
-          transactionError: get(COLS.transactionError),
-          statusPG: get(COLS.statusPG),
-          cartId: get(COLS.cartId),
-          reference,
-          cashOutNumber: get(COLS.cashOutNumber),
-          amount: get(COLS.amount),
-          supportPIC: get(COLS.supportPIC),
-          pg: get(COLS.pg),
-          csPIC: get(COLS.csPIC),
-          playerContactNo: get(COLS.playerContactNo),
-          statusCS: get(COLS.statusCS),
-          correctUid: get(COLS.correctUid),
-          playersCartId: get(COLS.playersCartId),
-          paymentStatus: get(COLS.paymentStatus),
+          transaction: transactionLabel,
+          requestTime: requestTimeDisplay,
+          // PKR fields
+          channel: get(cols.channel),
+          agentNumber: get(cols.agentNumber),
+          username: get(cols.username),
+          date: get(cols.date),
+          imageLink: get(cols.imageLink),
+          transactionError: get(cols.transactionError),
+          statusPG: get(cols.statusPG),
+          cartId: get(cols.cartId),
+          reference: get(cols.reference),
+          cashOutNumber: get(cols.cashOutNumber),
+          amount: get(cols.amount),
+          supportPIC: get(cols.supportPIC),
+          pg: get(cols.pg),
+          csPIC: get(cols.csPIC),
+          playerContactNo: get(cols.playerContactNo),
+          statusCS: get(cols.statusCS),
+          correctUid: get(cols.correctUid),
+          playersCartId: get(cols.playersCartId),
+          paymentStatus: get(cols.paymentStatus),
+          // INR fields
+          utr: get(cols.utr),
+          slip: get(cols.slip),
+          pgStaffName: get(cols.pgStaffName),
+          pgTid: get(cols.pgTid),
+          slipAmount: get(cols.slipAmount),
+          status: get(cols.status),
+          followUpTimes: get(cols.followUpTimes),
+          chatIds: get(cols.chatIds),
+          agentUpi: get(cols.agentUpi),
+          pgRemarks: get(cols.pgRemarks),
+          csRemarks: get(cols.csRemarks),
+          orderId: get(cols.orderId),
+          picName: get(cols.picName),
+          statusFinal: get(cols.statusFinal),
+          upi: get(cols.upi),
         });
       });
     }
@@ -266,7 +303,7 @@ async function handleSearch({ request, env }) {
     tabWarnings: tabWarnings.length ? tabWarnings : undefined,
     // Brands with no Sheet linked at all yet — only surfaced in "All
     // Brands" mode, as a gentle heads-up, not an error (perfectly normal
-    // while you're still onboarding the other 8 brands).
+    // while you're still onboarding new brands).
     unconfiguredBrands: !requestedBrand && unconfiguredBrands.length ? unconfiguredBrands : undefined,
   });
 }

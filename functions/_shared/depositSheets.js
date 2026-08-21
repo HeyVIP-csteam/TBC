@@ -8,9 +8,10 @@
  * mirrors TG Group/Channel's brand-sidebar layout) instead of needing a
  * code edit + redeploy every time a department swaps in a new Sheet.
  *
- * Stored in PKR's own per-country THREADS_KV_PKR (see _shared/countries.js —
- * this is "genuinely country-specific content", same bucket as
- * tickets/announcements/betting-resources), under its own key prefix:
+ * Stored per-brand in THAT BRAND'S OWN country's THREADS_KV_<COUNTRY>
+ * (see _shared/countries.js — "genuinely country-specific content",
+ * same bucket as tickets/announcements/betting-resources), under its
+ * own key prefix:
  *   deposit-sheet:<moduleSlot>:<brandId>  ->  { sheetId, tabNames: string[] }
  *
  * `moduleSlot` is a stable identifier for WHICH module this sheet feeds
@@ -18,46 +19,50 @@
  * this same file/pattern under its own slot ("depositBackup") without
  * colliding with Deposit Issue's per-brand entries.
  *
- * MERGED (2026-08-20) — this file's storage is hardcoded to PKR's KV
- * because Deposit Issue/Deposit Backup today only actually have real
- * brands/data for PKR (see PKR_BRANDS below — this predates the merge
- * and was never a multi-country feature to begin with). This is
- * DELIBERATELY NOT extended to also cover INR here, even though
- * countryModules.js confirms INR also has deposit_issue/deposit_backup
- * enabled — doing that properly needs two things I don't have: (1) INR's
- * real Deposit Sheet IDs/tab names (this file's whole job is wrapping
- * real spreadsheet links — I'm not going to invent one), and (2) since
- * brand *names* collide across countries (both INR and PKR have a
- * "Crickex"), and this file's callers currently filter visibility with
- * canSeeBrand(account, b.name) with no canSeeCountry() check alongside
- * it (unlike submit.js/threads.js, which deliberately check both — see
- * those files' 2026-08-20 comments), naively adding INR brands here
- * under the same bare names would let a PKR-only account see INR's
- * Deposit Issue rows too. Fixing that needs the same brandId
- * (not brand-name) migration flagged as still-open in submit.js's
- * canSeeBrand comment. Until both of those are actually done, this
- * stays PKR-only and single-country — restored to WORKING (it was
- * unconditionally broken before this pass, since env.THREADS_KV no
- * longer exists post-merge), not redesigned.
+ * MERGED (2026-08-21) — this file used to be hardcoded to PKR's KV only
+ * (see git history — the previous version of this comment explained
+ * exactly why: no real INR Sheet data, and a brand-name collision risk
+ * with no canSeeCountry() pairing). Both of those are now resolved:
+ *   1. INR's own original project turned out to have NO hardcoded
+ *      default sheet for ANY brand either — Deposit Issue/Backup was
+ *      always designed to start fully unconfigured and get set up live
+ *      through the admin page, the exact same UX every non-Crickex PKR
+ *      brand already has today. There was no real data to be missing.
+ *   2. `brandId` here now comes from routing.js's merged BRANDS (country
+ *      -suffixed: "crickex_inr"/"crickex_pkr", not the old bare
+ *      "crickex") — the same ids used everywhere else post-merge — so
+ *      the collision risk is gone the same way it's gone everywhere
+ *      else: canSeeBrand() already checks id-or-name, and every caller
+ *      of this file now also checks canSeeCountry() alongside it (see
+ *      search.js/update.js/sheet-links.js's own 2026-08-21 comments).
+ * kvForBrand() below resolves each brand's OWN country's KV via
+ * getBrandCountry() — same pattern issueSubmissionSheets.js already
+ * uses for the exact same reason.
  */
 import { resolveThreadsKv } from "./countries.js";
+import { BRANDS, getBrandCountry } from "./routing.js";
 
-const KV_COUNTRY = "PKR";
-function kv(env) {
-  return resolveThreadsKv(env, KV_COUNTRY);
+// Deposit Issue/Backup only exist for INR and PKR today (PHP has
+// Deposit Request/Bank Issue instead — see countryModules.js's
+// confirmed product decision). Every brand in BRANDS whose country is
+// one of these two, in file order — replaces the old hardcoded
+// PKR_BRANDS constant (bare ids, PKR-only) that every caller used to
+// import; DEPOSIT_BRANDS below is its direct successor, same shape
+// ({id, name}), just spanning both countries with real suffixed ids.
+const DEPOSIT_COUNTRIES = ["INR", "PKR"];
+export const DEPOSIT_BRANDS = Object.entries(BRANDS)
+  .filter(([, b]) => DEPOSIT_COUNTRIES.includes(b.country))
+  .map(([id, b]) => ({ id, name: b.name, country: b.country }));
+
+// Resolves the right per-country KV for a brandId, or null if either the
+// brandId is unknown, isn't an INR/PKR brand, or that country's
+// THREADS_KV isn't bound yet — same helper shape as routes.js's/
+// issueSubmissionSheets.js's kvForBrand().
+function kvForBrand(env, brandId) {
+  const country = getBrandCountry(brandId);
+  if (!country || !DEPOSIT_COUNTRIES.includes(country)) return null;
+  return resolveThreadsKv(env, country);
 }
-
-export const PKR_BRANDS = [
-  { id: "crickex", name: "Crickex" },
-  { id: "betjili", name: "Betjili" },
-  { id: "mostplay", name: "Mostplay" },
-  { id: "jeetwin", name: "Jeetwin" },
-  { id: "sbj66", name: "Sbj66" },
-  { id: "heybaji", name: "Heybaji" },
-  { id: "superbaji", name: "Superbaji" },
-  { id: "kv8", name: "KV8" },
-  { id: "darazplay", name: "Darazplay" },
-];
 
 function sheetKey(moduleSlot, brandId) {
   return `deposit-sheet:${moduleSlot}:${brandId}`;
@@ -93,9 +98,9 @@ function parseConfig(raw) {
 // Single-brand read — used at request time (search.js/update.js) when a
 // specific brand is targeted. Returns null if nothing's been configured
 // for this brand yet (caller decides what the fallback default is, if
-// any — e.g. search.js only has a hardcoded fallback for "crickex").
+// any — e.g. search.js only has a hardcoded fallback for PKR's Crickex).
 export async function getDepositSheetOverride(env, moduleSlot, brandId) {
-  const store = kv(env);
+  const store = kvForBrand(env, brandId);
   if (!store) return null;
   const raw = await store.get(sheetKey(moduleSlot, brandId));
   return parseConfig(raw);
@@ -103,19 +108,33 @@ export async function getDepositSheetOverride(env, moduleSlot, brandId) {
 
 // Batch read across all brands — used by the admin GET endpoint and by
 // search.js's "All Brands" mode (which needs to know every configured
-// sheet up front to fan the search out across all of them).
+// sheet up front to fan the search out across all of them). Groups
+// brandIds by their country's KV first so each country is only queried
+// once (in parallel across countries), same batching idea as
+// routes.js/issueSubmissionSheets.js's getAllXOverrides().
 export async function getAllDepositSheetOverrides(env, moduleSlot, brandIds) {
-  const store = kv(env);
-  if (!store) return {};
-  const entries = await Promise.all(
-    brandIds.map(async (brandId) => [brandId, parseConfig(await store.get(sheetKey(moduleSlot, brandId)))])
+  const byCountryKv = new Map(); // kv -> brandIds[]
+  for (const brandId of brandIds) {
+    const store = kvForBrand(env, brandId);
+    if (!store) continue;
+    if (!byCountryKv.has(store)) byCountryKv.set(store, []);
+    byCountryKv.get(store).push(brandId);
+  }
+  const result = {};
+  await Promise.all(
+    [...byCountryKv.entries()].map(async ([store, ids]) => {
+      const entries = await Promise.all(
+        ids.map(async (brandId) => [brandId, parseConfig(await store.get(sheetKey(moduleSlot, brandId)))])
+      );
+      for (const [brandId, v] of entries) if (v !== null) result[brandId] = v;
+    })
   );
-  return Object.fromEntries(entries.filter(([, v]) => v !== null));
+  return result;
 }
 
 export async function saveDepositSheetOverride(env, moduleSlot, brandId, { sheetUrlOrId, tabNames }) {
-  const store = kv(env);
-  if (!store) throw new Error(`${KV_COUNTRY}'s ticket storage is not bound yet.`);
+  const store = kvForBrand(env, brandId);
+  if (!store) throw new Error(`No ticket storage bound for brand "${brandId}"'s country.`);
   const sheetId = extractSheetId(sheetUrlOrId);
   if (!sheetId) throw new Error("Couldn't find a Sheet ID in that link — paste the full Google Sheets URL or just the ID.");
   const cleanTabs = String(tabNames || "")
@@ -129,7 +148,7 @@ export async function saveDepositSheetOverride(env, moduleSlot, brandId, { sheet
 }
 
 export async function deleteDepositSheetOverride(env, moduleSlot, brandId) {
-  const store = kv(env);
+  const store = kvForBrand(env, brandId);
   if (!store) return;
   await store.delete(sheetKey(moduleSlot, brandId));
 }
@@ -155,7 +174,7 @@ function backupKey(brandId) {
 }
 
 export async function getDepositBackup(env, brandId) {
-  const store = kv(env);
+  const store = kvForBrand(env, brandId);
   if (!store) return { thisMonth: null, lastMonth: null };
   const raw = await store.get(backupKey(brandId));
   if (!raw) return { thisMonth: null, lastMonth: null };
@@ -168,8 +187,8 @@ export async function getDepositBackup(env, brandId) {
 }
 
 export async function saveDepositBackupThisMonth(env, brandId, { sheetUrlOrId, tabNames }) {
-  const store = kv(env);
-  if (!store) throw new Error(`${KV_COUNTRY}'s ticket storage is not bound yet.`);
+  const store = kvForBrand(env, brandId);
+  if (!store) throw new Error(`No ticket storage bound for brand "${brandId}"'s country.`);
   const sheetId = extractSheetId(sheetUrlOrId);
   if (!sheetId) throw new Error("Couldn't find a Sheet ID in that link — paste the full Google Sheets URL or just the ID.");
   const cleanTabs = String(tabNames || "").split(",").map((t) => t.trim()).filter(Boolean);
@@ -184,8 +203,8 @@ export async function saveDepositBackupThisMonth(env, brandId, { sheetUrlOrId, t
 // backup sheets — unlike Deposit Issue's Crickex default). Last Month is
 // left untouched.
 export async function clearDepositBackupThisMonth(env, brandId) {
-  const store = kv(env);
-  if (!store) throw new Error(`${KV_COUNTRY}'s ticket storage is not bound yet.`);
+  const store = kvForBrand(env, brandId);
+  if (!store) throw new Error(`No ticket storage bound for brand "${brandId}"'s country.`);
   const current = await getDepositBackup(env, brandId);
   const updated = { thisMonth: null, lastMonth: current.lastMonth };
   await store.put(backupKey(brandId), JSON.stringify(updated));
@@ -197,8 +216,8 @@ export async function clearDepositBackupThisMonth(env, brandId) {
 // cleared out ready for the new link to be pasted in via
 // saveDepositBackupThisMonth() as a separate, explicit next step.
 export async function rollDepositBackup(env, brandId) {
-  const store = kv(env);
-  if (!store) throw new Error(`${KV_COUNTRY}'s ticket storage is not bound yet.`);
+  const store = kvForBrand(env, brandId);
+  if (!store) throw new Error(`No ticket storage bound for brand "${brandId}"'s country.`);
   const current = await getDepositBackup(env, brandId);
   const updated = { thisMonth: null, lastMonth: current.thisMonth };
   await store.put(backupKey(brandId), JSON.stringify(updated));

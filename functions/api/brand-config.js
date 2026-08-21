@@ -33,27 +33,32 @@
  */
 import { verifyRequest, canEditAdminSection, requestIP } from "../_shared/accounts.js";
 import { logActivity } from "../_shared/activityLog.js";
+import { BRANDS } from "../_shared/routing.js";
 
-// PKR market: 3 of the 9 brands (Crickex/Betjili/Mostplay) are the same
-// actual brand/logo as the INR build this was forked from — confirmed by
-// the business owner — so their existing PNGs were kept and re-mapped
-// here. The other 6 (jeetwin/sbj66/heybaji/superbaji/kv8/darazplay) have
-// no logo file yet; the old betvisa.png/jeetway.png files were deleted
-// entirely since those brands don't exist in this deployment. readConfig()
-// below already handles a brand with no logoUrl gracefully (falls back to
-// initials + a color), so the missing 6 aren't blocking anything. To add a
-// real logo for one of them: drop the image at
-// public/assets/img/brands/<brandId>.png and add a line here, e.g.
-// jeetwin: "/assets/img/brands/jeetwin.png".
-// PKR market: 3 of the 9 brands (Crickex/Betjili/Mostplay) are the same
-// actual brand/logo as the INR build this was forked from — confirmed by
-// the business owner — so their existing PNGs were kept and re-mapped
-// here. The other 6 (Jeetwin/Sbj66/Heybaji/Superbaji/KV8/Darazplay) now
-// have their own real logo files too, provided directly by the business
-// owner. readConfig() below already handles a brand with no logoUrl
-// gracefully (falls back to initials + a color), so this was never a
-// hard blocker — but all 9 brands now have real logos either way.
-const DEFAULT_LOGOS = {
+// MERGED (2026-08-21) — this used to be keyed by bare brand id
+// ("crickex"), which matched routing.js's brand keys back when there
+// was only one country. Now that BRANDS uses country-suffixed ids
+// ("crickex_inr"/"crickex_pkr"), a lookup like DEFAULT_LOGOS["crickex_inr"]
+// would silently miss and fall through to colored initials — this is a
+// REAL bug this pass found and fixed, not a pre-emptive rewrite: INR's
+// brand pills were showing initials-only with no real logo the whole
+// time this file stayed unmerged (INR is the only country actually live
+// right now — see the PROJECT_STATUS notes on why PKR/PHP are deferred).
+//
+// Fixed by keying this map by brand NAME (lowercased) instead of id —
+// crickex/betjili/mostplay are confirmed by the business owner to be
+// the literal same real-world brand/logo across INR and PKR (see the
+// git history on this file), so one image file correctly serves both
+// countries' ids for that name; readConfig() below resolves each real
+// BRANDS entry's default logo by its `.name`, not by a country-specific
+// key, so adding a 3rd/4th country with an already-known brand name
+// needs zero changes here.
+//
+// betvisa.png/jeetway.png were missing from this repo entirely until
+// this pass (INR has its own real logo files for both — they just never
+// got copied over during the original merge) — copied in from INR's
+// original project alongside this fix.
+const DEFAULT_LOGO_FILE_BY_NAME = {
   crickex: "/assets/img/brands/crickex.png",
   betjili: "/assets/img/brands/betjili.png",
   mostplay: "/assets/img/brands/mostplay.png",
@@ -63,6 +68,8 @@ const DEFAULT_LOGOS = {
   superbaji: "/assets/img/brands/superbaji.png",
   kv8: "/assets/img/brands/kv8.png",
   darazplay: "/assets/img/brands/darazplay.png",
+  betvisa: "/assets/img/brands/betvisa.png",
+  jeetway: "/assets/img/brands/jeetway.png",
 };
 
 export async function onRequestGet(context) {
@@ -128,10 +135,14 @@ async function readConfig(env) {
       config = {};
     }
   }
-  // Fill in each brand's default logo (from the static files checked into
-  // the repo) whenever R2 doesn't already have a logoUrl set for it — see
-  // the file header for why this replaced the old upload-based approach.
-  for (const [brandId, logoUrl] of Object.entries(DEFAULT_LOGOS)) {
+  // Fill in each REAL brand's (from routing.js's merged BRANDS, so this
+  // covers all three countries) default logo — resolved by name via
+  // DEFAULT_LOGO_FILE_BY_NAME above — whenever R2 doesn't already have a
+  // logoUrl set for that brand's id. See this file's header/the const's
+  // own comment for why this is name-keyed instead of id-keyed.
+  for (const [brandId, brand] of Object.entries(BRANDS)) {
+    const logoUrl = DEFAULT_LOGO_FILE_BY_NAME[brand.name.toLowerCase()];
+    if (!logoUrl) continue; // no known logo file for this brand name yet — falls back to colored initials client-side, same as always
     const entry = config[brandId] || {};
     if (!entry.logoUrl) entry.logoUrl = logoUrl;
     config[brandId] = entry;

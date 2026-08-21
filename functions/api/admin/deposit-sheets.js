@@ -11,8 +11,8 @@
  *                                  lastMonth: {sheetId,tabNames}|null } } }
  *        `isOverride: true` means it's a live KV override (edited through
  *        this page); `false` means it's still showing the hardcoded
- *        default (only "crickex" has one baked into search.js right now —
- *        every other brand shows sheetId:"" until someone saves a link).
+ *        default (only PKR's Crickex has one baked into search.js right
+ *        now — every other brand shows sheetId:"" until someone saves a link).
  *     Requires canSeeAdminSection(..., "depositSheets").
  *
  *   POST { action:"save", brandId, sheetUrlOrId, tabNames } -> store an
@@ -43,7 +43,7 @@
  */
 import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, requestIP } from "../../_shared/accounts.js";
 import {
-  PKR_BRANDS,
+  DEPOSIT_BRANDS,
   getAllDepositSheetOverrides,
   saveDepositSheetOverride,
   deleteDepositSheetOverride,
@@ -55,15 +55,15 @@ import {
 import { logActivity } from "../../_shared/activityLog.js";
 
 const MODULE_SLOT = "depositIssue";
-// Only Crickex has a real hardcoded fallback (this was the one working
-// Sheet before this admin page existed). Every other brand starts with
-// no default at all — until a link is saved here, that brand's Deposit
-// Issue search returns "not configured" rather than silently reading
-// the wrong department's data.
-const DEFAULT_CRICKEX = { sheetId: "1HByPuZMuuYZL9S5fPPGjb8RAmCwNVgKXvuLgVBbVM-E", tabNames: ["CX PKR"] };
+// Only PKR's Crickex has a real hardcoded fallback (this was the one
+// working Sheet before this admin page existed). Every other brand —
+// including every INR brand, which never had a hardcoded default in
+// its own original project either (see depositSheets.js's file header)
+// — starts with no default at all, until a link is saved here.
+const DEFAULT_CRICKEX_PKR = { sheetId: "1HByPuZMuuYZL9S5fPPGjb8RAmCwNVgKXvuLgVBbVM-E", tabNames: ["CX PKR"] };
 
 function defaultFor(brandId) {
-  return brandId === "crickex" ? DEFAULT_CRICKEX : { sheetId: "", tabNames: [] };
+  return brandId === "crickex_pkr" ? DEFAULT_CRICKEX_PKR : { sheetId: "", tabNames: [] };
 }
 
 export async function onRequestGet(context) {
@@ -81,7 +81,7 @@ async function handleGet({ request, env }) {
     return json({ ok: false, error: "You don't have access to Deposit Sheet Link." }, 403);
   }
 
-  const brandIds = PKR_BRANDS.map((b) => b.id);
+  const brandIds = DEPOSIT_BRANDS.map((b) => b.id);
   const overrides = await getAllDepositSheetOverrides(env, MODULE_SLOT, brandIds);
 
   const sheets = {};
@@ -101,7 +101,7 @@ async function handleGet({ request, env }) {
   const backupEntries = await Promise.all(brandIds.map(async (brandId) => [brandId, await getDepositBackup(env, brandId)]));
   const backup = Object.fromEntries(backupEntries);
 
-  return json({ ok: true, brands: PKR_BRANDS, sheets, backup });
+  return json({ ok: true, brands: DEPOSIT_BRANDS, sheets, backup });
 }
 
 export async function onRequestPost(context) {
@@ -133,8 +133,8 @@ async function handlePost({ request, env, waitUntil }) {
   }
 
   const brandId = body.brandId;
-  if (!PKR_BRANDS.some((b) => b.id === brandId)) return json({ ok: false, error: `Unknown brand "${brandId}".` }, 400);
-  const brandName = PKR_BRANDS.find((b) => b.id === brandId)?.name || brandId;
+  if (!DEPOSIT_BRANDS.some((b) => b.id === brandId)) return json({ ok: false, error: `Unknown brand "${brandId}".` }, 400);
+  const brandName = DEPOSIT_BRANDS.find((b) => b.id === brandId)?.name || brandId;
 
   if (body.action === "save") {
     try {
