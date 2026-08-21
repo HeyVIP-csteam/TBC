@@ -45,19 +45,29 @@
   function getAllowedCountries() {
     const a = window.AgentAuth ? window.AgentAuth.getAuth() : null;
     if (!a) return [];
+    // MERGED (2026-08-21) — Owner always sees every country, full stop,
+    // regardless of whatever allowedCountries happens to be stored —
+    // mirrors countryAccess.js's canSeeCountry()/resolveAllowedCountries()
+    // server-side, which now do the exact same thing (see that file's
+    // header for the reasoning: Owner already bypasses every OTHER
+    // permission check in this codebase unconditionally, country access
+    // was the one inconsistent exception, not a deliberate extra
+    // safeguard). This is checked BEFORE the "all"/undefined branch
+    // below on purpose — an Owner whose allowedCountries was ever
+    // explicitly narrowed to something less than "all" (e.g. by an old
+    // bug, or a bad manual edit) must not stay stuck with that.
+    if (a.role === "owner") {
+      return window.COUNTRY_CODES ? window.COUNTRY_CODES.slice() : [];
+    }
     if (a.allowedCountries === "all" || a.allowedCountries === undefined) {
       // `undefined` (not just "all") is treated as unrestricted here on
-      // purpose — matches canSeeCountry()'s sibling functions
-      // (canSeeBrand/canSeeModule) which both backfill a missing field
-      // to "everything allowed" for accounts saved before the field
-      // existed. allowedCountries itself does NOT get this same
-      // backfill server-side (see the CRITICAL DIFFERENCE note in
-      // countryAccess.js — country scope deliberately does NOT
-      // auto-bypass), but that's the SERVER's authorization decision;
-      // this file only decides what to show a switcher for, and an
-      // account created before allowedCountries existed at all should
-      // see every country's switcher option rather than none, matching
-      // what canSeeBrand/canSeeModule already do for brands/modules.
+      // purpose — matches canSeeBrand()/canSeeModule()'s own backfill
+      // for a missing field on accounts saved before it existed. This
+      // does NOT extend to admin/superadmin the way canSeeBrand/
+      // canSeeModule's rank-based bypass does server-side — it only
+      // covers the literal "field was never set" case, same limited
+      // scope countryAccess.js's server-side functions apply for
+      // non-Owner roles.
       return window.COUNTRY_CODES ? window.COUNTRY_CODES.slice() : [];
     }
     return Array.isArray(a.allowedCountries) ? a.allowedCountries.slice() : [];

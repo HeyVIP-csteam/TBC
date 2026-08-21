@@ -29,11 +29,23 @@ assertEqual(canSeeCountry({ role: "admin", allowedCountries: ["PKR"] }, "INR"), 
   "admin rank does NOT bypass country scope (this is the regression test that matters most)");
 assertEqual(canSeeCountry({ role: "superadmin", allowedCountries: ["PKR"] }, "INR"), false,
   "superadmin rank does NOT bypass country scope either");
+// MERGED (2026-08-21) — Owner IS the one exception, unconditionally,
+// regardless of whatever allowedCountries happens to be stored —
+// direct business-owner decision, see countryAccess.js's file header
+// for the full reasoning.
+assertEqual(canSeeCountry({ role: "owner", allowedCountries: ["PKR"] }, "INR"), true,
+  "owner bypasses country scope even with a narrower allowedCountries stored");
+assertEqual(canSeeCountry({ role: "owner", allowedCountries: [] }, "INR"), true,
+  "owner bypasses even an empty allowedCountries array");
+assertEqual(canSeeCountry({ role: "owner" }, "INR"), true,
+  "owner bypasses even when allowedCountries was never set at all");
 assertEqual(canSeeCountry(null, "PKR"), false, "null account sees nothing (fail closed, not fail open)");
 
 console.log("\nresolveAllowedCountries()");
 assertEqual(resolveAllowedCountries({ allowedCountries: "all" }, ["INR", "PKR", "PHP"]), ["INR", "PKR", "PHP"], '"all" resolves to full live list');
 assertEqual(resolveAllowedCountries({ allowedCountries: ["PKR"] }, ["INR", "PKR", "PHP"]), ["PKR"], "explicit array resolves as-is");
+assertEqual(resolveAllowedCountries({ role: "owner", allowedCountries: ["PKR"] }, ["INR", "PKR", "PHP"]), ["INR", "PKR", "PHP"],
+  "owner resolves to the full live list regardless of stored allowedCountries");
 assertEqual(resolveAllowedCountries(null, ["INR", "PKR", "PHP"]), [], "null account resolves to empty list");
 
 console.log("\nnormalizeAllowedCountries()  (save-account patch semantics)");
