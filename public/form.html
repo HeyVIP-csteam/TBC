@@ -35,11 +35,14 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=d90eceb8" />
+<link rel="stylesheet" href="/assets/style.css?v=d64b0943" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
-<script src="/assets/authguard.js?v=19b1b251"></script>
+<script src="/assets/authguard.js?v=7f4ad6db"></script>
+<script src="/assets/countries.js?v=78bdc076"></script>
+<script src="/assets/country-modules.js?v=4de67331"></script>
+<script src="/assets/agent-country.js?v=8814764c"></script>
 <script src="/assets/presence-heartbeat.js?v=a0820d9b"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
 </head>
@@ -47,10 +50,11 @@ html[data-theme="light"] {
   <header class="topbar">
     <div class="topbar-left">
       <img src="/assets/img/logo.webp" alt="HeyVIP" class="logo-img" />
-      <span class="wordmark">PKR CS TEAM - TBC</span>
+      <span class="wordmark">CS TEAM - TBC</span>
     </div>
     <div class="topbar-right">
       <span class="clock" id="liveClock"></span>
+      <span class="country-switcher-mount" id="countrySwitcherMount"></span>
       <button class="theme-pill" id="themeToggle"></button>
       <span class="agent-whoami" id="agentWhoami"></span>
     </div>
@@ -108,13 +112,20 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <script src="/assets/schemas.js?v=189eea70"></script>
+  <script src="/assets/schemas.js?v=3f70df87"></script>
   <script src="/assets/hub-nav.js?v=b4fd698d"></script>
   <script src="/assets/brand-row.js?v=ea371f55"></script>
-  <script src="/assets/app.js?v=9aa08077"></script>
+  <script src="/assets/app.js?v=9984cc1a"></script>
   <script>
     window.HubNav.mount("hubNavMount", { activeModule: new URLSearchParams(location.search).get("module") });
     window.BrandRow.mount("pageBrandRow");
+    // Switching country here would leave half the form (brand dropdown,
+    // optionsByBrand-driven selects, fixedAmounts) pointing at the OLD
+    // country's data structures that app.js already built the DOM from —
+    // simplest correct fix is a full reload with the new country already
+    // persisted (agent-country.js's setCountry() runs before this), same
+    // as picking a different module link would naturally do.
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => location.reload());
   </script>
 </body>
 </html>

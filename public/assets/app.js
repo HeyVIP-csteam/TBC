@@ -18,6 +18,24 @@
     return;
   }
 
+  // MERGED (2026-08-20) — the agent's current country (see
+  // assets/agent-country.js) decides which of this module's field sets
+  // to render. `fields`/`moduleExtra` below are resolved ONCE here and
+  // used everywhere the rest of this file used to read
+  // `fields`/`moduleExtra.fixedAmounts` directly — those two no
+  // longer exist as flat properties on modules whose fields vary by
+  // country (see schemas.js's file header for why), so every reference
+  // below was updated to use these resolved values instead.
+  const currentCountry = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+  if (currentCountry && module.countries && !module.countries.includes(currentCountry)) {
+    titleEl.textContent = "Not available";
+    hintEl.textContent = `${module.name} isn't offered for your current country. Use the country switcher (top right) if you also work another country.`;
+    formCard.querySelector("form").style.display = "none";
+    return;
+  }
+  const fields = window.getModuleFields ? window.getModuleFields(module, currentCountry) : (module.fields || []);
+  const moduleExtra = window.getModuleExtra ? window.getModuleExtra(module, currentCountry) : {};
+
   // Real enforcement, not just hiding it from the sidebar — an agent
   // scoped away from this Topic (account.allowedModules, see
   // authguard.js's filterAllowedModules) who directly types/pastes this
@@ -59,9 +77,9 @@
   // page, stay hidden until the gate has a value — not just fields with
   // their own explicit showIf. Keeps a half-picked form from dumping every
   // field on screen before the agent has even said what they're reporting.
-  const gateField = module.fields.find((f) => f.emphasize);
+  const gateField = fields.find((f) => f.emphasize);
 
-  module.fields.forEach((f) => {
+  fields.forEach((f) => {
     const wrap = document.createElement("div");
     wrap.className = "field" + (f.emphasize ? " field-emphasize" : "");
     const isGated = !!(f.showIf || (gateField && f.key !== gateField.key));
@@ -188,7 +206,7 @@
   // that differ per brand) — rebuilt whenever the brand changes. ----
   function refreshBrandDependentOptions() {
     const brandValue = brandSelect.value;
-    module.fields.forEach((f) => {
+    fields.forEach((f) => {
       if (!f.optionsByBrand) return;
       const { control } = fieldEls[f.key];
       const currentValue = control.value;
@@ -217,9 +235,9 @@
     const amountField = fieldEls.amount;
     if (!amountField) return;
 
-    if (module.fixedAmounts) {
+    if (moduleExtra.fixedAmounts) {
       const promotionValue = fieldEls.promotion ? fieldEls.promotion.control.value : "";
-      const fixed = module.fixedAmounts[`${brandSelect.value}|${promotionValue}`];
+      const fixed = moduleExtra.fixedAmounts[`${brandSelect.value}|${promotionValue}`];
       if (fixed !== undefined) {
         amountField.control.value = fixed;
         amountField.control.readOnly = true;
@@ -228,7 +246,7 @@
     }
 
     let locked = false;
-    module.fields.forEach((f) => {
+    fields.forEach((f) => {
       if (!f.autoFillsInto) return;
       const source = fieldEls[f.key];
       const target = fieldEls[f.autoFillsInto];
@@ -267,7 +285,7 @@
   const reporterFieldWrap = document.querySelector('input[name="reporter"]').closest(".field");
   const reporterControl = reporterFieldWrap.querySelector("input,select,textarea");
   function refreshConditionals() {
-    module.fields.forEach((f) => {
+    fields.forEach((f) => {
       if (!f.showIf && (!gateField || f.key === gateField.key)) return; // never gated
       const visible = f.showIf ? conditionMet(f.showIf) : gateHasValue();
       const { wrap, control } = fieldEls[f.key];
@@ -275,7 +293,7 @@
       control.required = visible && !!f.required;
       if (!visible) control.value = "";
     });
-    // Attachments + reporter name live outside module.fields (static markup
+    // Attachments + reporter name live outside fields (static markup
     // in form.html), gated the same way once a module actually has a gate.
     if (gateField) {
       const gated = gateHasValue();
@@ -289,7 +307,7 @@
     attachFieldWrap.setAttribute("data-conditional", "true");
     reporterFieldWrap.setAttribute("data-conditional", "true");
   }
-  module.fields.forEach((f) => {
+  fields.forEach((f) => {
     if (f.type === "select") fieldEls[f.key].control.addEventListener("change", refreshConditionals);
   });
   brandSelect.addEventListener("change", () => {
@@ -300,7 +318,7 @@
   refreshConditionals();
 
   // ---- TID / sequence "generate" buttons ----
-  module.fields.forEach((f) => {
+  fields.forEach((f) => {
     if (!f.generate) return;
     const { wrap, control } = fieldEls[f.key];
     const btn = wrap.querySelector(".btn-generate");
@@ -445,7 +463,7 @@
       }
 
       const formData = new FormData(form);
-      const fields = module.fields
+      const submittedFields = fields
         .filter((f) => !f.showIf || fieldEls[f.key].wrap.classList.contains("is-visible"))
         .map((f) => ({ key: f.key, label: f.label, value: formData.get(f.key) || "" }));
 
@@ -457,7 +475,7 @@
         module: module.id,
         brand: formData.get("brand"),
         reporter: formData.get("reporter"),
-        fields,
+        fields: submittedFields,
         attachments,
         // A fresh random ID per submit ATTEMPT (not per form/ticket) — lets
         // the server (see submit.js) recognize "this exact click's request

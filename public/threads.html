@@ -35,14 +35,17 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=d90eceb8" />
+<link rel="stylesheet" href="/assets/style.css?v=d64b0943" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
-<script src="/assets/authguard.js?v=19b1b251"></script>
+<script src="/assets/authguard.js?v=7f4ad6db"></script>
+<script src="/assets/countries.js?v=78bdc076"></script>
+<script src="/assets/country-modules.js?v=4de67331"></script>
+<script src="/assets/agent-country.js?v=8814764c"></script>
 <script src="/assets/presence-heartbeat.js?v=a0820d9b"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
-<script src="/assets/schemas.js?v=189eea70"></script>
+<script src="/assets/schemas.js?v=3f70df87"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/twemoji.min.js"></script>
 </head>
 <body class="threads-page">
@@ -56,10 +59,11 @@ html[data-theme="light"] {
   <header class="topbar">
     <div class="topbar-left">
       <img src="/assets/img/logo.webp" alt="HeyVIP" class="logo-img" />
-      <span class="wordmark">PKR CS TEAM - TBC</span>
+      <span class="wordmark">CS TEAM - TBC</span>
     </div>
     <div class="topbar-right">
       <span class="clock" id="liveClock"></span>
+      <span class="country-switcher-mount" id="countrySwitcherMount"></span>
       <button class="theme-pill" id="themeToggle"></button>
     </div>
   </header>
@@ -500,7 +504,7 @@ html[data-theme="light"] {
     function itemRenderKey(t) {
       return [
         t.title, t.submitter, t.lastActivity, t.replyCount, t.solved,
-        t.accent, t.icon, getSeenCount(t.id),
+        t.accent, t.icon, getSeenCount(t.id), t.country,
         t.id === selectedId, selectMode, selectedIds.has(t.id),
         openItemMenuId === t.id,
       ].join("|");
@@ -512,12 +516,22 @@ html[data-theme="light"] {
       const checked = selectedIds.has(t.id);
       el.className = "thread-item" + (t.id === selectedId ? " selected" : "") + (selectMode ? " select-mode" : "");
       el.style.setProperty("--thread-accent", t.accent || "#7c6cf0");
+      // MERGED (2026-08-20) — country badge, only actually shown when
+      // the viewing account can see more than one country (see
+      // AgentCountry.getAllowedCountries() — a single-country account
+      // never needs to be told which country every ticket is from,
+      // that's the only country there is for them). Server already
+      // tags every thread with t.country (see GET /api/threads's own
+      // comment on why) — this is the first place the frontend actually
+      // reads it.
+      const showCountryBadge = window.AgentCountry && window.AgentCountry.getAllowedCountries().length > 1 && t.country;
+      const countryBadge = showCountryBadge ? `<span class="thread-country-badge">${escapeHtml(t.country)}</span>` : "";
       el.innerHTML = `
         ${selectMode
           ? `<input type="checkbox" class="thread-item-check" ${checked ? "checked" : ""} />`
           : `<div class="icon" style="background:${(t.accent || "#7c6cf0")}33;">${t.icon || "🔔"}</div>`}
         <div class="meta">
-          <div class="t-title">${escapeHtml(t.title)}</div>
+          <div class="t-title">${countryBadge}${escapeHtml(t.title)}</div>
           <div class="t-sub">${escapeHtml(t.submitter)} · ${timeAgo(t.lastActivity)}${t.replyCount ? " · " + t.replyCount + " reply" : ""}</div>
         </div>
         ${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
@@ -820,7 +834,7 @@ html[data-theme="light"] {
         <div class="thread-detail-header">
           <div>
             <div class="thread-detail-title"><span>${t.icon || "🔔"}</span> ${escapeHtml(t.title)}</div>
-            <div class="thread-detail-sub">👤 ${escapeHtml(t.submitter)} &nbsp;·&nbsp; 📅 ${timeAgo(t.submittedAt)} &nbsp;·&nbsp; ${escapeHtml(t.brand)}</div>
+            <div class="thread-detail-sub">👤 ${escapeHtml(t.submitter)} &nbsp;·&nbsp; 📅 ${timeAgo(t.submittedAt)} &nbsp;·&nbsp; ${escapeHtml(t.brand)}${t.country ? ` (${escapeHtml(t.country)})` : ""}</div>
           </div>
           <div class="thread-detail-actions">
             <button class="status-chip ${t.solved ? "solved" : "unsolved"}" id="solveBtn">${t.solved ? "✅ Solved" : "❌ Not Solved"}</button>
@@ -1468,6 +1482,17 @@ html[data-theme="light"] {
       const module = (window.MODULES || []).find((m) => m.id === t.module);
       if (!module) return alert(`Unknown module "${t.module}" — can't build an edit form for this ticket.`);
       const fieldMap = t.fieldMap || {};
+      // MERGED (2026-08-20) — resolves this module's field set for the
+      // TICKET'S OWN country (t.country, sent by GET /api/threads — see
+      // that endpoint's own comment on why it's tagged there), not the
+      // agent's currently-selected country. An agent working PKR who
+      // opens an INR ticket (allowed if their account can see both) must
+      // still get INR's field definitions, since that's what the ticket
+      // was actually submitted with — using the viewer's own country
+      // here would silently show the wrong fields/options for tickets
+      // from any OTHER country than whichever one happens to be selected
+      // right now.
+      const fields = window.getModuleFields ? window.getModuleFields(module, t.country) : (module.fields || []);
 
       const overlay = document.createElement("div");
       overlay.className = "edit-details-overlay";
@@ -1489,7 +1514,7 @@ html[data-theme="light"] {
       const container = overlay.querySelector("#editDetailsFields");
       const fieldEls = {};
 
-      module.fields.forEach((f) => {
+      fields.forEach((f) => {
         const wrap = document.createElement("div");
         wrap.className = "field";
         const value = fieldMap[f.key] != null ? fieldMap[f.key] : "";
@@ -1525,12 +1550,12 @@ html[data-theme="light"] {
         });
       }
       function refreshVisibility() {
-        module.fields.forEach((f) => {
+        fields.forEach((f) => {
           if (!f.showIf) return;
           fieldEls[f.key].wrap.style.display = conditionMet(f.showIf) ? "" : "none";
         });
       }
-      module.fields.forEach((f) => {
+      fields.forEach((f) => {
         if (fieldEls[f.key].control.tagName === "SELECT") {
           fieldEls[f.key].control.addEventListener("change", refreshVisibility);
         }
@@ -1543,10 +1568,10 @@ html[data-theme="light"] {
       overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
 
       overlay.querySelector("#editDetailsSave").addEventListener("click", async () => {
-        const fields = module.fields
+        const submittedFields = fields
           .filter((f) => !f.showIf || fieldEls[f.key].wrap.style.display !== "none")
           .map((f) => ({ key: f.key, label: f.label, value: (fieldEls[f.key].control.value || "").trim() }));
-        const missingRequired = module.fields.find((f) =>
+        const missingRequired = fields.find((f) =>
           f.required && (!f.showIf || fieldEls[f.key].wrap.style.display !== "none") && !fieldEls[f.key].control.value.trim()
         );
         const statusEl = overlay.querySelector("#editDetailsStatus");
@@ -1556,14 +1581,14 @@ html[data-theme="light"] {
           return;
         }
 
-        const newFieldMap = Object.fromEntries(fields.map((f) => [f.key, f.value]));
+        const newFieldMap = Object.fromEntries(submittedFields.map((f) => [f.key, f.value]));
         const saveBtn = overlay.querySelector("#editDetailsSave");
         saveBtn.disabled = true;
         saveBtn.textContent = "Saving…";
         statusEl.textContent = "";
         statusEl.className = "edit-details-status";
 
-        const res = await postAction({ action: "editDetails", fields, fieldMap: newFieldMap });
+        const res = await postAction({ action: "editDetails", fields: submittedFields, fieldMap: newFieldMap });
         if (!res.ok) {
           statusEl.textContent = res.error || "Save failed.";
           statusEl.className = "edit-details-status err";
@@ -1649,6 +1674,7 @@ html[data-theme="light"] {
       const newFileListEl = overlay.querySelector("#fwdFileList");
       let fieldEls = {};
       let targetModule = null;
+      let targetFields = []; // resolved via getModuleFields(targetModule, source.country) below — see that call site's comment for why source.country, not the viewer's current country
       const newFiles = []; // File objects, converted to base64 only at submit time
 
       // Show the source ticket's own attachments as the "carried over"
@@ -1671,11 +1697,19 @@ html[data-theme="light"] {
           submitBtn.disabled = true;
           return;
         }
+        // A forwarded ticket keeps the SAME brand (and therefore the
+        // same country) as its source — see submit.js's forward handler
+        // — so the target module's fields must be resolved for
+        // source.country, not whatever country the viewing agent
+        // currently has selected in the switcher (those can differ: an
+        // agent working PKR can still forward/view an INR ticket they
+        // have access to).
+        targetFields = window.getModuleFields ? window.getModuleFields(targetModule, source.country) : (targetModule.fields || []);
         fieldsWrap.style.display = "";
         submitBtn.disabled = false;
 
         const sourceFieldMap = source.fieldMap || {};
-        targetModule.fields.forEach((f) => {
+        targetFields.forEach((f) => {
           const wrap = document.createElement("div");
           wrap.className = "field";
           const value = sourceFieldMap[f.key] != null ? sourceFieldMap[f.key] : "";
@@ -1710,12 +1744,12 @@ html[data-theme="light"] {
           });
         }
         function refreshVisibility() {
-          targetModule.fields.forEach((f) => {
+          targetFields.forEach((f) => {
             if (!f.showIf) return;
             fieldEls[f.key].wrap.style.display = conditionMet(f.showIf) ? "" : "none";
           });
         }
-        targetModule.fields.forEach((f) => {
+        targetFields.forEach((f) => {
           if (fieldEls[f.key].control.tagName === "SELECT") {
             fieldEls[f.key].control.addEventListener("change", refreshVisibility);
           }
@@ -1808,10 +1842,10 @@ html[data-theme="light"] {
           statusEl.className = "edit-details-status err";
           return;
         }
-        const fields = targetModule.fields
+        const fields = targetFields
           .filter((f) => !f.showIf || fieldEls[f.key].wrap.style.display !== "none")
           .map((f) => ({ key: f.key, label: f.label, value: (fieldEls[f.key].control.value || "").trim() }));
-        const missingRequired = targetModule.fields.find((f) =>
+        const missingRequired = targetFields.find((f) =>
           f.required && (!f.showIf || fieldEls[f.key].wrap.style.display !== "none") && !fieldEls[f.key].control.value.trim()
         );
         if (missingRequired) {

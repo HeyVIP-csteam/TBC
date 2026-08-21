@@ -188,7 +188,7 @@
       mountEl.removeAttribute("data-view");
       homeEl.style.display = "";
       if (opts.pushUrl !== false) history.pushState({ view: "home" }, "", SHELL_PATH);
-      document.title = "PKR CS Team - TBC";
+      document.title = "CS Team - TBC";
       updateActiveNav("home", null);
       return;
     }

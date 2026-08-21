@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>PKR CS Team - TBC</title>
+<title>CS Team - TBC</title>
 <script src="/assets/theme.js?v=c61fb537"></script>
 <style>
 /* Inline placeholder canvas background — first thing the browser parses
@@ -35,11 +35,14 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=d90eceb8" />
+<link rel="stylesheet" href="/assets/style.css?v=d64b0943" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
-<script src="/assets/authguard.js?v=19b1b251"></script>
+<script src="/assets/authguard.js?v=7f4ad6db"></script>
+<script src="/assets/countries.js?v=78bdc076"></script>
+<script src="/assets/country-modules.js?v=4de67331"></script>
+<script src="/assets/agent-country.js?v=8814764c"></script>
 <script src="/assets/presence-heartbeat.js?v=a0820d9b"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
 </head>
@@ -50,10 +53,11 @@ html[data-theme="light"] {
         <span></span><span></span><span></span>
       </button>
       <img src="/assets/img/logo.webp" alt="HeyVIP" class="logo-img" />
-      <span class="wordmark">PKR CS TEAM - TBC</span>
+      <span class="wordmark">CS TEAM - TBC</span>
     </div>
     <div class="topbar-right">
       <span class="clock" id="liveClock"></span>
+      <span class="country-switcher-mount" id="countrySwitcherMount"></span>
       <button class="theme-pill" id="themeToggle"></button>
       <span class="agent-whoami" id="agentWhoami"></span>
     </div>
@@ -255,14 +259,14 @@ html[data-theme="light"] {
             <div class="t-sub-stat" id="announceStat"></div>
             <span class="t-arrow">&rarr;</span>
           </a>
-          <a href="/betting-resources.html" class="tool-card" style="--tool-accent:#c8912f;">
+          <a href="/betting-resources.html" class="tool-card" data-route="betting_resources" style="--tool-accent:#c8912f;">
             <div class="t-icon">🎲</div>
             <div class="t-name">HeyVIP Betting Rules</div>
             <div class="t-desc">Betting guidance links + results-finding websites</div>
             <span class="t-arrow">&rarr;</span>
           </a>
           <!-- Row 3 -->
-          <a href="#" class="tool-card" id="activeAgentsCard" style="--tool-accent:#34d399; display:none;">
+          <a href="#" class="tool-card" id="activeAgentsCard" data-route="active_agents" style="--tool-accent:#34d399; display:none;">
             <div class="t-icon" id="activeAgentsIcon">👥</div>
             <div class="t-name">Active Agents</div>
             <div class="t-desc">Real-time presence — who's online right now</div>
@@ -285,9 +289,9 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <script src="/assets/schemas.js?v=189eea70"></script>
+  <script src="/assets/schemas.js?v=3f70df87"></script>
   <script src="/assets/active-agents-modal.js?v=2d846145"></script>
-  <script src="/assets/spa-shell.js?v=7e195107"></script>
+  <script src="/assets/spa-shell.js?v=ad696f3c"></script>
   <script>
     window.initThemeToggle();
     window.initClock();
@@ -295,6 +299,13 @@ html[data-theme="light"] {
     // authguard.js (loaded in <head>) already confirmed we're logged in
     // before this page rendered at all — just fill in the pill.
     window.AgentAuth.renderWhoami("agentWhoami");
+    // Full reload on switch, not a hot re-render — this page's brand
+    // carousel/stats/module sidebar are all built once from top-level
+    // script code below, not from a reusable render function, so a
+    // reload is the simplest way to guarantee every one of them picks
+    // up the new country consistently (same approach as form.html/
+    // promo.html/threads.html).
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => location.reload());
 
     // Narrow-viewport hamburger drawer — only actually visible/usable at
     // ≤720px, or ≤1300px while Threads is the active SPA view (see
@@ -474,6 +485,23 @@ html[data-theme="light"] {
       <div class="stat"><b>${visibleModules.length}</b><span>Modules</span></div>
       <div class="stat"><b>24/7</b><span>Live routing</span></div>
     `;
+
+    // MERGED (2026-08-20) — hides whichever tool-cards the current
+    // country doesn't get (PHP has neither Deposit Issue nor Deposit
+    // Backup nor Betting Rules — see countryModules.js's confirmed
+    // decision). Cards with no data-route (none currently) are left
+    // alone. This only ever HIDES a card, never shows one that was
+    // already display:none for its own separate reason (announceCard/
+    // activeAgentsCard start hidden and get shown later in this script
+    // based on unrelated permission checks — this must run before those,
+    // and must not fight with them after).
+    (function hideCardsForCountry() {
+      const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      if (!country || !window.isHomeCardEnabledForCountry) return;
+      document.querySelectorAll(".tool-card[data-route]").forEach((card) => {
+        if (!window.isHomeCardEnabledForCountry(card.dataset.route, country)) card.style.display = "none";
+      });
+    })();
 
     const list = document.getElementById("sidebarList");
     visibleModules.forEach((m) => {
@@ -838,7 +866,7 @@ html[data-theme="light"] {
         const data = await res.json();
         acctOffices = data.ok ? data.offices : [];
         const officeOptions = acctOffices.map((o) => `<option value="${o.id}">${acctEsc(o.name)}</option>`).join("");
-        const brandPills = (window.BRANDS || []).map((b) => `<div class="brand-toggle-pill" data-brand="${acctEsc(b.name)}">${acctEsc(b.name).toUpperCase()}</div>`).join("");
+        const brandPills = (window.BRANDS || []).map((b) => `<div class="brand-toggle-pill" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`).join("");
         // Manage scope is now "strictly below my own rank" (2026-07
         // redesign, matches the server's canManage() in
         // functions/api/admin/accounts.js) — a SuperAdmin can create
@@ -1946,7 +1974,13 @@ html[data-theme="light"] {
         ? `${timeAgoLocal(a.lastPasswordChange.at)} by ${acctEsc(a.lastPasswordChange.by)}`
         : "—";
       const allBrandsSelected = a.allowedBrands === "all";
-      const brandPills = (window.BRANDS || []).map((b) => `<div class="brand-toggle-pill${allBrandsSelected || (a.allowedBrands || []).includes(b.name) ? " selected" : ""}" data-brand="${acctEsc(b.name)}">${acctEsc(b.name).toUpperCase()}</div>`).join("");
+      // MERGED (2026-08-20) — checks both b.name and b.id against the
+      // stored allowedBrands array: existing accounts saved before this
+      // pass have brand NAMES in there (from when only one country
+      // existed, so no ambiguity yet); this Edit screen now SAVES ids
+      // going forward (see readBrandToggleSelection's data-brand below),
+      // same name-or-id compatibility as canSeeBrand() server-side.
+      const brandPills = (window.BRANDS || []).map((b) => `<div class="brand-toggle-pill${allBrandsSelected || (a.allowedBrands || []).includes(b.name) || (a.allowedBrands || []).includes(b.id) ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`).join("");
       const allModulesSelected = a.allowedModules === "all" || a.allowedModules === undefined;
       const moduleChecks = AGENT_PROFILE_MODULE_LIST.map((m) => `
         <label class="agent-profile-module-check">
