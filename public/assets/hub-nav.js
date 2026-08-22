@@ -116,6 +116,13 @@
 
       const authInfo = window.AgentAuth ? window.AgentAuth.getAuth() : null;
       const visibleModules = window.AgentAuth && window.MODULES ? window.AgentAuth.filterAllowedModules(window.MODULES) : (window.MODULES || []);
+      // MERGED (2026-08-21) — see sortModulesForCountry()'s own comment
+      // in country-modules.js (index.html's copy of this same re-sort
+      // has the fuller explanation) — keeps this persistent sidebar's
+      // module order consistent with the Home page's.
+      const sortedVisibleModules = window.sortModulesForCountry
+        ? window.sortModulesForCountry(visibleModules, window.AgentCountry ? window.AgentCountry.getCountry() : null)
+        : visibleModules;
 
       let html = `
         <div class="sidebar-header"><span class="dot"></span> ISSUE SUBMISSION</div>
@@ -135,7 +142,7 @@
       // gate; that permission and its API endpoints are unchanged, only
       // this nav link is gone.
 
-      visibleModules.forEach((m) => {
+      sortedVisibleModules.forEach((m) => {
         const isActive = opts.activeModule && opts.activeModule === m.id;
         html += `
           <a href="/form.html?module=${encodeURIComponent(m.id)}" class="sidebar-item${isActive ? " active" : ""}" style="--item-accent:${m.accent};">

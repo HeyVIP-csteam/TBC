@@ -41,7 +41,7 @@ html[data-theme="light"] {
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
 <script src="/assets/authguard.js?v=101bd636"></script>
 <script src="/assets/countries.js?v=78bdc076"></script>
-<script src="/assets/country-modules.js?v=7caef210"></script>
+<script src="/assets/country-modules.js?v=e732855c"></script>
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
@@ -295,7 +295,7 @@ html[data-theme="light"] {
 
   <script src="/assets/schemas.js?v=3f70df87"></script>
   <script src="/assets/active-agents-modal.js?v=2d846145"></script>
-  <script src="/assets/spa-shell.js?v=ad696f3c"></script>
+  <script src="/assets/spa-shell.js?v=16788b49"></script>
   <script>
     // MERGED (2026-08-21) — mirrors _shared/accounts.js's
     // OWNER_ONLY_BY_DEFAULT_SECTIONS exception: "botToken" must NOT be
@@ -508,6 +508,12 @@ html[data-theme="light"] {
     const hubStats = document.getElementById("hubStats");
     const visibleBrandCount = (window.AgentAuth ? window.AgentAuth.filterAllowedBrands(window.BRANDS) : window.BRANDS).length;
     const visibleModules = window.AgentAuth ? window.AgentAuth.filterAllowedModules(window.MODULES) : window.MODULES;
+    // MERGED (2026-08-21) — see sortModulesForCountry()'s own comment in
+    // country-modules.js for why this re-sort exists (PHP-specific
+    // sidebar order request) and why it's skipped for "All Countries".
+    const sortedVisibleModules = window.sortModulesForCountry
+      ? window.sortModulesForCountry(visibleModules, window.AgentCountry ? window.AgentCountry.getCountry() : null)
+      : visibleModules;
     hubStats.innerHTML = `
       <div class="stat"><b>${visibleBrandCount}</b><span>Brands</span></div>
       <div class="stat"><b>${visibleModules.length}</b><span>Modules</span></div>
@@ -542,7 +548,7 @@ html[data-theme="light"] {
     })();
 
     const list = document.getElementById("sidebarList");
-    visibleModules.forEach((m) => {
+    sortedVisibleModules.forEach((m) => {
       const a = document.createElement("a");
       a.href = `/form.html?module=${m.id}`;
       a.className = "sidebar-item";
@@ -933,7 +939,20 @@ html[data-theme="light"] {
         const data = await res.json();
         acctOffices = data.ok ? data.offices : [];
         const officeOptions = acctOffices.map((o) => `<option value="${o.id}">${acctEsc(o.name)}</option>`).join("");
-        const brandPills = (window.BRANDS || []).map((b) => `<div class="brand-toggle-pill" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`).join("");
+        // MERGED (2026-08-21) — Currencies now selected FIRST, own
+        // section — direct business-owner request: "选择INR currency之后
+        // 才会出现can see brands 选择项" (Can See Brands only appears
+        // once at least one currency is picked, and only shows THAT
+        // currency's brands — same "country decides which brands you
+        // even get to choose from" logic accounts-admin.html already
+        // had, now folded into this richer form too, since Owner wants
+        // this to be the one real place accounts get created going
+        // forward). window.COUNTRY_CODES/window.COUNTRIES come from
+        // countries.js (already loaded on this page).
+        const countryPills = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []).map((code) => {
+          const label = (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? COUNTRIES[code].name : code;
+          return `<div class="brand-toggle-pill" data-country="${acctEsc(code)}">${acctEsc(label).toUpperCase()} <span class="brand-toggle-country">${acctEsc(code)}</span></div>`;
+        }).join("");
         // Manage scope is now "strictly below my own rank" (2026-07
         // redesign, matches the server's canManage() in
         // functions/api/admin/accounts.js) — a SuperAdmin can create
@@ -952,10 +971,15 @@ html[data-theme="light"] {
           <div class="field"><label>Role</label><select id="am_role">${roleOptions}</select></div>
           <div class="field"><label>Office</label><select id="am_office"><option value="">— none —</option>${officeOptions}</select></div>
           <div class="field">
+            <div class="brand-toggle-label"><span>Currencies</span><span class="select-all-btn" id="am_countrySelectAllBtn">Select All</span></div>
+            <div class="brand-toggle-grid" id="am_countryGrid">${countryPills}</div>
+          </div>
+          <div class="field" id="am_brandField" style="display:none;">
             <div class="brand-toggle-label"><span>Can See Brands</span><span class="select-all-btn" id="am_selectAllBtn">Select All</span></div>
-            <div class="brand-toggle-grid" id="am_brandGrid">${brandPills}</div>
-          </div>`;
-        wireBrandTogglePicker();
+            <div class="brand-toggle-grid" id="am_brandGrid"></div>
+          </div>
+          <p class="edit-modal-note" id="am_brandHint">Pick at least one currency above to choose which brands this account can see.</p>`;
+        wireCountryTogglePicker();
       }
 
       if (mode === "whitelist") {
@@ -1862,7 +1886,6 @@ html[data-theme="light"] {
             <div class="tgroute-mod-name">🔐 ${acctEsc(countryName)} (${acctEsc(country)}) Bot Token</div>
             <p class="edit-modal-note">${statusLine}</p>
             ${s.error ? "" : `
-            <p class="edit-modal-note" style="opacity:0.75;">This is a real credential — whoever holds it can send/receive messages as this Telegram bot. The field below is write-only: pasting a new token and saving overwrites it immediately; the current value is never shown here, even to you, once saved.</p>
             <div class="tgroute-fields" style="flex-direction:column; align-items:stretch;">
               <input type="password" class="bot-token-input" placeholder="Paste a new Bot Token here to replace it — e.g. 123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ${canEditThisBox ? "" : "disabled"} autocomplete="off" style="width:100%;" />
               ${canEditThisBox ? `<div class="tgroute-row-actions" style="margin-top:8px;">
@@ -2927,6 +2950,73 @@ html[data-theme="light"] {
       if (acctMode === "bettinglinks") return saveBettingLinks();
     });
 
+    // MERGED (2026-08-21) — currencies picked FIRST; the brand grid
+    // below is entirely DERIVED from this selection (see
+    // renderCreateAccountBrandGrid()), not an independent picker
+    // anymore for the Create Account flow — a brand from a currency
+    // that isn't checked here can never appear as a choice, so there's
+    // no way to end up with a brand grant that doesn't match the
+    // account's own country scope.
+    function wireCountryTogglePicker() {
+      const grid = document.getElementById("am_countryGrid");
+      const selectAllBtn = document.getElementById("am_countrySelectAllBtn");
+      const pills = Array.from(grid.querySelectorAll(".brand-toggle-pill"));
+
+      function syncSelectAllBtn() {
+        const allSelected = pills.length > 0 && pills.every((p) => p.classList.contains("selected"));
+        selectAllBtn.classList.toggle("active", allSelected);
+        selectAllBtn.textContent = allSelected ? "✓ All Selected" : "Select All";
+      }
+
+      pills.forEach((p) => {
+        p.addEventListener("click", () => {
+          p.classList.toggle("selected");
+          syncSelectAllBtn();
+          renderCreateAccountBrandGrid();
+        });
+      });
+
+      selectAllBtn.addEventListener("click", () => {
+        const allSelected = pills.every((p) => p.classList.contains("selected"));
+        pills.forEach((p) => p.classList.toggle("selected", !allSelected));
+        syncSelectAllBtn();
+        renderCreateAccountBrandGrid();
+      });
+    }
+
+    function readCountryToggleSelection() {
+      const pills = Array.from(document.querySelectorAll("#am_countryGrid .brand-toggle-pill"));
+      const selected = pills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.country);
+      return { selected, allSelected: pills.length > 0 && selected.length === pills.length };
+    }
+
+    // Rebuilds #am_brandGrid to show ONLY brands from currently-checked
+    // currencies (preserving any already-checked brand pills that are
+    // still valid — e.g. checking a 2nd currency doesn't lose the 1st
+    // currency's selections) — and shows/hides the whole "Can See
+    // Brands" field depending on whether any currency is checked at all.
+    function renderCreateAccountBrandGrid() {
+      const { selected: selectedCountries } = readCountryToggleSelection();
+      const field = document.getElementById("am_brandField");
+      const hint = document.getElementById("am_brandHint");
+      if (!selectedCountries.length) {
+        field.style.display = "none";
+        hint.style.display = "";
+        return;
+      }
+      field.style.display = "";
+      hint.style.display = "none";
+
+      const previouslySelected = new Set(
+        Array.from(document.querySelectorAll("#am_brandGrid .brand-toggle-pill.selected")).map((p) => p.dataset.brand)
+      );
+      const brands = (window.BRANDS || []).filter((b) => selectedCountries.includes(b.country));
+      document.getElementById("am_brandGrid").innerHTML = brands.map((b) =>
+        `<div class="brand-toggle-pill${previouslySelected.has(b.id) ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`
+      ).join("");
+      wireBrandTogglePicker();
+    }
+
     function wireBrandTogglePicker() {
       const grid = document.getElementById("am_brandGrid");
       const selectAllBtn = document.getElementById("am_selectAllBtn");
@@ -2937,6 +3027,7 @@ html[data-theme="light"] {
         selectAllBtn.classList.toggle("active", allSelected);
         selectAllBtn.textContent = allSelected ? "✓ All Selected" : "Select All";
       }
+      syncSelectAllBtn();
 
       pills.forEach((p) => {
         p.addEventListener("click", () => {
@@ -2965,6 +3056,9 @@ html[data-theme="light"] {
       const username = document.getElementById("am_username").value.trim();
       const password = document.getElementById("am_password").value;
       if (!username || !password) return setAcctNote("Username and password are required.", "err");
+      const { selected: selectedCountries, allSelected: allCountriesSelected } = readCountryToggleSelection();
+      if (!selectedCountries.length) return setAcctNote("Pick at least one currency.", "err");
+      const allowedCountries = allCountriesSelected ? "all" : selectedCountries;
       const allowedBrands = readBrandToggleSelection();
       setAcctNote("Saving…");
       const res = await window.AgentAuth.authFetch("/api/admin/accounts", {
@@ -2973,6 +3067,7 @@ html[data-theme="light"] {
           action: "save", username, password,
           role: document.getElementById("am_role").value,
           officeId: document.getElementById("am_office").value || null,
+          allowedCountries,
           allowedBrands,
           fullName: document.getElementById("am_fullname").value.trim(),
           pid: document.getElementById("am_pid").value.trim(),

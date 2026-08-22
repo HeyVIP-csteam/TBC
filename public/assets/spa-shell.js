@@ -321,6 +321,26 @@
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const el = e.target.closest("[data-route]");
       if (!el) return;
+      // MERGED (2026-08-21) — a real bug this pass found: this used to
+      // preventDefault()+stopImmediatePropagation() UNCONDITIONALLY for
+      // ANY element with a data-route, before ever checking whether
+      // that route was one this shell actually knows how to mount.
+      // `data-route` is ALSO used for a second, unrelated purpose —
+      // index.html's own country-visibility filter (see
+      // hideCardsForCountry() there, driven by country-modules.js's
+      // HOME_CARDS_BY_COUNTRY) — reads the same attribute on Home cards
+      // that were never meant to be SPA-mounted at all (HeyVIP Betting
+      // Rules, a real page with its own href; Active Agents, which
+      // opens a modal via its own dedicated click listener further down
+      // in index.html). Blindly intercepting every data-route click
+      // meant BOTH of those cards silently did nothing when clicked —
+      // this preventDefault()'d their real navigation/handler, then
+      // mount() below discovered the route wasn't in ROUTES and quietly
+      // returned, with nothing left to fall back to. Checking ROUTES
+      // FIRST, before touching the event at all, lets an unrecognized
+      // route fall through untouched — real <a href> navigation, or
+      // whatever other click listener that element has of its own.
+      if (!ROUTES[el.dataset.route]) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       mount(el.dataset.route, { module: el.dataset.module || undefined }).catch((err) => console.error("[spa-shell] mount failed:", err));
