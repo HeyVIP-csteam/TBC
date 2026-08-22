@@ -256,13 +256,33 @@
       // isn't already owned/loaded by the shell (e.g. /assets/app.js,
       // which the form route needs to re-run on every mount — it reads
       // location.search for ?module= and rebuilds the form fields).
+      //
+      // FIXED (2026-08-22c) — a real, confirmed cache bug: this used to
+      // fetch by `pathname` alone (query string stripped), e.g.
+      // `/assets/app.js` with no `?v=...`. `/assets/*` is served with
+      // `Cache-Control: public, max-age=31536000, immutable` (see
+      // `_headers`) — the WHOLE cache-busting scheme for this project
+      // (update-asset-versions.js rewriting `?v=<content-hash>` on every
+      // asset edit) depends on the version staying attached to the
+      // request. Stripping it here meant every SPA in-page navigation
+      // (sidebar click, no full reload) re-fetched the UNVERSIONED URL —
+      // which, once cached ANYWHERE (a browser, Cloudflare's edge) even
+      // once, stays stuck serving that one frozen copy for a year,
+      // completely independent of any later deploy or version bump. A
+      // full page load (which uses the real `<script src="...?v=...">`
+      // tag natively) could show a fix while in-page navigation kept
+      // showing the old broken version indefinitely — that split was
+      // this exact bug, not a deploy/propagation issue. Now the full
+      // `href` (including the query string) is both the fetch URL and
+      // the cache key, so a version bump actually busts the cache for
+      // this path the same way it already did for a real page load.
       const scripts = [];
       doc.querySelectorAll("script").forEach((s) => {
         if (s.src) {
-          let path;
-          try { path = new URL(s.src, location.origin).pathname; } catch { return; }
-          if (path.startsWith("/assets/") && !SHELL_OWNED_SCRIPTS.has(path)) {
-            scripts.push({ kind: "src", path });
+          let url;
+          try { url = new URL(s.src, location.origin); } catch { return; }
+          if (url.pathname.startsWith("/assets/") && !SHELL_OWNED_SCRIPTS.has(url.pathname)) {
+            scripts.push({ kind: "src", path: url.pathname + url.search });
           }
         } else if (s.textContent.trim()) {
           scripts.push({ kind: "inline", text: s.textContent });
