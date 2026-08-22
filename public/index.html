@@ -1916,12 +1916,21 @@ html[data-theme="light"] {
 
       const boxesHtml = countries.map((country) => {
         const s = acctBotTokenStatusByCountry[country] || { configured: false };
+        const ws = s.webhookSecret || { configured: false };
         const countryName = (window.COUNTRIES && window.COUNTRIES[country]) ? window.COUNTRIES[country].name : country;
         const statusLine = s.error
           ? `<span class="route-tag">error</span> ${acctEsc(s.error)}`
           : s.configured
             ? `<span class="route-tag custom">custom</span> Configured — ending in <code>••${acctEsc(s.last4 || "????")}</code>${s.updatedAt ? ` · last changed ${acctEsc(new Date(s.updatedAt).toLocaleString())}${s.updatedBy ? ` by ${acctEsc(s.updatedBy)}` : ""}` : ""}`
             : `<span class="route-tag">default</span> Not configured here — using the ${acctEsc(country)}'s TELEGRAM_BOT_TOKEN_${acctEsc(country)} Cloudflare secret.`;
+        // MERGED (2026-08-22) — Webhook Secret status line — separate
+        // credential from the Bot Token above, same write-only pattern.
+        // Needed for the auto-webhook-registration this same Save
+        // button triggers (see saveBotToken() below) to actually work
+        // without ever touching the Cloudflare dashboard.
+        const webhookStatusLine = ws.configured
+          ? `<span class="route-tag custom">custom</span> Configured — ending in <code>••${acctEsc(ws.last4 || "????")}</code>${ws.updatedAt ? ` · last changed ${acctEsc(new Date(ws.updatedAt).toLocaleString())}${ws.updatedBy ? ` by ${acctEsc(ws.updatedBy)}` : ""}` : ""}`
+          : `<span class="route-tag">default</span> Not configured here — using ${acctEsc(country)}'s TELEGRAM_WEBHOOK_SECRET_${acctEsc(country)} Cloudflare secret (or the shared TELEGRAM_WEBHOOK_SECRET, if that one isn't set either).`;
         const canEditThisBox = canEdit && !s.error;
 
         return `
@@ -1935,6 +1944,15 @@ html[data-theme="light"] {
                 <button type="button" class="tgroute-action-btn bot-token-save">Save new token</button>
                 ${s.configured ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary bot-token-clear">Revert to Cloudflare secret</button>' : ""}
               </div>` : ""}
+            </div>
+            <div class="tgroute-mod-name" style="margin-top:16px; font-size:12.5px;">🔑 Webhook Secret</div>
+            <p class="edit-modal-note">${webhookStatusLine}</p>
+            <div class="tgroute-fields" style="flex-direction:column; align-items:stretch;">
+              <input type="password" class="webhook-secret-input" placeholder="Paste the webhook secret here — letters, numbers, _ and - only" ${canEditThisBox ? "" : "disabled"} autocomplete="off" style="width:100%;" />
+              ${canEditThisBox ? `<div class="tgroute-row-actions" style="margin-top:8px;">
+                <button type="button" class="tgroute-action-btn webhook-secret-save">Save new secret</button>
+                ${ws.configured ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary webhook-secret-clear">Revert to Cloudflare secret</button>' : ""}
+              </div>` : ""}
             </div>`}
           </div>`;
       }).join('<hr class="tgroute-divider" />');
@@ -1947,6 +1965,8 @@ html[data-theme="light"] {
         const country = row.dataset.country;
         row.querySelector(".bot-token-save")?.addEventListener("click", () => saveBotToken(country, row));
         row.querySelector(".bot-token-clear")?.addEventListener("click", () => clearBotToken(country));
+        row.querySelector(".webhook-secret-save")?.addEventListener("click", () => saveWebhookSecret(country, row));
+        row.querySelector(".webhook-secret-clear")?.addEventListener("click", () => clearWebhookSecret(country));
       });
     }
 
@@ -1962,8 +1982,19 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
-      acctBotTokenStatusByCountry[country] = data;
-      setAcctNote("Bot Token updated.", "ok");
+      acctBotTokenStatusByCountry[country] = { ...acctBotTokenStatusByCountry[country], ...data };
+      // MERGED (2026-08-22) — direct business-owner request: saving a new
+      // token now ALSO auto-registers Telegram's webhook for it (see
+      // autoRegisterWebhook() in admin/bot-token.js) — no more manual
+      // curl command needed after a rotation. Still surfaces a failure
+      // clearly rather than silently — a broken auto-registration means
+      // the bot can send but never receive, which is easy to miss until
+      // "replies stopped coming in" gets reported days later.
+      if (data.webhook && data.webhook.ok) {
+        setAcctNote("Bot Token updated — webhook re-registered automatically.", "ok");
+      } else {
+        setAcctNote(`Bot Token updated, but webhook registration failed: ${(data.webhook && data.webhook.error) || "unknown error"} — register it manually (see telegram-webhook/[country].js).`, "err");
+      }
       renderBotTokenPanel(Object.keys(acctBotTokenStatusByCountry));
     }
 
@@ -1976,8 +2007,61 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Failed.", "err");
-      acctBotTokenStatusByCountry[country] = data;
-      setAcctNote("Reverted to the Cloudflare secret default.", "ok");
+      acctBotTokenStatusByCountry[country] = { ...acctBotTokenStatusByCountry[country], ...data };
+      // Reverting changes which token is ACTIVE too — same auto-webhook
+      // follow-up as saving a new one, see that function's comment.
+      if (data.webhook && data.webhook.ok) {
+        setAcctNote("Reverted to the Cloudflare secret default — webhook re-registered automatically.", "ok");
+      } else {
+        setAcctNote(`Reverted, but webhook registration failed: ${(data.webhook && data.webhook.error) || "unknown error"} — register it manually.`, "err");
+      }
+      renderBotTokenPanel(Object.keys(acctBotTokenStatusByCountry));
+    }
+
+    // MERGED (2026-08-22) -- Webhook Secret save/clear, direct business-
+    // owner follow-up request: auto webhook-registration only worked
+    // end to end if TELEGRAM_WEBHOOK_SECRET was already set as a
+    // Cloudflare secret -- this lets that secret ALSO be configured from
+    // this same page, no dashboard access needed for either credential
+    // this feature depends on. Both trigger a fresh registration too
+    // (see admin/bot-token.js's own comment on why that's required --
+    // Telegram has to be told to start sending the NEW secret back).
+    async function saveWebhookSecret(country, row) {
+      const input = row.querySelector(".webhook-secret-input");
+      const secret = input.value.trim();
+      if (!secret) return setAcctNote("Paste a secret before saving.", "err");
+      if (!confirm(`Overwrite ${country}'s webhook secret right now? This immediately re-registers the webhook -- make sure it's correct.`)) return;
+      setAcctNote("Saving...");
+      const res = await window.AgentAuth.authFetch("/api/admin/bot-token", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "saveWebhookSecret", country, secret }),
+      });
+      const data = await res.json();
+      if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
+      acctBotTokenStatusByCountry[country] = { ...acctBotTokenStatusByCountry[country], webhookSecret: data.webhookSecret };
+      if (data.webhook && data.webhook.ok) {
+        setAcctNote("Webhook secret updated -- webhook re-registered automatically.", "ok");
+      } else {
+        setAcctNote(`Webhook secret updated, but re-registration failed: ${(data.webhook && data.webhook.error) || "unknown error"} -- register it manually.`, "err");
+      }
+      renderBotTokenPanel(Object.keys(acctBotTokenStatusByCountry));
+    }
+
+    async function clearWebhookSecret(country) {
+      if (!confirm(`Revert ${country}'s webhook secret back to its Cloudflare secret default? This immediately re-registers the webhook.`)) return;
+      setAcctNote("Reverting...");
+      const res = await window.AgentAuth.authFetch("/api/admin/bot-token", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clearWebhookSecret", country }),
+      });
+      const data = await res.json();
+      if (!data.ok) return setAcctNote(data.error || "Failed.", "err");
+      acctBotTokenStatusByCountry[country] = { ...acctBotTokenStatusByCountry[country], webhookSecret: data.webhookSecret };
+      if (data.webhook && data.webhook.ok) {
+        setAcctNote("Reverted to the Cloudflare secret default -- webhook re-registered automatically.", "ok");
+      } else {
+        setAcctNote(`Reverted, but re-registration failed: ${(data.webhook && data.webhook.error) || "unknown error"} -- register it manually.`, "err");
+      }
       renderBotTokenPanel(Object.keys(acctBotTokenStatusByCountry));
     }
 
