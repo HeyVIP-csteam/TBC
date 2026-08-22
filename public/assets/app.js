@@ -1,10 +1,41 @@
 (function () {
+  // HARDENED (2026-08-22b) — this entire IIFE builds the form top-to-
+  // bottom in one pass (brand dropdown, then dynamic fields like Issue
+  // Type, then submit wiring). Under the SPA shell this whole file is
+  // re-run via `new Function(text)()` on every in-page navigation (see
+  // spa-shell.js's mount()), and that call site only wraps each script
+  // in a try/catch that LOGS the error and moves on — it does NOT stop
+  // the throw from aborting everything below it *inside* this file. A
+  // previous incident (allowedCountries resolving to a non-array — see
+  // the Array.isArray guard further down) proved this: one throw
+  // anywhere in here silently blanks out every dynamic field below the
+  // throw point, with no visible sign to the agent — just a
+  // half-rendered form (brand dropdown present, Issue Type and
+  // everything after it missing). That guard fixed ONE specific throw
+  // site; it does not protect against a DIFFERENT future throw
+  // somewhere else in this file having the exact same silent-blank
+  // symptom. So the whole body is now wrapped in one top-level
+  // try/catch as a last line of defense: any uncaught error here still
+  // gets logged in full (same detail as before, nothing lost for
+  // debugging) AND now also shows the agent a visible, honest "form
+  // failed to load, please refresh" message instead of a form that
+  // just looks mysteriously incomplete. This does not replace fixing
+  // the actual root cause of any given throw — it's a safety net for
+  // whichever throw hasn't been found and fixed yet.
+  try {
   if (window.initThemeToggle) window.initThemeToggle();
   if (window.initClock) window.initClock();
   if (window.AgentAuth) window.AgentAuth.renderWhoami("agentWhoami");
   const params = new URLSearchParams(location.search);
   const moduleId = params.get("module");
-  const module = window.MODULES.find((m) => m.id === moduleId);
+  // HARDENED (2026-08-22b) — window.MODULES is set once by schemas.js
+  // (shell-owned, loaded exactly once, never re-run) so this should
+  // always be an array by the time this file runs. `|| []` is a cheap
+  // belt-and-suspenders guard anyway: if it's ever missing for any
+  // reason, this now degrades to "Form not found" (see the `!module`
+  // branch right below) instead of throwing and silently blanking the
+  // whole page with no explanation.
+  const module = (window.MODULES || []).find((m) => m.id === moduleId);
 
   const formCard = document.querySelector(".form-card");
   const titleEl = document.getElementById("formTitle");
@@ -631,4 +662,21 @@
       document.getElementById("submitLabel").textContent = `Submit ${module.name}`;
     }
   });
+  } catch (err) {
+    // HARDENED (2026-08-22b) — last-resort catch for the whole file,
+    // see the comment at the top of this IIFE. Full detail still goes
+    // to console (nothing lost for debugging), but the agent ALSO now
+    // sees a plain, honest message instead of a form that's silently
+    // missing its dynamic fields with no explanation.
+    console.error("[app.js] form failed to build:", err);
+    const titleEl = document.getElementById("formTitle");
+    const hintEl = document.getElementById("formHint");
+    const formEl = document.querySelector(".form-card form");
+    if (titleEl) titleEl.textContent = "Couldn't load this form";
+    if (hintEl) {
+      hintEl.textContent = "Something went wrong loading this page. Please refresh (Ctrl+Shift+R) — if it keeps happening, tell the team what module/brand/country you were on.";
+      hintEl.style.color = "var(--err, #f87171)";
+    }
+    if (formEl) formEl.style.display = "none";
+  }
 })();
