@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=87bb7091" />
+<link rel="stylesheet" href="/assets/style.css?v=43e828ed" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -174,17 +174,7 @@ html[data-theme="light"] {
     // (admin/announcements.js has required `country` on GET and POST
     // since Announcements became per-country content — see that file's
     // header — but this page never actually sent one, a real pre-
-    // existing bug this pass found). When the top switcher (top right)
-    // has a specific country selected, this always mirrors it. When the
-    // top switcher is "All Countries", this page has its OWN small
-    // in-page country picker (see renderWorkingCountryPicker() below)
-    // instead of just blocking — an Owner in "All Countries" mode can
-    // still fully browse/edit every country's announcements, just via
-    // this page's own picker rather than the top one (Announcements has
-    // no combined "all countries" view — each country's list is
-    // genuinely separate config — so there's no way to show them all at
-    // once here, only to make switching between them easy without
-    // leaving "All Countries" mode at the top).
+    // existing bug this pass found).
     //
     // REVISED (2026-08-21, same day) — direct business-owner feedback:
     // "All Countries" should show every country's announcements
