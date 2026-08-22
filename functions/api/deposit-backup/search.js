@@ -11,13 +11,16 @@
  *   1. No update endpoint — this module is read-only by design (see
  *      PROJECT_STATUS.md decision). Results still include the CS-facing
  *      columns (CS PIC, Status CS, etc.) for reference, just not editable.
- *   2. Two sheets per brand instead of one — "This Month" and "Last
- *      Month" are searched together by default (per business owner's
- *      request), each tagged with which one a result came from.
- *   3. No hardcoded default sheet for any brand — Deposit Backup has no
+ *   2. No hardcoded default sheet for any brand — Deposit Backup has no
  *      Crickex-style bootstrap default; every brand starts unconfigured
  *      until a link is saved via the "Deposit Sheet Link" admin page's
- *      Deposit Backup rows.
+ *      Deposit Backup row.
+ *
+ * REMOVED (2026-08-22) — this used to also search a "Last Month" sheet
+ * alongside "This Month"; that whole concept (rollover, read-only Last
+ * Month row/Transfer button, and this search branch) has been fully
+ * decommissioned — see _shared/depositSheets.js's file header. Only
+ * "This Month" exists now.
  *
  * MERGED (2026-08-21) — column layout is now resolved PER COUNTRY (see
  * _shared/depositColumns.js), not hardcoded to PKR's A–W layout for
@@ -130,7 +133,6 @@ async function handleSearch({ request, env }) {
   const backup = await getDepositBackup(env, requestedBrand);
   const months = [];
   if (backup.thisMonth) months.push({ key: "thisMonth", label: "This Month", sheetId: backup.thisMonth.sheetId, tabNames: backup.thisMonth.tabNames });
-  if (backup.lastMonth) months.push({ key: "lastMonth", label: "Last Month", sheetId: backup.lastMonth.sheetId, tabNames: backup.lastMonth.tabNames });
 
   if (!months.length) {
     return json({ ok: true, results: [], notConfigured: true, brand: requestedBrand });
@@ -264,11 +266,6 @@ async function handleSearch({ request, env }) {
     ok: true,
     results,
     tabWarnings: tabWarnings.length ? tabWarnings : undefined,
-    // Which of This Month / Last Month simply isn't linked yet (not an
-    // error — perfectly normal early in a month, or before onboarding).
-    missingMonths: ["thisMonth", "lastMonth"].filter((k) => !months.some((m) => m.key === k)).length
-      ? ["thisMonth", "lastMonth"].filter((k) => !months.some((m) => m.key === k))
-      : undefined,
   });
 }
 

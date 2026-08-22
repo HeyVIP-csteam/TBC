@@ -154,20 +154,21 @@ export async function deleteDepositSheetOverride(env, moduleSlot, brandId) {
 }
 
 /**
- * ── Deposit Backup: "This Month" / "Last Month" rotation ──
+ * ── Deposit Backup: "This Month" sheet ──
  *
- * Deliberately stored as ONE combined KV entry per brand (not two
- * separate keys) so the rollover operation below is a single atomic
- * write — no risk of "This Month cleared but Last Month write failed"
- * leaving things half-updated.
+ * REMOVED (2026-08-22) — "Last Month" rotation (rollDepositBackup(), the
+ * read-only Last Month row/Transfer button, and Last Month search) has
+ * been fully decommissioned per direct request — it was already pulled
+ * from the admin UI earlier (see CHANGES-maintenance-removal.md §2),
+ * but the search/directory read paths were deliberately left behind at
+ * the time ("if you'd also like Last Month dropped from the search
+ * itself... that's a separate change"). This is that follow-up: nothing
+ * in this file, search.js, sheet-links.js, or deposit-backup.html
+ * reads/writes/displays a "lastMonth" value anymore. Any leftover
+ * `lastMonth` field in old KV rows is simply never read — harmless,
+ * not worth a migration to strip it out.
  *
- *   deposit-backup:<brandId> -> { thisMonth: {sheetId,tabNames}|null,
- *                                  lastMonth: {sheetId,tabNames}|null }
- *
- * Only "This Month" is ever directly editable — "Last Month" is
- * read-only in the UI and only ever changes via rollDepositBackup()
- * below, by design (see the admin page for the reasoning): it's always
- * "whatever This Month was, before the most recent rollover."
+ *   deposit-backup:<brandId> -> { thisMonth: {sheetId,tabNames}|null }
  */
 function backupKey(brandId) {
   return `deposit-backup:${brandId}`;
@@ -175,14 +176,14 @@ function backupKey(brandId) {
 
 export async function getDepositBackup(env, brandId) {
   const store = kvForBrand(env, brandId);
-  if (!store) return { thisMonth: null, lastMonth: null };
+  if (!store) return { thisMonth: null };
   const raw = await store.get(backupKey(brandId));
-  if (!raw) return { thisMonth: null, lastMonth: null };
+  if (!raw) return { thisMonth: null };
   try {
     const parsed = JSON.parse(raw);
-    return { thisMonth: parsed.thisMonth || null, lastMonth: parsed.lastMonth || null };
+    return { thisMonth: parsed.thisMonth || null };
   } catch {
-    return { thisMonth: null, lastMonth: null };
+    return { thisMonth: null };
   }
 }
 
@@ -193,33 +194,17 @@ export async function saveDepositBackupThisMonth(env, brandId, { sheetUrlOrId, t
   if (!sheetId) throw new Error("Couldn't find a Sheet ID in that link — paste the full Google Sheets URL or just the ID.");
   const cleanTabs = String(tabNames || "").split(",").map((t) => t.trim()).filter(Boolean);
   if (!cleanTabs.length) throw new Error("At least one tab name is required.");
-  const current = await getDepositBackup(env, brandId);
-  const updated = { thisMonth: { sheetId, tabNames: cleanTabs }, lastMonth: current.lastMonth };
+  const updated = { thisMonth: { sheetId, tabNames: cleanTabs } };
   await store.put(backupKey(brandId), JSON.stringify(updated));
   return updated;
 }
 
 // Clears This Month only (no hardcoded default to "reset" back to, for
-// backup sheets — unlike Deposit Issue's Crickex default). Last Month is
-// left untouched.
+// backup sheets — unlike Deposit Issue's Crickex default).
 export async function clearDepositBackupThisMonth(env, brandId) {
   const store = kvForBrand(env, brandId);
   if (!store) throw new Error(`No ticket storage bound for brand "${brandId}"'s country.`);
-  const current = await getDepositBackup(env, brandId);
-  const updated = { thisMonth: null, lastMonth: current.lastMonth };
-  await store.put(backupKey(brandId), JSON.stringify(updated));
-  return updated;
-}
-
-// The rollover: whatever's currently in This Month becomes the new Last
-// Month (discarding whatever was there before), and This Month is
-// cleared out ready for the new link to be pasted in via
-// saveDepositBackupThisMonth() as a separate, explicit next step.
-export async function rollDepositBackup(env, brandId) {
-  const store = kvForBrand(env, brandId);
-  if (!store) throw new Error(`No ticket storage bound for brand "${brandId}"'s country.`);
-  const current = await getDepositBackup(env, brandId);
-  const updated = { thisMonth: null, lastMonth: current.thisMonth };
+  const updated = { thisMonth: null };
   await store.put(backupKey(brandId), JSON.stringify(updated));
   return updated;
 }

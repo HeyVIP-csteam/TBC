@@ -7,8 +7,7 @@
  *   GET
  *     -> { ok: true, brands: [{id,name}],
  *          sheets: { [brandId]: { sheetId, tabNames, isOverride } },
- *          backup: { [brandId]: { thisMonth: {sheetId,tabNames}|null,
- *                                  lastMonth: {sheetId,tabNames}|null } } }
+ *          backup: { [brandId]: { thisMonth: {sheetId,tabNames}|null } } }
  *        `isOverride: true` means it's a live KV override (edited through
  *        this page); `false` means it's still showing the hardcoded
  *        default (only PKR's Crickex has one baked into search.js right
@@ -24,17 +23,12 @@
  *     that brand back to its hardcoded default (empty, for every brand
  *     except crickex). Requires canEditAdminSection(..., "depositSheets").
  *
- *   Deposit Backup — "This Month" / "Last Month" rotation. Only This
- *   Month is ever directly editable; Last Month is read-only in the UI
- *   and only changes via the rollover action. See depositSheets.js for
- *   the full reasoning.
+ *   Deposit Backup — "This Month" sheet only ("Last Month" rotation was
+ *   fully removed 2026-08-22, see depositSheets.js's file header).
  *   POST { action:"saveBackupThisMonth", brandId, sheetUrlOrId, tabNames }
- *     -> overwrites This Month only, leaves Last Month untouched.
+ *     -> overwrites This Month.
  *   POST { action:"clearBackupThisMonth", brandId }
- *     -> clears This Month only (no hardcoded default to fall back to).
- *   POST { action:"rollBackup", brandId }
- *     -> This Month becomes the new Last Month (discarding whatever was
- *        there), This Month is cleared out ready for the new link.
+ *     -> clears This Month (no hardcoded default to fall back to).
  *
  * MODULE_SLOT / DEFAULT_CRICKEX below are hand-copied from
  * functions/api/deposit-issue/search.js's own constants — keep in sync
@@ -50,7 +44,6 @@ import {
   getDepositBackup,
   saveDepositBackupThisMonth,
   clearDepositBackupThisMonth,
-  rollDepositBackup,
 } from "../../_shared/depositSheets.js";
 import { logActivity } from "../../_shared/activityLog.js";
 
@@ -165,11 +158,6 @@ async function handlePost({ request, env, waitUntil }) {
   if (body.action === "clearBackupThisMonth") {
     const updated = await clearDepositBackupThisMonth(env, brandId);
     log({ action: "Gsheet Route Reset", detail: `Deposit Backup (This Month) — ${brandName} cleared` });
-    return json({ ok: true, brandId, backup: updated });
-  }
-  if (body.action === "rollBackup") {
-    const updated = await rollDepositBackup(env, brandId);
-    log({ action: "Gsheet Route Changed", detail: `Deposit Backup — ${brandName}: This Month rolled into Last Month` });
     return json({ ok: true, brandId, backup: updated });
   }
 

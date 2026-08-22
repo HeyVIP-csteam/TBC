@@ -5,8 +5,8 @@
  * Backup Sheets" directory view (default landing state, and the only
  * thing "All Brands" does here — no cross-brand search, same scaling
  * reasoning as Deposit Issue). Returns, for every brand the logged-in
- * agent can see, whichever of This Month / Last Month are currently
- * linked.
+ * agent can see, its This Month sheet if one is linked ("Last Month"
+ * was fully removed 2026-08-22, see _shared/depositSheets.js).
  *
  * Same canSeeBrand() filtering as search.js — an agent scoped to one
  * brand only ever gets that brand back.
@@ -37,7 +37,6 @@ async function handleGet({ request, env }) {
         id: b.id,
         name: b.name,
         thisMonthSheetId: backup.thisMonth ? backup.thisMonth.sheetId : null,
-        lastMonthSheetId: backup.lastMonth ? backup.lastMonth.sheetId : null,
       };
     })
   );
