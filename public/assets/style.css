@@ -1835,7 +1835,7 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
 .br-drag-handle:active { cursor: grabbing; }
 .br-result-row.dragging { opacity: 0.4; }
 .br-result-row.drag-over { border-color: var(--accent-gold); }
-.br-result-row .field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; justify-content: center; }
+.br-result-row .field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; justify-content: center; margin: 0; }
 .br-result-row .field.br-icon-field { flex: 0 0 56px; }
 /* Fixed height on every input in this row (icon/name/url alike) —
    without this, the icon input's height was following the emoji
@@ -1859,6 +1859,20 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
 .edit-fields-row .field { flex: 1; margin: 0; min-width: 0; }
 .edit-fields-row .field.br-icon-field { flex: 0 0 64px; }
 .edit-fields-row .field.br-icon-field input { text-align: center; font-size: 18px; padding-left: 4px; padding-right: 4px; }
+/* Fixed height on every input in this row, same reasoning as
+   .br-result-row's own input-height rule above: without this, the
+   Icon input's height follows the emoji glyph's own font metrics
+   (varies by codepoint/browser) while Name/URL follow normal text
+   metrics, so the three boxes could render at very slightly different
+   heights even though visually they're meant to be one aligned row. */
+.edit-fields-row .field input {
+  display: block;
+  height: 40px;
+  line-height: 38px;
+  padding-top: 0;
+  padding-bottom: 0;
+  box-sizing: border-box;
+}
 @media (max-width: 480px) {
   .edit-fields-row { flex-direction: column; align-items: stretch; }
   .edit-fields-row .field.br-icon-field { flex: none; }
