@@ -136,59 +136,73 @@ async function handlePost({ request, env, waitUntil }) {
 
   const ip = requestIP(request);
 
-  // MERGED (2026-08-22) — webhook secret actions, mirroring the Bot
-  // Token actions below exactly (write-only save/clear). Both ALSO
-  // trigger a fresh setWebhook call using the country's CURRENTLY
-  // ACTIVE bot token — changing which secret is "expected" without
-  // re-registering would mean Telegram keeps sending the OLD secret on
-  // every call, and this endpoint's own verification (see
-  // telegram-webhook/[country].js) would immediately start rejecting
-  // every real incoming message with a 403 the moment this saves. The
-  // two must never drift out of lockstep.
-  if (body.action === "saveWebhookSecret") {
-    if (!body.secret || typeof body.secret !== "string") {
-      return json({ ok: false, error: "A `secret` is required to save." }, 400);
+  // MERGED (2026-08-22) — direct business-owner request/observation:
+  // saving the Bot Token and the Webhook Secret as two SEPARATE actions
+  // (as this used to be) meant a save of just the token alone, before
+  // ever touching the secret, would predictably fail to register the
+  // webhook — auto-registration genuinely needs both to exist. Combined
+  // into ONE "save" action that accepts EITHER or BOTH of `token`/
+  // `secret` in the same request, saves whichever were provided, then
+  // does exactly ONE registration call at the end (using whatever
+  // token ends up ACTIVE — the one just saved here, or the existing
+  // one if this particular save only touched the secret). The
+  // frontend's redesigned single-panel-per-country UI (2026-08-22,
+  // matching TG Group/Channel's brand-sidebar layout) now always sends
+  // both fields together from its one Save button, but this also still
+  // works correctly if only one is actually filled in.
+  if (body.action === "save") {
+    if (!body.token && !body.secret) {
+      return json({ ok: false, error: "Enter a Bot Token and/or a Webhook Secret before saving." }, 400);
     }
-    let secretStatus;
-    try {
-      secretStatus = await saveWebhookSecretOverride(env, country, body.secret, auth.account?.username || "bootstrap");
-    } catch (e) {
-      return json({ ok: false, error: String(e.message || e) }, 400);
+    let status = null;
+    let secretStatus = null;
+    if (body.token) {
+      if (typeof body.token !== "string") return json({ ok: false, error: "`token` must be a string." }, 400);
+      try {
+        status = await saveBotTokenOverride(env, country, body.token, auth.account?.username || "bootstrap");
+      } catch (e) {
+        return json({ ok: false, error: String(e.message || e) }, 400);
+      }
     }
-    let webhook = { ok: false, error: "No bot token available to re-register with." };
+    if (body.secret) {
+      if (typeof body.secret !== "string") return json({ ok: false, error: "`secret` must be a string." }, 400);
+      try {
+        secretStatus = await saveWebhookSecretOverride(env, country, body.secret, auth.account?.username || "bootstrap");
+      } catch (e) {
+        return json({ ok: false, error: String(e.message || e) }, 400);
+      }
+    }
+    let webhook = { ok: false, error: "No bot token available to register with." };
     try {
-      const activeToken = await resolveBotToken(env, country);
+      const activeToken = body.token || (await resolveBotToken(env, country));
       webhook = await autoRegisterWebhook(env, request, country, activeToken);
     } catch {
-      // No active token at all yet — nothing to register, secret is
-      // still saved and will take effect once a token exists.
+      // No active token at all yet (this save only touched the secret,
+      // and no token was ever configured before it either) — nothing
+      // to register against; webhook stays at its initial value above.
     }
-    const p = logActivity(env, { category: "Config", action: "Webhook Secret Changed", agent: auth.account?.username, ip, detail: `[${country}] webhook secret was rotated${webhook.ok ? " — webhook re-registered" : " — webhook registration failed, see error"}` });
+    // Deliberately never logs either credential's value, even the last
+    // 4 digits — the activity log is visible to a wider audience (any
+    // admin-or-above with the "settings"/activity-log view) than this
+    // section's own Owner-only-by-default access, so it should reveal
+    // nothing beyond "this happened."
+    const changedWhat = [body.token ? "Bot Token" : null, body.secret ? "Webhook Secret" : null].filter(Boolean).join(" + ");
+    const p = logActivity(env, { category: "Config", action: "Bot Token Settings Changed", agent: auth.account?.username, ip, detail: `[${country}] ${changedWhat} saved${webhook.ok ? " — webhook re-registered" : " — webhook registration failed, see error"}` });
     if (waitUntil) waitUntil(p); else p.catch(() => {});
-    return json({ ok: true, country, webhookSecret: secretStatus, webhook });
-  }
-
-  if (body.action === "clearWebhookSecret") {
-    await clearWebhookSecretOverride(env, country);
-    let webhook = { ok: false, error: "No bot token available to re-register with." };
-    try {
-      const activeToken = await resolveBotToken(env, country);
-      webhook = await autoRegisterWebhook(env, request, country, activeToken);
-    } catch {
-      // No active token — nothing to register against.
-    }
-    const p = logActivity(env, { category: "Config", action: "Webhook Secret Cleared", agent: auth.account?.username, ip, detail: `[${country}] reverted to the Cloudflare secret default${webhook.ok ? " — webhook re-registered" : " — webhook registration failed, see error"}` });
-    if (waitUntil) waitUntil(p); else p.catch(() => {});
-    return json({ ok: true, country, webhookSecret: { configured: false, last4: null, updatedAt: null, updatedBy: null }, webhook });
+    const currentStatus = status || (await getBotTokenStatus(env, country));
+    const currentSecretStatus = secretStatus || (await getWebhookSecretStatus(env, country));
+    return json({ ok: true, country, ...currentStatus, webhookSecret: currentSecretStatus, webhook });
   }
 
   if (body.action === "clear") {
+    // Clears BOTH overrides together (matches the combined single-panel
+    // "Revert to Cloudflare secrets" button — see renderBotTokenPanel()
+    // in index.html) — reverting just one half without the other would
+    // leave a mismatched pair (e.g. a KV-override secret still paired
+    // against the now-reverted-to-Cloudflare-secret token), which is
+    // exactly the kind of drift this whole redesign exists to prevent.
     await clearBotTokenOverride(env, country);
-    // Reverting means the ACTIVE token just changed back to whatever's
-    // in the Cloudflare secret — the webhook has to follow it there too,
-    // or the bot stops receiving replies the instant this clears (the
-    // old registration is still pointed at the just-cleared override's
-    // token, not the secret's).
+    await clearWebhookSecretOverride(env, country);
     let webhook = { ok: false, error: "No token available to register — nothing configured here or in the Cloudflare secret." };
     try {
       const activeToken = await resolveBotToken(env, country);
@@ -197,30 +211,12 @@ async function handlePost({ request, env, waitUntil }) {
       // resolveBotToken threw — genuinely nothing to register against,
       // webhook stays at its initial "no token available" value above.
     }
-    const p = logActivity(env, { category: "Config", action: "Bot Token Cleared", agent: auth.account?.username, ip, detail: `[${country}] reverted to the Cloudflare secret default${webhook.ok ? " — webhook re-registered" : " — webhook registration failed, see error"}` });
+    const p = logActivity(env, { category: "Config", action: "Bot Token Settings Cleared", agent: auth.account?.username, ip, detail: `[${country}] reverted both to Cloudflare secret defaults${webhook.ok ? " — webhook re-registered" : " — webhook registration failed, see error"}` });
     if (waitUntil) waitUntil(p); else p.catch(() => {});
-    return json({ ok: true, country, configured: false, last4: null, updatedAt: null, updatedBy: null, webhook });
+    return json({ ok: true, country, configured: false, last4: null, updatedAt: null, updatedBy: null, webhookSecret: { configured: false, last4: null, updatedAt: null, updatedBy: null }, webhook });
   }
 
-  if (!body.token || typeof body.token !== "string") {
-    return json({ ok: false, error: "A `token` is required to save." }, 400);
-  }
-
-  let status;
-  try {
-    status = await saveBotTokenOverride(env, country, body.token, auth.account?.username || "bootstrap");
-  } catch (e) {
-    return json({ ok: false, error: String(e.message || e) }, 400);
-  }
-  const webhook = await autoRegisterWebhook(env, request, country, body.token);
-  // Deliberately never logs the token itself, even the last 4 digits —
-  // the activity log is visible to a wider audience (any admin-or-above
-  // with the "settings"/activity-log view) than this section's own
-  // Owner-only-by-default access, so it should reveal nothing beyond
-  // "this happened."
-  const p = logActivity(env, { category: "Config", action: "Bot Token Changed", agent: auth.account?.username, ip, detail: `[${country}] Bot Token was rotated${webhook.ok ? " — webhook re-registered" : " — webhook registration failed, see error"}` });
-  if (waitUntil) waitUntil(p); else p.catch(() => {});
-  return json({ ok: true, country, ...status, webhook });
+  return json({ ok: false, error: `Unknown action "${body.action}".` }, 400);
 }
 
 function json(obj, status = 200) {
