@@ -48,8 +48,33 @@ async function handle({ request, env }) {
   // is entirely disjoint from the viewer's own. Uses set overlap, not
   // strict subset — a viewer allowed to see INR+PKR should still see a
   // PKR-only agent (overlap exists), just not a PHP-only one.
+  //
+  // MERGED (2026-08-22) — a real bug this filter introduced: an agent
+  // account whose allowedCountries was never explicitly set (undefined —
+  // common for accounts created before that field existed, or via any
+  // path that didn't set it) resolves to an EMPTY country list via
+  // resolveAllowedCountries() (see countryAccess.js — deliberately fail-
+  // closed for actual data-access permission checks, e.g. canSeeCountry).
+  // An empty list can never overlap with anything, so hasCountryOverlap()
+  // silently excluded that agent from this list ENTIRELY — not shown as
+  // offline, not shown at all — which meant a business owner testing
+  // this page saw "Total: 0" despite real staff actively submitting
+  // real tickets, because most/all of those accounts likely predate
+  // allowedCountries existing. Unlike canSeeCountry (a real data-access
+  // gate, correctly fail-closed), THIS check only decides "is this
+  // colleague's presence status visible to you" — hiding a real staff
+  // member because of an unrelated missing config field is confusing
+  // and wrong, not a meaningful security boundary (presence status
+  // doesn't expose any actual country-specific business data). So an
+  // agent with unset allowedCountries is now treated as "visible to
+  // everyone" here specifically — same "missing field defaults to
+  // unrestricted" treatment allowedBrands/allowedModules already get
+  // everywhere else, just applied to this one field for this one
+  // visibility check, without changing canSeeCountry's own real
+  // data-access behavior anywhere else.
   const viewerCountries = resolveAllowedCountries(auth.account, COUNTRY_CODES);
   const visibleAccounts = accounts.filter((a) => {
+    if (a.allowedCountries === undefined) return true; // unset — visible to everyone, see comment above
     const agentCountries = resolveAllowedCountries(a, COUNTRY_CODES);
     return hasCountryOverlap(viewerCountries, agentCountries);
   });

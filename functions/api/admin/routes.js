@@ -44,11 +44,32 @@
  */
 import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, requestIP } from "../../_shared/accounts.js";
 import { getAllRouteOverrides, saveRouteOverride, deleteRouteOverride, getSecurityAlertsRoute, saveSecurityAlertsRoute, deleteSecurityAlertsRoute } from "../../_shared/routes.js";
-import { BRANDS, MODULE_META } from "../../_shared/routing.js";
+import { BRANDS, MODULE_META, DEPOSIT_CHANNEL_PSEUDO_MODULES } from "../../_shared/routing.js";
+import { MODULES_BY_COUNTRY } from "../../_shared/countryModules.js";
 import { logActivity } from "../../_shared/activityLog.js";
 
 const SECURITY_BRAND_ID = "_security";
 const SECURITY_MODULE_ID = "alerts";
+
+// MERGED (2026-08-22) — a real bug the business owner caught: this
+// admin page was showing PHP's Deposit Request channel routing targets
+// (Deposit — Copopay/SGPay/HTpay/K2Pay/LPay/EWP/Dreampay — see
+// DEPOSIT_CHANNEL_PSEUDO_MODULES in routing.js) as options under EVERY
+// brand, including INR/PKR ones, which don't have Deposit Request at
+// all (they have Deposit Issue/Backup instead — a genuine per-country
+// product difference, see countryModules.js's own header). The GET
+// handler below used to return one single global module list
+// (Object.keys(MODULE_META), no country awareness) and the client
+// showed the same full list under whichever brand happened to be
+// selected — this tags each module with which countries actually use
+// it, so the client can filter rows down to match the SELECTED BRAND's
+// own country, the same way it already does for the brand sidebar
+// itself.
+function moduleCountries(moduleId) {
+  if (DEPOSIT_CHANNEL_PSEUDO_MODULES.includes(moduleId)) return ["PHP"]; // channel routing targets only ever apply to PHP's Deposit Request
+  if (moduleId === SECURITY_MODULE_ID) return ["INR", "PKR", "PHP"]; // Security Alerts is global, not brand/country-scoped at all — see its own separate sidebar row, never filtered by brand country
+  return Object.keys(MODULES_BY_COUNTRY).filter((c) => MODULES_BY_COUNTRY[c].includes(moduleId));
+}
 
 export async function onRequestGet(context) {
   try {
@@ -73,7 +94,7 @@ async function handleGet({ request, env }) {
   const overrides = await getAllRouteOverrides(env, brandIds, moduleIds);
 
   const brands = brandIds.map((id) => ({ id, name: BRANDS[id].name, country: BRANDS[id].country }));
-  const modules = moduleIds.map((id) => ({ id, name: MODULE_META[id].name, emoji: MODULE_META[id].emoji }));
+  const modules = moduleIds.map((id) => ({ id, name: MODULE_META[id].name, emoji: MODULE_META[id].emoji, countries: moduleCountries(id) }));
 
   const routes = {};
   for (const brandId of brandIds) {
