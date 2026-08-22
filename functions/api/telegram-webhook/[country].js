@@ -14,7 +14,13 @@
  * unambiguous, and a typo'd/unsupported country 404s immediately
  * instead of the request landing in the wrong (or every) namespace.
  *
- * Register each bot ONCE (from your own machine, not this app):
+ * Register each bot ONCE (from your own machine, not this app) — OR,
+ * as of 2026-08-22, skip this manual step entirely and use the Bot
+ * Token Settings page (Integration Portal) instead, which does this
+ * same registration automatically the moment a new Bot Token is saved
+ * there (see admin/bot-token.js's autoRegisterWebhook()). The manual
+ * version below is still exactly correct if you'd rather run it by
+ * hand, or need to debug what that automatic call is actually sending:
  *
  *   curl "https://api.telegram.org/bot<INR_TOKEN>/setWebhook" \
  *     -d "url=https://<your-domain>/api/telegram-webhook/inr" \
@@ -27,7 +33,11 @@
  *   really came from Telegram", not which bot — the URL already says
  *   that) — set a PER-COUNTRY secret instead only if you want one
  *   compromised bot token to not also let someone spoof another
- *   country's webhook; either works, see the secret check below.
+ *   country's webhook; either works, see the secret check below. The
+ *   Bot Token Settings page's own "Webhook Secret" field (2026-08-22)
+ *   is the third option — a live, KV-backed override checked BEFORE
+ *   either Cloudflare secret, letting this whole setup happen without
+ *   ever touching the Cloudflare dashboard.
  *
  * If a project migrating from the old single-URL webhook still has it
  * registered: this dynamic route doesn't match the old bare
@@ -37,15 +47,24 @@
  */
 import { findThreadIdByMessage, appendMessage, editIncomingMessageInThread } from "../../_shared/threads.js";
 import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
+import { resolveWebhookSecretWithOverride } from "../../_shared/botTokenOverride.js";
 
 export async function onRequestPost({ request, env, params }) {
   const country = (params.country || "").toUpperCase();
   if (!isValidCountry(country)) return new Response("Not found", { status: 404 });
 
-  // Verify the request really came from Telegram. Falls back to one
-  // shared TELEGRAM_WEBHOOK_SECRET if no per-country override is set —
-  // see the setup note above for why either is fine.
-  const expectedSecret = env[`TELEGRAM_WEBHOOK_SECRET_${country}`] || env.TELEGRAM_WEBHOOK_SECRET;
+  // Verify the request really came from Telegram. MERGED (2026-08-22) —
+  // checks the same KV override the Bot Token Settings page's "Webhook
+  // Secret" field writes to (see botTokenOverride.js) FIRST, before
+  // falling back to the Cloudflare env secret — this is the exact same
+  // value admin/bot-token.js's autoRegisterWebhook() actually told
+  // Telegram to send back on every call. If these two ever checked
+  // DIFFERENT values (e.g. this still only checked the env secret while
+  // that panel registered a KV-override one), every real incoming
+  // message would get rejected here with a 403 the moment someone used
+  // that panel — a real, easy-to-miss failure mode this file and that
+  // one MUST stay in lockstep on.
+  const expectedSecret = (await resolveWebhookSecretWithOverride(env, country)) || env[`TELEGRAM_WEBHOOK_SECRET_${country}`] || env.TELEGRAM_WEBHOOK_SECRET;
   if (expectedSecret) {
     const header = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
     if (header !== expectedSecret) {

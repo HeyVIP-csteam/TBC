@@ -1,11 +1,16 @@
 /**
  * botTokenOverride.js  (SERVER-ONLY)
  *
- * WRITE-ONLY KV override for each country's Telegram Bot Token —
- * requested by the business owner (2026-08-21) so the Owner can rotate
- * a country's bot token from the browser (Bot Token Settings, under
- * Integration Portal) instead of needing Cloudflare dashboard access
- * every time. Layered the same way every other live-editable setting in
+ * WRITE-ONLY KV overrides for the two credentials the Bot Token
+ * Settings panel manages, per country — requested by the business
+ * owner (2026-08-21) so the Owner can rotate a country's bot token from
+ * the browser (Bot Token Settings, under Integration Portal) instead of
+ * needing Cloudflare dashboard access every time; extended (2026-08-22)
+ * to also manage the Telegram webhook secret that same panel's
+ * auto-webhook-registration depends on (see admin/bot-token.js's
+ * autoRegisterWebhook() and this file's own "Webhook secret override"
+ * section further down) — same reasoning, same write-only treatment,
+ * just a second credential alongside the first. Layered the same way every other live-editable setting in
  * this project is (hardcoded env-secret default, KV override checked
  * first — see routes.js/depositSheets.js), EXCEPT for one deliberate
  * difference from every one of those: THIS IS A CREDENTIAL, NOT
@@ -111,4 +116,86 @@ export async function clearBotTokenOverride(env, country) {
   const kv = resolveThreadsKv(env, country);
   if (!kv) return;
   await kv.delete(key());
+}
+
+/**
+ * ── Webhook secret override — same write-only pattern, separate key ──
+ *
+ * MERGED (2026-08-22) — direct business-owner follow-up: the auto
+ * webhook-registration this file's Bot Token override enables (see
+ * admin/bot-token.js's autoRegisterWebhook()) only worked if
+ * TELEGRAM_WEBHOOK_SECRET (or a per-country override) was ALREADY set
+ * as a Cloudflare secret — if it wasn't, auto-registration failed with
+ * an error telling the person to go set it in the Cloudflare dashboard,
+ * which defeats a good chunk of the point ("no more manual steps").
+ * This lets the SAME "Bot Token Settings" page also set the webhook
+ * secret itself, live, no Cloudflare dashboard access needed for
+ * EITHER credential this feature depends on.
+ *
+ * Less sensitive than the Bot Token itself (this only lets someone
+ * PROVE a webhook call really came from Telegram — Telegram sends it
+ * back verbatim in a header on every real call — it does NOT grant any
+ * ability to send/read messages as the bot the way the Bot Token
+ * does), but still a real credential, so it gets the same write-only
+ * treatment as a matter of consistency, not because leaking it alone
+ * is as dangerous as leaking the Bot Token.
+ */
+function webhookSecretKey() {
+  return "webhook-secret-override";
+}
+
+async function getRawWebhookSecret(env, country) {
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return null;
+  const raw = await kv.get(webhookSecretKey());
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function getWebhookSecretStatus(env, country) {
+  const entry = await getRawWebhookSecret(env, country);
+  if (!entry) return { configured: false, last4: null, updatedAt: null, updatedBy: null };
+  return { configured: true, last4: entry.last4 || null, updatedAt: entry.updatedAt || null, updatedBy: entry.updatedBy || null };
+}
+
+// Called exclusively from admin/bot-token.js's autoRegisterWebhook(),
+// same restriction as resolveBotTokenWithOverride() above — never
+// surfaced in an API response.
+export async function resolveWebhookSecretWithOverride(env, country) {
+  const entry = await getRawWebhookSecret(env, country);
+  return entry ? entry.secret : null;
+}
+
+export async function saveWebhookSecretOverride(env, country, secret, updatedBy) {
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) throw new Error(`${country}'s ticket storage is not bound yet.`);
+  const clean = String(secret || "").trim();
+  // Telegram's own constraint on secret_token: 1-256 chars, A-Z a-z 0-9
+  // and underscore/hyphen only — validated here so a typo'd value fails
+  // fast with a clear reason instead of failing opaquely inside
+  // Telegram's own setWebhook rejection later.
+  if (!/^[A-Za-z0-9_-]{1,256}$/.test(clean)) {
+    throw new Error("Telegram's webhook secret can only contain letters, numbers, underscores, and hyphens (1-256 characters).");
+  }
+  const entry = {
+    secret: clean,
+    last4: clean.slice(-4),
+    updatedAt: new Date().toISOString(),
+    updatedBy: updatedBy || "unknown",
+  };
+  await kv.put(webhookSecretKey(), JSON.stringify(entry));
+  return { configured: true, last4: entry.last4, updatedAt: entry.updatedAt, updatedBy: entry.updatedBy };
+}
+
+// Clears the override, reverting this country to its hardcoded
+// TELEGRAM_WEBHOOK_SECRET_<COUNTRY> (or shared TELEGRAM_WEBHOOK_SECRET)
+// Cloudflare secret.
+export async function clearWebhookSecretOverride(env, country) {
+  const kv = resolveThreadsKv(env, country);
+  if (!kv) return;
+  await kv.delete(webhookSecretKey());
 }
