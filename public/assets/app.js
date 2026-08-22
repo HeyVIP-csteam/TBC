@@ -43,7 +43,29 @@
   // entirely — this only matters in "All" mode.
   const currentCountry = window.AgentCountry ? window.AgentCountry.getCountry() : null;
   const isAllCountries = window.AgentCountry && window.AgentCountry.isAll(currentCountry);
-  const allowedCountries = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
+  // MERGED (2026-08-22) — a real, confirmed bug this exact line caused:
+  // under the SPA shell (index.html's client-side page-to-page
+  // navigation — see spa-shell.js), country-modules.js/agent-country.js
+  // get freshly re-executed on every mount (they're NOT in
+  // SHELL_OWNED_SCRIPTS, unlike schemas.js), which is normally fine —
+  // except this whole file (app.js) is one big top-level function, and
+  // a throw ANYWHERE in it (via the SPA shell's `new Function(text)()`
+  // execution) aborts EVERYTHING below the throw, not just the current
+  // statement. `allowedCountries` unexpectedly resolving to something
+  // that isn't an array here (observed in production: a console error
+  // "Cannot read properties of undefined (reading 'find')" at this
+  // exact line) silently blanked out the ENTIRE dynamic field list for
+  // every module below it — Issue Type and everything downstream of it
+  // never rendered at all, with no visible error to the agent, just an
+  // incomplete-looking form. `Array.isArray` guards here make this
+  // section fail SAFE (falls back to the plain single-country path)
+  // instead of fail CRASH regardless of whatever upstream timing
+  // quirk produces a non-array — the actual race this papers over is
+  // still worth root-causing separately, but a defensive guard at the
+  // one place it's fatal is the right fix regardless of root cause.
+  const allowedCountries = Array.isArray(window.AgentCountry && window.AgentCountry.getAllowedCountries())
+    ? window.AgentCountry.getAllowedCountries()
+    : [];
   if (isAllCountries && module.countries && !module.countries.some((c) => allowedCountries.includes(c))) {
     titleEl.textContent = "Not available";
     hintEl.textContent = `${module.name} isn't offered for any of your allowed countries.`;
@@ -57,7 +79,7 @@
     return;
   }
   const effectiveCountry = isAllCountries
-    ? (module.countries || allowedCountries).find((c) => allowedCountries.includes(c)) || allowedCountries[0] || null
+    ? (Array.isArray(module.countries) ? module.countries : allowedCountries).find((c) => allowedCountries.includes(c)) || allowedCountries[0] || null
     : currentCountry;
   const fields = window.getModuleFields ? window.getModuleFields(module, effectiveCountry) : (module.fields || []);
   const moduleExtra = window.getModuleExtra ? window.getModuleExtra(module, effectiveCountry) : {};
