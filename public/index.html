@@ -1701,7 +1701,21 @@ html[data-theme="light"] {
     // (loaded near the top of this script for the pill row itself) is
     // re-synced from every response here so the marquee reflects a save
     // immediately without a page reload.
+    //
+    // REDESIGNED (2026-08-22) — was a single flat brand list (grouped
+    // brand headers, all countries mixed together in "All Countries"
+    // mode — see groupedBrandListHtml()'s own note on why that got
+    // confusing once there were 16 brands across 3 countries). Now a
+    // two-level drill-down matching Bot Token Settings' layout exactly,
+    // per direct request: left column lists just the 3 countries (same
+    // markup/class as renderBotTokenPanel()'s countryListHtml), picking
+    // one shows THAT country's brands as a short list of wide rows in
+    // the middle column — 5 for India, 9 for Pakistan, 2 for the
+    // Philippines — and picking one of those reveals the Pill Link
+    // edit form below it, same as before.
     let acctWebLinkSelectedBrand = null;
+    let acctWebLinkSelectedCountry = null;
+    let acctWebLinkCountriesToShow = [];
 
     async function loadWebLinks() {
       acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
@@ -1714,28 +1728,56 @@ html[data-theme="light"] {
         acctBody.innerHTML = `<p class="edit-modal-note err">${acctEsc(e.message || "Failed to load.")}</p>`;
         return;
       }
-      if (!acctWebLinkSelectedBrand || !getCountryScopedBrands(window.BRANDS || []).some((b) => b.id === acctWebLinkSelectedBrand)) {
-        acctWebLinkSelectedBrand = getCountryScopedBrands(window.BRANDS || [])[0]?.id || null;
+      const topCountry = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      const isAll = window.AgentCountry && window.AgentCountry.isAll(topCountry);
+      const allowed = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
+      acctWebLinkCountriesToShow = isAll ? allowed : (topCountry ? [topCountry] : []);
+      if (!acctWebLinkCountriesToShow.length) {
+        acctBody.innerHTML = `<p class="edit-modal-note err">No country available.</p>`;
+        return;
+      }
+      if (!acctWebLinkSelectedCountry || !acctWebLinkCountriesToShow.includes(acctWebLinkSelectedCountry)) {
+        acctWebLinkSelectedCountry = acctWebLinkCountriesToShow[0];
+      }
+      const brandsInCountry = (window.BRANDS || []).filter((b) => b.country === acctWebLinkSelectedCountry);
+      if (!acctWebLinkSelectedBrand || !brandsInCountry.some((b) => b.id === acctWebLinkSelectedBrand)) {
+        acctWebLinkSelectedBrand = brandsInCountry[0]?.id || null;
       }
       renderWebLinks();
     }
 
     function renderWebLinks() {
-      const brands = getCountryScopedBrands(window.BRANDS || []);
       const canEdit = canEditAdminSection("webLink");
       const roAttr = canEdit ? "" : "disabled";
 
-      const brandListHtml = groupedBrandListHtml(brands, acctWebLinkSelectedBrand);
+      // Level 1 — same exact markup/class as renderBotTokenPanel()'s
+      // countryListHtml, so this looks and behaves identically.
+      const countryListHtml = acctWebLinkCountriesToShow.map((code) => {
+        const label = (window.COUNTRIES && window.COUNTRIES[code]) ? window.COUNTRIES[code].name : code;
+        return `<div class="tgroute-brand${code === acctWebLinkSelectedCountry ? " selected" : ""}" data-country="${acctEsc(code)}">${acctEsc(label)} <span class="brand-toggle-country">${acctEsc(code)}</span></div>`;
+      }).join("");
+
+      // Level 2 — the selected country's brands only, as wide rows
+      // (plain .tgroute-brand pills, no grouping needed — there's only
+      // ever one country's worth here now).
+      const brandsInCountry = (window.BRANDS || []).filter((b) => b.country === acctWebLinkSelectedCountry);
+      const brandListHtml = brandsInCountry
+        .map((b) => `<div class="tgroute-brand${b.id === acctWebLinkSelectedBrand ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>`)
+        .join("");
 
       const entry = brandConfig[acctWebLinkSelectedBrand] || {};
       const hasLink = !!entry.link;
-      const brandName = (brands.find((b) => b.id === acctWebLinkSelectedBrand) || {}).name || acctWebLinkSelectedBrand;
+      const brandName = (brandsInCountry.find((b) => b.id === acctWebLinkSelectedBrand) || {}).name || acctWebLinkSelectedBrand;
+      const countryLabel = (window.COUNTRIES && window.COUNTRIES[acctWebLinkSelectedCountry]) ? window.COUNTRIES[acctWebLinkSelectedCountry].name : acctWebLinkSelectedCountry;
 
       acctBody.innerHTML = `
         <div class="tgroute-layout">
-          <div class="tgroute-brands">${brandListHtml}</div>
+          <div class="tgroute-brands">${countryListHtml}</div>
           <div class="tgroute-modules">
-            <div class="tgroute-row" data-brand="${acctEsc(acctWebLinkSelectedBrand)}">
+            <div class="tgroute-brand-group-label">${acctEsc(countryLabel)} (${acctEsc(acctWebLinkSelectedCountry)}) brands</div>
+            ${brandListHtml || '<p class="edit-modal-note">No brands for this country.</p>'}
+            ${acctWebLinkSelectedBrand ? `
+            <div class="tgroute-row" data-brand="${acctEsc(acctWebLinkSelectedBrand)}" style="margin-top:4px;">
               <div class="tgroute-mod-name">🔗 Pill Link
                 <span class="route-tag${hasLink ? " custom" : ""}">${hasLink ? "SET" : "not set"}</span>
               </div>
@@ -1746,14 +1788,25 @@ html[data-theme="light"] {
                   ${hasLink ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary weblink-reset">Reset</button>' : ""}
                 </div>` : ""}
               </div>
-            </div>
+            </div>` : ""}
           </div>
         </div>
         <hr class="tgroute-divider" />
         ${canEdit ? "" : '<p class="edit-modal-note">View only.</p>'}
-        <p class="edit-modal-note tgroute-footnote">This is the link ${acctEsc(brandName)}'s pill opens on the Home page's marquee row. Changes apply immediately — no redeploy needed.</p>`;
+        ${acctWebLinkSelectedBrand ? `<p class="edit-modal-note tgroute-footnote">This is the link ${acctEsc(brandName)}'s pill opens on the Home page's marquee row. Changes apply immediately — no redeploy needed.</p>` : ""}`;
 
-      acctBody.querySelectorAll(".tgroute-brand").forEach((el) => {
+      acctBody.querySelectorAll(".tgroute-brands .tgroute-brand").forEach((el) => {
+        el.addEventListener("click", () => {
+          const code = el.dataset.country;
+          if (code === acctWebLinkSelectedCountry) return;
+          acctWebLinkSelectedCountry = code;
+          const brandsInNewCountry = (window.BRANDS || []).filter((b) => b.country === code);
+          acctWebLinkSelectedBrand = brandsInNewCountry[0]?.id || null;
+          setAcctNote("");
+          renderWebLinks();
+        });
+      });
+      acctBody.querySelectorAll(".tgroute-modules .tgroute-brand").forEach((el) => {
         el.addEventListener("click", () => {
           acctWebLinkSelectedBrand = el.dataset.brand;
           setAcctNote("");
@@ -1957,11 +2010,15 @@ html[data-theme="light"] {
             <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px;">
               <div>
                 <div class="tgroute-mod-name" style="font-size:13px;">Bot Token</div>
-                <input type="password" id="botTokenInput" placeholder="Paste a new Bot Token" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%; box-sizing:border-box;" />
+                <div class="tgroute-fields">
+                  <input type="password" id="botTokenInput" placeholder="Paste a new Bot Token" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%;" />
+                </div>
               </div>
               <div>
                 <div class="tgroute-mod-name" style="font-size:13px;">Webhook Secret</div>
-                <input type="password" id="webhookSecretInput" placeholder="Paste the webhook secret" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%; box-sizing:border-box;" />
+                <div class="tgroute-fields">
+                  <input type="password" id="webhookSecretInput" placeholder="Paste the webhook secret" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%;" />
+                </div>
               </div>
             </div>
 
