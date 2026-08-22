@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=89fadda5" />
+<link rel="stylesheet" href="/assets/style.css?v=87bb7091" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -74,7 +74,7 @@ html[data-theme="light"] {
       <nav class="brand-row" id="pageBrandRow"><div class="brand-row-track"></div></nav>
       <div id="announcementBanner"></div>
       <div class="threads-body-row">
-    <aside class="threads-sidebar">
+    <aside class="threads-sidebar" id="threadsSidebar">
       <div class="threads-tabs" id="threadsTabs">
         <button type="button" class="threads-tab tab-active" data-tab="active" id="tabActive">
           <span class="threads-tab-label">Active</span>
@@ -237,6 +237,151 @@ html[data-theme="light"] {
     // recreating the whole sidebar on every 6s poll — see renderLists().
     const renderedItemEls = new Map();
 
+    // ---- Virtualized list rendering --------------------------------------
+    // MERGED (2026-08-21) — a direct business-owner performance report:
+    // clicking "Select" on the Solved tab (2,016 threads in it) froze the
+    // tab long enough for Chrome's "Page Unresponsive" prompt to show up.
+    // An earlier pass fixed the WORST of that (making select-mode/checked-
+    // state changes a cheap in-place patch instead of a full rebuild — see
+    // patchItemViewState() below) — but with 2,016 real DOM nodes sitting
+    // in the list at all times regardless, there was still a real,
+    // permanent baseline cost (layout/paint/memory scaling with total
+    // item count) that no amount of cheaper patching alone fixes.
+    //
+    // The actual fix, ported from the INR original project's own
+    // threads.html (it had already solved this exact problem, independent
+    // of this merge — see PATTERNS-virtualized-list-rendering.md there):
+    // only the rows ACTUALLY VISIBLE in the scrollable viewport (roughly
+    // 15–20 of them, plus a small overscan buffer) ever become real DOM
+    // nodes. A single "sizer" element gives the container the correct
+    // total scrollHeight so the scrollbar feels like a normal, complete
+    // list; each visible row is positioned with `top: index * ROW_HEIGHT`
+    // instead of relying on normal document flow. Opening the 2,016-item
+    // Solved tab now costs the same ~25 DOM nodes as opening a 1-thread
+    // tab — the 2,016 only ever affects one number (the sizer's height).
+    //
+    // ADAPTED, not ported as-is: INR's original had Active/Solved sharing
+    // ONE list container with a currentTab-driven switch, and that
+    // container was its own independently-scrolling element. This
+    // codebase's structure is different — activeList/solvedList are two
+    // separate, permanently-present containers, and the actual scrolling
+    // happens on their shared ancestor (#threadsSidebar, which also holds
+    // the search box and tab bar above them) — restructuring the CSS to
+    // match INR's exact layout was judged riskier than adapting the
+    // windowing math to work against the real scroll container instead
+    // (see getListScrollWindow() below, which is the one genuinely new
+    // piece here, not present in INR's version).
+    const CARD_HEIGHT = 58; // .thread-item's real rendered height at this codebase's current padding/font-size (9px*2 padding + ~40px of two-line content) — see the CSS comment on .thread-item for why this must stay a forced constant, not something measured from a real row
+    const ROW_GAP = 6;      // matches .thread-list's own `gap: 6px` — absolutely-positioned rows don't get flex gap for free, so this has to be added into ROW_HEIGHT explicitly instead
+    const ROW_HEIGHT = CARD_HEIGHT + ROW_GAP;
+    const OVERSCAN_ROWS = 8; // extra rows rendered just outside the visible viewport so fast scrolling doesn't show blank gaps for a frame
+    const threadsSidebarEl = document.getElementById("threadsSidebar");
+    // One scaffold per section — "active"/"solved" only (Recall has its
+    // own, much smaller, non-virtualized render path — renderRecallList()
+    // further down — its item count is capped at 500 server-side and
+    // rebuilds wholesale on load, not reconciled, so it doesn't have this
+    // problem at anywhere near the same scale).
+    const virtualScaffolds = {
+      active: { sizerEl: null },
+      solved: { sizerEl: null },
+    };
+
+    function ensureVirtualScaffold(tab, container) {
+      const scaffold = virtualScaffolds[tab];
+      if (scaffold.sizerEl && scaffold.sizerEl.parentNode === container) return scaffold;
+      container.innerHTML = "";
+      const sizerEl = document.createElement("div");
+      sizerEl.setAttribute("aria-hidden", "true");
+      sizerEl.style.cssText = "position:absolute; top:0; left:0; width:1px; pointer-events:none; visibility:hidden;";
+      container.appendChild(sizerEl);
+      scaffold.sizerEl = sizerEl;
+      return scaffold;
+    }
+
+    // Converts #threadsSidebar's own scroll position into "how far
+    // scrolled INTO this specific container" — needed because the
+    // container itself doesn't scroll independently, its ancestor
+    // (#threadsSidebar) does, alongside the search box/tab bar/other
+    // section above it. getBoundingClientRect() comparisons (not
+    // offsetTop) deliberately, since that stays correct regardless of
+    // which element ends up being the nearest positioned ancestor —
+    // an easy way to get subtly wrong numbers with offsetTop instead.
+    function getListScrollWindow(container) {
+      const sidebarRect = threadsSidebarEl.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const containerTopWithinSidebar = (containerRect.top - sidebarRect.top) + threadsSidebarEl.scrollTop;
+      const scrollTop = Math.max(0, threadsSidebarEl.scrollTop - containerTopWithinSidebar);
+      const viewportH = threadsSidebarEl.clientHeight || 500;
+      return { scrollTop, viewportH };
+    }
+
+    function renderVirtualWindow(tab, container, items) {
+      const scaffold = ensureVirtualScaffold(tab, container);
+      scaffold.sizerEl.style.height = (items.length * ROW_HEIGHT) + "px";
+      if (!items.length) return;
+
+      const { scrollTop, viewportH } = getListScrollWindow(container);
+      let start = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS;
+      let end = Math.ceil((scrollTop + viewportH) / ROW_HEIGHT) + OVERSCAN_ROWS;
+      start = Math.max(0, start);
+      end = Math.min(items.length, end);
+
+      const touchedEls = [];
+      const windowIds = new Set();
+
+      for (let i = start; i < end; i++) {
+        const item = items[i];
+        windowIds.add(item.id);
+        const key = itemRenderKey(item);
+        let entry = renderedItemEls.get(item.id);
+        if (!entry || entry.key !== key) {
+          if (entry && entry.el.parentNode) entry.el.remove();
+          entry = { el: renderItem(item), key };
+          entry.el.style.position = "absolute";
+          entry.el.style.left = "0";
+          entry.el.style.right = "0";
+          entry.el.style.height = CARD_HEIGHT + "px";
+          entry.el.style.overflow = "hidden";
+          entry.el.style.boxSizing = "border-box";
+          renderedItemEls.set(item.id, entry);
+          touchedEls.push(entry.el);
+        }
+        patchItemViewState(entry.el, item);
+        entry.el.style.top = (i * ROW_HEIGHT) + "px"; // every row's top, reused or not — its index can shift even when its own data didn't change (e.g. a new thread landed above it)
+        if (entry.el.parentNode !== container) container.appendChild(entry.el);
+      }
+
+      // Detach anything that scrolled out of THIS window this pass —
+      // stays IN renderedItemEls (not deleted), so scrolling back finds
+      // the cached { el, key } and reuses it outright instead of
+      // rebuilding, same principle as the rest of this file's diffed
+      // rendering. Only touches rows that actually belong to `container`
+      // right now — a row that already moved to the OTHER section
+      // (Active -> Solved) this same pass must not be ripped back out.
+      for (const [id, entry] of renderedItemEls) {
+        if (windowIds.has(id)) continue;
+        if (entry.el.parentNode === container) entry.el.remove();
+      }
+
+      if (touchedEls.length) polishEmoji(container);
+    }
+
+    let virtualRafPending = false;
+    function scheduleVirtualWindowRender() {
+      if (virtualRafPending) return;
+      virtualRafPending = true;
+      requestAnimationFrame(() => {
+        virtualRafPending = false;
+        // Only the currently-VISIBLE tab's window can possibly have
+        // changed from a scroll — Recall isn't virtualized (see above),
+        // and re-deriving the hidden tab's items array here would be
+        // wasted work for something the person can't see anyway.
+        if (currentTab === "active") renderVirtualWindow("active", activeList, activeThreads);
+        else if (currentTab === "solved") renderVirtualWindow("solved", solvedList, solvedThreads);
+      });
+    }
+    threadsSidebarEl.addEventListener("scroll", scheduleVirtualWindowRender, { passive: true });
+
     // ---- ⋮ menu + Select batch mode -----------------------------------
     let openItemMenuId = null;   // which thread's ⋮ dropdown is currently open (sidebar only, not select mode)
     let selectMode = false;      // sidebar is showing checkboxes instead of ⋮
@@ -331,6 +476,16 @@ html[data-theme="light"] {
       document.querySelectorAll(".threads-tab").forEach((btn) => {
         btn.classList.toggle("is-active", btn.dataset.tab === tab);
       });
+      // MERGED (2026-08-21) — #threadsSidebar's scroll position is
+      // shared across every tab (it's the one element that actually
+      // scrolls — see the virtualized-rendering comment above
+      // renderedItemEls), so without this, switching tabs while deep-
+      // scrolled into the old one would show the new tab starting from
+      // that same leftover scroll offset instead of its own top —
+      // confusing regardless of virtualization, but doubly so with it
+      // (an offset scroll position combined with a differently-sized
+      // list could window in on nothing at all).
+      threadsSidebarEl.scrollTop = 0;
       renderLists();
       if (tab === "recall") renderRecallList();
     }
@@ -525,8 +680,8 @@ html[data-theme="light"] {
     // Cheap in-place patch for the 3 things that change WITHOUT
     // affecting a row's content: select-mode on/off, this row's checked
     // state, and the ⋮ menu's open/closed state. Runs on EVERY row on
-    // EVERY renderLists() call (rebuilt or reused), right after
-    // reconcileSection() below decides whether a full rebuild happened —
+    // EVERY renderVirtualWindow() call (rebuilt or reused), right after
+    // that function decides whether a full rebuild happened —
     // O(1) DOM work per row (a class toggle + swapping one small child
     // element), not a template rebuild, so it stays fast even across
     // thousands of rows. Uses `el.onclick`/`.onchange` (single-slot
@@ -603,7 +758,7 @@ html[data-theme="light"] {
     // check/country badge) — the select-mode-specific leading
     // icon-or-checkbox and trailing menu-button/open-menu are left for
     // patchItemViewState() (called once right after this, from
-    // reconcileSection() below) to fill in, so there's exactly one place
+    // renderVirtualWindow() below) to fill in, so there's exactly one place
     // that logic lives instead of two copies that could drift apart.
     function renderItem(t) {
       const el = document.createElement("div");
@@ -805,47 +960,45 @@ html[data-theme="light"] {
     // changed. This is what keeps a 6-second poll cheap even with a large
     // Solved history: on a typical poll nothing in that history changed,
     // so nothing there gets touched at all.
-    function reconcileSection(container, threads, touchedEls) {
-      let prevEl = null;
-      threads.forEach((t) => {
-        const key = itemRenderKey(t);
-        let entry = renderedItemEls.get(t.id);
-        if (!entry || entry.key !== key) {
-          if (entry) entry.el.remove(); // detach stale node before replacing the Map pointer, or it leaks as an orphan
-          entry = { el: renderItem(t), key };
-          renderedItemEls.set(t.id, entry);
-          touchedEls.push(entry.el);
+    // Renders whichever of Active/Solved is `tab` — empty-state placeholder
+    // if there's nothing, else the virtualized window (see
+    // renderVirtualWindow() above). The OTHER (currently hidden) section
+    // is deliberately left untouched here — its scaffold just stays
+    // whatever it last was, picked back up correctly next time
+    // switchTab() calls this for it (see ensureVirtualScaffold() reusing
+    // an existing scaffold when the container wasn't cleared out from
+    // under it). Skipping the hidden section's rendering entirely (not
+    // just windowing it small) is itself part of the fix — the pre-
+    // virtualization version reconciled BOTH sections on every single
+    // poll/update regardless of which one anyone could actually see.
+    function renderSection(tab, container, threads) {
+      const emptyEl = container.querySelector(".threads-empty");
+      if (!threads.length) {
+        if (!emptyEl) {
+          container.innerHTML = tab === "active"
+            ? '<div class="threads-empty">No active threads.<br/>Submit a form to start one.</div>'
+            : '<div class="threads-empty">No solved threads yet.</div>';
+          virtualScaffolds[tab].sizerEl = null; // that innerHTML assignment just destroyed the scaffold, if one existed
         }
-        // Runs on EVERY row every pass — cheap (see its own comment for
-        // why), unlike the content rebuild above which only fires when
-        // itemRenderKey() actually changed.
-        patchItemViewState(entry.el, t);
-        const wantPos = prevEl ? prevEl.nextSibling : container.firstChild;
-        if (entry.el.parentNode !== container || entry.el !== wantPos) {
-          container.insertBefore(entry.el, wantPos);
-        }
-        prevEl = entry.el;
-      });
+        return;
+      }
+      if (emptyEl) emptyEl.remove();
+      renderVirtualWindow(tab, container, threads);
     }
 
     function renderLists() {
       activeCount.textContent = activeThreads.length;
       solvedCount.textContent = solvedThreads.length;
 
-      const touchedEls = []; // nodes newly created or rebuilt this pass — only these need twemoji re-parsing
-
-      let activeEmpty = activeList.querySelector(".threads-empty");
-      if (!activeThreads.length) {
-        if (!activeEmpty) activeList.innerHTML = '<div class="threads-empty">No active threads.<br/>Submit a form to start one.</div>';
-      } else {
-        if (activeEmpty) activeEmpty.remove();
-        reconcileSection(activeList, activeThreads, touchedEls);
-      }
-      reconcileSection(solvedList, solvedThreads, touchedEls);
+      if (currentTab === "active") renderSection("active", activeList, activeThreads);
+      else if (currentTab === "solved") renderSection("solved", solvedList, solvedThreads);
 
       // Drop tracked nodes for threads that no longer exist in either list
-      // (deleted, or just filtered out by the current search) — everything
-      // still present was already repositioned/rebuilt above.
+      // at all (deleted, or filtered out by the current search) — this
+      // still has to check BOTH arrays regardless of currentTab (a thread
+      // could've been removed from the tab that's currently hidden), but
+      // it's a cheap Set-membership pass over whatever's already in the
+      // Map, not a re-render of anything.
       const currentIds = new Set([...activeThreads, ...solvedThreads].map((t) => t.id));
       for (const [id, entry] of renderedItemEls) {
         if (!currentIds.has(id)) {
@@ -854,7 +1007,6 @@ html[data-theme="light"] {
         }
       }
 
-      touchedEls.forEach((el) => polishEmoji(el));
       renderBulkBar();
       syncTabSelectAll();
       updateAllThreadsCard();
@@ -1026,7 +1178,7 @@ html[data-theme="light"] {
 
     // ---- Conversation diffed rendering (2026-08) -------------------------
     // Same reuse-DOM-nodes-instead-of-rebuilding pattern as the sidebar's
-    // reconcileSection()/renderedItemEls above, applied to the open
+    // renderVirtualWindow()/renderedItemEls above, applied to the open
     // thread's message list. Before this, updateThreadContent() replaced
     // #threadScrollArea's ENTIRE innerHTML on every single poll (every 6s
     // while a thread is open) even when nothing had actually changed —
@@ -2120,6 +2272,14 @@ html[data-theme="light"] {
       if (hex.startsWith("474946383761") || hex.startsWith("474946383961")) return "image/gif"; // GIF87a / GIF89a
       if (hex.startsWith("52494646") && hex.slice(16, 24) === "57454250") return "image/webp"; // RIFF....WEBP
       if (hex.startsWith("504b0304")) return "application/zip"; // also covers docx/xlsx/pptx (all zip-based)
+      // MERGED (2026-08-21) — kept in sync with the server-side version
+      // of this exact function (functions/api/attachment/[fileId].js's
+      // sniffTypeFromBytes) — that file's own comment explains why
+      // these 3 were added (all 3 original per-country projects
+      // independently converged on the same signature set).
+      if (hex.startsWith("4d5a")) return "application/x-msdownload"; // MZ (exe/dll)
+      if (hex.slice(8, 16) === "66747970") return "video/mp4"; // ....ftyp
+      if (hex.startsWith("1f8b")) return "application/gzip";
       return null;
     }
 
@@ -2239,7 +2399,16 @@ html[data-theme="light"] {
           if (media) media.addEventListener("click", () => viewAttachment(fileId, name, country));
         }).catch((err) => {
           if (!document.body.contains(slot)) return;
-          slot.innerHTML = `<div class="inline-attach-error">⚠️ Couldn't load this attachment.</div>`;
+          // MERGED (2026-08-21) — surfaces the REAL reason now (matches
+          // viewAttachment()'s lightbox error, which already did this)
+          // instead of always showing the same generic text regardless
+          // of what actually went wrong — a real diagnostic gap: with
+          // the old hardcoded text there was no way to tell "Telegram
+          // genuinely can't resolve this file_id anymore" apart from
+          // "the request never even had a country" apart from "network
+          // hiccup," which all look identical to an agent (or to
+          // anyone debugging a screenshot of one after the fact).
+          slot.innerHTML = `<div class="inline-attach-error" title="${escapeAttr(String((err && err.message) || ""))}">⚠️ ${escapeHtml(String((err && err.message) || "Couldn't load this attachment."))}</div>`;
         });
       });
     }

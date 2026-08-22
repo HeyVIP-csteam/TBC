@@ -2035,6 +2035,17 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
   display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px;
   padding: 6px; border-radius: 12px;
   background: rgba(255, 255, 255, 0.025); border: 1px solid var(--panel-border);
+  /* MERGED (2026-08-21) — virtualized rendering (see threads.html's
+     renderVirtualWindow()) absolutely-positions every row's top/left/
+     right relative to THIS element, not whatever the nearest OTHER
+     positioned ancestor happens to be — without this, rows would
+     position against #threadsSidebar (or further up) instead, landing
+     in the wrong place entirely. The sizer element inside still
+     correctly contributes to #threadsSidebar's own scrollable overflow
+     even though it's absolutely positioned — that's standard CSS
+     behavior for a scroll container's descendants, not something this
+     `position` declaration affects. */
+  position: relative;
 }
 [data-theme="light"] .thread-list { background: rgba(0, 0, 0, 0.02); }
 
