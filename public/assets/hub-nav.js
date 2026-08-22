@@ -87,13 +87,13 @@
   // 4 used to live inside ADMIN_SUBITEMS (tgRoutes/depositSheets/
   // bettingLinks moved out here) plus the new "Web Link" (webLink).
   const INTEGRATION_PORTAL_SUBITEMS = [
+    { sectionId: "botToken", mode: "bottoken", label: "Bot Token Settings", icon: "🔐", accent: "#ef444433" },
     { sectionId: "tgRoutes", mode: "tgroutes", label: "TG Group / Channel", icon: "📡", accent: "#38bdf833" },
     { sectionId: "issueSubmissionSheet", mode: "issuesheets", label: "Issue Submission Gsheet", icon: "📑", accent: "#60a5fa33" },
     { sectionId: "depositSheets", mode: "depositsheets", label: "Deposit Sheet Link", icon: "📊", accent: "#4fa6f533" },
     { sectionId: "bettingLinks", mode: "bettinglinks", label: "Betting Resources Links", icon: "🔗", accent: "#c8912f33" },
     { sectionId: "webLink", mode: "weblink", label: "Web Link", icon: "🌐", accent: "#f3c46333" },
     { sectionId: "promoCodeSheet", mode: "promosheet", label: "Promo Code Gsheet", icon: "📋", accent: "#f472b633" },
-    { sectionId: "botToken", mode: "bottoken", label: "Bot Token Settings", icon: "🔐", accent: "#ef444433" },
   ];
 
   function escapeAttr(s) {

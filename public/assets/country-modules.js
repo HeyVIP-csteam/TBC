@@ -81,17 +81,24 @@ window.isHomeCardEnabledForCountry = function (cardId, country) {
 // country is selected (a real product difference from country to
 // country now — PHP wants Deposit Request/Bank Issue above QA; INR/PKR
 // still want schemas.js's original order, which their own entries above
-// still match exactly). "All Countries" mode is left in whatever order
-// filterAllowedModules() already produced (schemas.js's own array
-// order) — there's no single "right" cross-country order to impose
-// there, and this was never asked for beyond the single-country case.
-// Modules not present in the order list (shouldn't normally happen,
-// but a stale/incomplete MODULES_BY_COUNTRY entry is safer to handle
-// than to crash on) are appended at the end, in their original
-// relative order, rather than silently dropped.
+// still match exactly).
+//
+// REVISED (2026-08-22) — direct business-owner clarification: this
+// reorder should ALSO apply in "All Countries" mode, not just when PHP
+// alone is selected — Deposit Request/Bank Issue stay first even when
+// viewing everything combined. PHP's own order list is used as the
+// template for "All Countries" too (not a separate list) — since it's
+// really just "the same order, applied regardless of which countries
+// happen to be combined right now." Any module PHP's list doesn't
+// mention (INR/PKR-only ones like deposit_issue/deposit_backup) falls
+// through to the existing "not in the order list -> append at the end,
+// original relative order preserved" behavior below — there's no
+// separate all-countries order to maintain by hand, this reuses PHP's
+// list as-is.
 window.sortModulesForCountry = function (modules, country) {
-  const order = window.MODULES_BY_COUNTRY[country];
-  if (!country || !order) return modules;
+  const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+  const order = isAll ? window.MODULES_BY_COUNTRY.PHP : window.MODULES_BY_COUNTRY[country];
+  if ((!country && !isAll) || !order) return modules;
   const rank = new Map(order.map((id, i) => [id, i]));
   return modules.slice().sort((a, b) => {
     const ra = rank.has(a.id) ? rank.get(a.id) : order.length;

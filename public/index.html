@@ -41,7 +41,7 @@ html[data-theme="light"] {
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
 <script src="/assets/authguard.js?v=101bd636"></script>
 <script src="/assets/countries.js?v=78bdc076"></script>
-<script src="/assets/country-modules.js?v=e732855c"></script>
+<script src="/assets/country-modules.js?v=7cb5b511"></script>
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
@@ -182,13 +182,13 @@ html[data-theme="light"] {
           <span class="arrow">&rarr;</span>
         </div>
         <div class="sidebar-subitems" id="integrationPortalSubitems">
+          <div class="sidebar-subitem" id="subIpBotToken" style="--sub-accent:#ef444433; display:none;"><span class="sub-icon">🔐</span> Bot Token Settings</div>
           <div class="sidebar-subitem" id="subIpTgRoutes" style="--sub-accent:#38bdf833; display:none;"><span class="sub-icon">📡</span> TG Group / Channel</div>
           <div class="sidebar-subitem" id="subIpIssueSheets" style="--sub-accent:#60a5fa33; display:none;"><span class="sub-icon">📑</span> Issue Submission Gsheet</div>
           <div class="sidebar-subitem" id="subIpDepositSheets" style="--sub-accent:#4fa6f533; display:none;"><span class="sub-icon">📊</span> Deposit Sheet Link</div>
           <div class="sidebar-subitem" id="subIpBettingLinks" style="--sub-accent:#c8912f33; display:none;"><span class="sub-icon">🔗</span> Betting Resources Links</div>
           <div class="sidebar-subitem" id="subIpWebLink" style="--sub-accent:#f3c46333; display:none;"><span class="sub-icon">🌐</span> Web Link</div>
           <div class="sidebar-subitem" id="subIpPromoSheet" style="--sub-accent:#f472b633; display:none;"><span class="sub-icon">📋</span> Promo Code Gsheet</div>
-          <div class="sidebar-subitem" id="subIpBotToken" style="--sub-accent:#ef444433; display:none;"><span class="sub-icon">🔐</span> Bot Token Settings</div>
         </div>
       </div>
 
@@ -999,7 +999,30 @@ html[data-theme="light"] {
         // this 2026-07 redesign — a SuperAdmin resetting ANOTHER
         // SuperAdmin's password is no longer possible here (only Owner
         // can, and Owner accounts don't surface in this list at all).
-        acctAccounts = data.ok ? data.accounts.filter((a) => a.username === authInfo?.username || ROLE_RANK[a.role] < myRank) : [];
+        //
+        // MERGED (2026-08-22) — real bug the business owner caught: this
+        // list never filtered by the top country switcher at all — an
+        // INR-only agent showed up in the search results even with PKR
+        // selected at the top. Now scoped the same way the brand
+        // sidebars already are: "All Countries" shows everyone eligible
+        // (as before); a specific country only shows accounts whose own
+        // allowedCountries overlaps it (or is "all"). An account whose
+        // allowedCountries was never explicitly set is deliberately
+        // NOT hidden by this filter (same reasoning as the Active
+        // Agents fix in presence/list.js — this is an admin ACTION
+        // tool, and hiding an account here because of an unrelated
+        // missing config field could block exactly the person trying to
+        // help that account in the first place, e.g. resetting a
+        // password for someone who can't log in).
+        const topCountry = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+        const isAllCountries = window.AgentCountry && window.AgentCountry.isAll(topCountry);
+        acctAccounts = data.ok ? data.accounts.filter((a) => {
+          if (a.username !== authInfo?.username && ROLE_RANK[a.role] >= myRank) return false;
+          if (!topCountry || isAllCountries) return true;
+          if (a.allowedCountries === undefined) return true;
+          if (a.allowedCountries === "all") return true;
+          return Array.isArray(a.allowedCountries) && a.allowedCountries.includes(topCountry);
+        }) : [];
         // MERGED (2026-08-22) — replaced the plain <select> with a
         // type-to-search box, direct business-owner request ("我觉得更加
         // 方便" — a search box is more convenient than scrolling a long
