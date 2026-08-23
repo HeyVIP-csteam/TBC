@@ -241,7 +241,14 @@ async function handlePost({ request, env, waitUntil }) {
       const accessChanging =
         (body.officeId !== undefined && (body.officeId || null) !== (existingTarget.officeId || null)) ||
         (body.allowedBrands !== undefined && JSON.stringify(body.allowedBrands) !== JSON.stringify(existingTarget.allowedBrands ?? [])) ||
-        (body.allowedModules !== undefined && JSON.stringify(body.allowedModules) !== JSON.stringify(existingTarget.allowedModules ?? "all"));
+        (body.allowedModules !== undefined && JSON.stringify(body.allowedModules) !== JSON.stringify(existingTarget.allowedModules ?? "all")) ||
+        // allowedCountries was missing from this check entirely (2026-08-23
+        // bug) — a currencies-only edit slipped through as neither
+        // accessChanging nor profileChanging, so the permission gate below
+        // never fired AND (more importantly, see saveAccount() call further
+        // down) the field itself was silently dropped before ever reaching
+        // storage. Fixed alongside that drop.
+        (body.allowedCountries !== undefined && JSON.stringify(body.allowedCountries) !== JSON.stringify(existingTarget.allowedCountries ?? []));
       const passwordChanging = !!body.password;
       // Account Management Access itself (allowedAdminSections /
       // adminSectionEditAccess) — the top-level canManageOthersAdminAccess
@@ -357,6 +364,12 @@ async function handlePost({ request, env, waitUntil }) {
         officeId: body.officeId !== undefined ? (body.officeId || null) : undefined,
         allowedBrands: body.allowedBrands !== undefined ? body.allowedBrands : undefined,
         allowedModules: body.allowedModules !== undefined ? body.allowedModules : undefined,
+        // BUG FIX (2026-08-23): this was never forwarded to saveAccount()
+        // even though the frontend (Agent Profile modal) always sent it and
+        // saveAccount() itself has always accepted it — every Currencies
+        // edit was silently discarded before it ever reached KV, and the
+        // response still came back `ok: true` since nothing actually failed.
+        allowedCountries: body.allowedCountries !== undefined ? body.allowedCountries : undefined,
         fullName: body.fullName !== undefined ? body.fullName : undefined,
         pid: body.pid !== undefined ? body.pid : undefined,
         // The announcements-merge result (if this request touched
@@ -379,6 +392,7 @@ async function handlePost({ request, env, waitUntil }) {
         if (body.role !== undefined && body.role !== existingTarget.role) diffs.push(`role: "${existingTarget.role}" → "${account.role}"`);
         if (body.officeId !== undefined && (body.officeId || null) !== (existingTarget.officeId || null)) diffs.push(`office: "${existingTarget.officeId || "none"}" → "${account.officeId || "none"}"`);
         if (body.allowedBrands !== undefined && JSON.stringify(body.allowedBrands) !== JSON.stringify(existingTarget.allowedBrands ?? [])) diffs.push(`brands changed`);
+        if (body.allowedCountries !== undefined && JSON.stringify(body.allowedCountries) !== JSON.stringify(existingTarget.allowedCountries ?? [])) diffs.push(`currencies changed`);
         if (body.allowedModules !== undefined && JSON.stringify(body.allowedModules) !== JSON.stringify(existingTarget.allowedModules ?? "all")) diffs.push(`modules changed`);
         if (body.password) diffs.push(`password reset by ${actorName}`);
         if (body.allowedAdminSections !== undefined || announcementsAllowedAdminSections !== undefined || integrationPortalAllowedAdminSections !== undefined) diffs.push(`Account Management Access permissions changed`);
