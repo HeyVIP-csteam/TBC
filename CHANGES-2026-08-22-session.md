@@ -277,3 +277,50 @@ bucket）。`functions/_shared/countries.js` 等代码文件**没有改动**—�
 
 **PKR 依然保持未接入状态**——本次只搬了 PHP，PKR 的 KV/R2 数据还没有
 搬到新账号，`wrangler.toml` 里那部分继续保持注释。
+
+---
+
+## 11. Agent Profile 面板 —— Full Name/PSD 挪到 Brands 上面 +
+    新增 Currencies 选择器（2026-08-23 追加）
+
+**改动一：字段顺序调整**
+
+`Full Name`、`Agent PSD` 从 Brands 下面挪到了 Office 下面、Brands
+上面（业务方直接反馈原来的顺序不合理）。纯顺序调整，字段本身的读写
+逻辑没有变。
+
+**改动二：Brands 加上 Currencies 前置选择器**
+
+Agent Profile 里的 Brands 原本是把全部 16 个品牌（INR+PKR+PHP）一次
+性摊平显示，跟 Create Account 表单早已有的"先选 Currencies，Brands
+只显示这些国家名下的品牌"这套逻辑不一致——这次把 Create Account 那套
+逻辑原样搬了过来：
+
+- Brands 字段上面新增一个 **Currencies** 选择器（复用跟 Create
+  Account 一样的 `.brand-toggle-grid`/`.brand-toggle-pill` 样式，
+  `Select All` 按钮同款交互）
+- 初始勾选状态对应这个账号当前的 `allowedCountries`（`"all"` 或缺省
+  → 全选；否则只勾对应国家）
+- Brands 网格只显示当前勾选的 Currencies 名下的品牌，勾选/取消某个
+  Currency 会实时重新渲染 Brands 网格（复用了原本 Create Account 用
+  的同一套"切国家保留已选品牌"逻辑，见
+  `renderAgentProfileBrandGrid()`）
+- 保存时，`allowedCountries` 跟 `allowedBrands` 一起提交（全选→
+  `"all"`，否则是具体国家数组），服务端 `functions/api/admin/
+  accounts.js` 本来就认这个字段（Create Account 已经在用），不需要
+  改后端
+
+**改的文件**：`public/index.html`
+- `openAgentProfileModal()` —— 新增 `countryPills`/
+  `selectedCountryCodes` 计算，`brandPills` 改成按 `selectedCountryCodes`
+  过滤；模板里插入 Currencies 字段，Full Name/PSD 顺序前移
+- 新增 `wireAgentProfileCountryPicker()`、
+  `renderAgentProfileBrandGrid()` 两个函数（直接照抄 Create Account
+  的 `wireCountryTogglePicker()`/`renderCreateAccountBrandGrid()`，
+  只是换了元素 id 前缀 `ap_` 而不是 `am_`）
+- `saveAgentProfileModal()` —— 新增读取 `#ap_countryGrid` 勾选状态，
+  写入 `payload.allowedCountries`
+
+**校验**：`<script>` 提取后 `node --check` 通过；`<div>`/`</div>`
+标签数量核对为 266/266，平衡。`index.html` 走 `no-cache`（见
+`/_headers`），不涉及版本号哈希更新，部署后硬刷新即可生效。
