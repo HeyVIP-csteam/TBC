@@ -140,6 +140,16 @@ html[data-theme="light"] {
       const isAdmin = (ROLE_RANK[auth.role] ?? 0) >= ROLE_RANK.admin;
       isAdminForRecall = isAdmin;
       document.getElementById("tabRecall").style.display = isAdmin ? "" : "none";
+      // COUNTRY-FILTER FIX (2026-08-23) — mounts the country switcher
+      // and wires its onChange to re-render the already-fetched thread
+      // list through filterByCountry() (see renderLists() below). No
+      // server refetch needed on change: every allowed country's
+      // threads are already merged in activeThreads/solvedThreads (see
+      // GET /api/threads — it always returns everything the account can
+      // see, tagged with t.country, and expects the frontend to filter
+      // — see that endpoint's own comment). This page previously never
+      // did that filtering step at all.
+      if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => renderLists());
       loadList();
       if (isAdmin) loadRecallLog();
       polishEmoji();
@@ -331,7 +341,7 @@ html[data-theme="light"] {
     document.getElementById("tabSelectAll").addEventListener("click", (e) => e.stopPropagation());
     document.getElementById("tabSelectAll").addEventListener("change", (e) => {
       selectMode = true;
-      const arr = currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []);
+      const arr = filterByCountry(currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []));
       arr.forEach((t) => (e.target.checked ? selectedIds.add(t.id) : selectedIds.delete(t.id)));
       renderLists();
     });
@@ -639,7 +649,7 @@ html[data-theme="light"] {
 
     function syncTabSelectAll() {
       const cb = document.getElementById("tabSelectAll");
-      const arr = currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []);
+      const arr = filterByCountry(currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []));
       cb.checked = arr.length > 0 && arr.every((t) => selectedIds.has(t.id));
     }
 
@@ -655,7 +665,7 @@ html[data-theme="light"] {
         countEl.textContent = recallEntries.length;
         return;
       }
-      const arr = currentTab === "active" ? activeThreads : solvedThreads;
+      const arr = filterByCountry(currentTab === "active" ? activeThreads : solvedThreads);
       const unread = arr.filter((t) => Math.max(0, (t.replyCount || 0) - getSeenCount(t.id)) > 0).length;
       sub.textContent = `${labelMap[currentTab]} threads · ${unread} new ${unread === 1 ? "reply" : "replies"}`;
       countEl.textContent = selectMode ? selectedIds.size : arr.length;
@@ -706,14 +716,37 @@ html[data-theme="light"] {
       renderVirtualWindow(tab, container, threads);
     }
 
+    // COUNTRY-FILTER FIX (2026-08-23) — filters the already-fetched
+    // activeThreads/solvedThreads (which always contain EVERY country
+    // the account can see, tagged with t.country — see GET /api/threads'
+    // own comment) down to whichever country is currently selected in
+    // the switcher. Verified against the real agent-country.js source
+    // (window.AgentCountry.getCountry() / .isAll()) rather than assumed.
+    // Only filters at render time — activeThreads/solvedThreads
+    // themselves stay untouched, since other code (findThreadCountry,
+    // delete/patch bookkeeping, search) still needs the full list.
+    function filterByCountry(threads) {
+      if (!window.AgentCountry) return threads;
+      const selected = AgentCountry.getCountry();
+      if (!selected || AgentCountry.isAll(selected)) return threads;
+      return threads.filter((t) => t.country === selected);
+    }
+
     function renderLists() {
-      activeCount.textContent = activeThreads.length;
-      solvedCount.textContent = solvedThreads.length;
+      const filteredActive = filterByCountry(activeThreads);
+      const filteredSolved = filterByCountry(solvedThreads);
 
-      if (currentTab === "active") renderSection("active", activeList, activeThreads);
-      else if (currentTab === "solved") renderSection("solved", solvedList, solvedThreads);
+      activeCount.textContent = filteredActive.length;
+      solvedCount.textContent = filteredSolved.length;
 
-      const currentIds = new Set([...activeThreads, ...solvedThreads].map((t) => t.id));
+      if (currentTab === "active") renderSection("active", activeList, filteredActive);
+      else if (currentTab === "solved") renderSection("solved", solvedList, filteredSolved);
+
+      // Drop tracked nodes for threads no longer in either FILTERED list
+      // (deleted, filtered out by search, or hidden by a country switch)
+      // — still checks both arrays regardless of currentTab, same as
+      // before.
+      const currentIds = new Set([...filteredActive, ...filteredSolved].map((t) => t.id));
       for (const [id, entry] of renderedItemEls) {
         if (!currentIds.has(id)) {
           entry.el.remove();
