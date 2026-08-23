@@ -2927,6 +2927,11 @@ html[data-theme="light"] {
         statusEl.className = "edit-details-status err";
         return;
       }
+      // Success: this modal used to close silently with no confirmation at
+      // all (unlike every other save flow in this app, which already
+      // routes through setAcctNote()/showToast() — see that function's own
+      // comment). Match that pattern here instead of a one-off fix.
+      if (window.showToast) window.showToast("Save success.", "ok");
       document.getElementById("agentProfileOverlay")?.remove();
       await loadAgentProfileTable();
     }
