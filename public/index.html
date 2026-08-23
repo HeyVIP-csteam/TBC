@@ -2456,13 +2456,34 @@ html[data-theme="light"] {
         ? `${timeAgoLocal(a.lastPasswordChange.at)} by ${acctEsc(a.lastPasswordChange.by)}`
         : "—";
       const allBrandsSelected = a.allowedBrands === "all";
+      // MERGED (2026-08-23) — Agent Profile now gets the same
+      // "Currencies decide which brands you can even pick from" flow
+      // Create Account already had (see wireCountryTogglePicker's
+      // 2026-08-21 note above) — direct follow-up request, so editing
+      // an existing account's country/brand scope works the same way
+      // as creating one, instead of Brands staying a flat all-16 list
+      // with no relationship to allowedCountries.
+      const allCountriesSelected = a.allowedCountries === "all" || a.allowedCountries === undefined;
+      const selectedCountryCodes = allCountriesSelected
+        ? (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : [])
+        : (Array.isArray(a.allowedCountries) ? a.allowedCountries : []);
+      const countryPills = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []).map((code) => {
+        const label = (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? COUNTRIES[code].name : code;
+        const isSelected = selectedCountryCodes.includes(code);
+        return `<div class="brand-toggle-pill${isSelected ? " selected" : ""}" data-country="${acctEsc(code)}">${acctEsc(label).toUpperCase()} <span class="brand-toggle-country">${acctEsc(code)}</span></div>`;
+      }).join("");
       // MERGED (2026-08-20) — checks both b.name and b.id against the
       // stored allowedBrands array: existing accounts saved before this
       // pass have brand NAMES in there (from when only one country
       // existed, so no ambiguity yet); this Edit screen now SAVES ids
       // going forward (see readBrandToggleSelection's data-brand below),
       // same name-or-id compatibility as canSeeBrand() server-side.
-      const brandPills = (window.BRANDS || []).map((b) => `<div class="brand-toggle-pill${allBrandsSelected || (a.allowedBrands || []).includes(b.name) || (a.allowedBrands || []).includes(b.id) ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`).join("");
+      // Only brands from the currently-selected currencies are shown at
+      // all (mirrors renderCreateAccountBrandGrid) — re-rendered on
+      // every country pill click via renderAgentProfileBrandGrid().
+      const brandPills = (window.BRANDS || [])
+        .filter((b) => selectedCountryCodes.includes(b.country))
+        .map((b) => `<div class="brand-toggle-pill${allBrandsSelected || (a.allowedBrands || []).includes(b.name) || (a.allowedBrands || []).includes(b.id) ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`).join("");
       const allModulesSelected = a.allowedModules === "all" || a.allowedModules === undefined;
       const moduleChecks = AGENT_PROFILE_MODULE_LIST.map((m) => `
         <label class="agent-profile-module-check">
@@ -2611,13 +2632,18 @@ html[data-theme="light"] {
               <label>Office</label>
               ${canManageAccess ? `<select id="ap_office"><option value="">— none —</option>${officeOptions}</select>` : `<input type="text" value="${office ? acctEsc(office.name) : "—"}" disabled />`}
             </div>
+            <div class="field"><label>Full name</label><input type="text" id="ap_fullname" value="${acctEsc(a.fullName || "")}" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
+            <div class="field"><label>Agent PSD</label><input type="text" id="ap_pid" value="${acctEsc(a.pid || "")}" placeholder="e.g. PSD-014" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
+            <div class="field">
+              <label>Currencies</label>
+              <div class="brand-toggle-label"><span></span>${canManageAccess ? `<span class="select-all-btn" id="ap_countrySelectAllBtn">${allCountriesSelected ? "✓ All Selected" : "Select All"}</span>` : ""}</div>
+              <div class="brand-toggle-grid" id="ap_countryGrid" style="${canManageAccess ? "" : "pointer-events:none; opacity:0.65;"}">${countryPills}</div>
+            </div>
             <div class="field">
               <label>Brands</label>
               <div class="brand-toggle-label"><span></span>${canManageAccess ? `<span class="select-all-btn" id="ap_selectAllBrands">${allBrandsSelected ? "✓ All Selected" : "Select All"}</span>` : ""}</div>
               <div class="brand-toggle-grid" id="ap_brandGrid" style="${canManageAccess ? "" : "pointer-events:none; opacity:0.65;"}">${brandPills}</div>
             </div>
-            <div class="field"><label>Full name</label><input type="text" id="ap_fullname" value="${acctEsc(a.fullName || "")}" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
-            <div class="field"><label>Agent PSD</label><input type="text" id="ap_pid" value="${acctEsc(a.pid || "")}" placeholder="e.g. PSD-014" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
 
             <div class="agent-profile-collapsible" data-section="topicAccess">
               <button type="button" class="agent-profile-collapsible-header" data-collapse-toggle>
@@ -2668,6 +2694,7 @@ html[data-theme="light"] {
         </div>`;
       document.body.appendChild(overlay);
 
+      if (canManageAccess) wireAgentProfileCountryPicker();
       if (canManageAccess) wireAgentProfileBrandPicker();
       // .ap-admin-section-checkbox only matches the Account Management
       // Access box's own items now — Announcement no longer has a
@@ -2691,6 +2718,62 @@ html[data-theme="light"] {
       }
 
       document.getElementById("agentProfileSave").addEventListener("click", () => saveAgentProfileModal(a.username));
+    }
+
+    // MERGED (2026-08-23) — companion to wireAgentProfileBrandPicker:
+    // toggling a currency pill here re-renders #ap_brandGrid to only the
+    // brands from currently-checked currencies, same derivation as
+    // renderCreateAccountBrandGrid() in the Create Account flow, so
+    // Edit and Create behave identically instead of Edit staying a flat
+    // always-all-16-brands list.
+    function wireAgentProfileCountryPicker() {
+      const grid = document.getElementById("ap_countryGrid");
+      const selectAllBtn = document.getElementById("ap_countrySelectAllBtn");
+      if (!grid) return;
+      const pills = Array.from(grid.querySelectorAll(".brand-toggle-pill"));
+      function sync() {
+        const allSelected = pills.length > 0 && pills.every((p) => p.classList.contains("selected"));
+        if (selectAllBtn) {
+          selectAllBtn.classList.toggle("active", allSelected);
+          selectAllBtn.textContent = allSelected ? "✓ All Selected" : "Select All";
+        }
+      }
+      pills.forEach((p) => {
+        p.addEventListener("click", () => {
+          p.classList.toggle("selected");
+          sync();
+          renderAgentProfileBrandGrid();
+        });
+      });
+      if (selectAllBtn) {
+        selectAllBtn.addEventListener("click", () => {
+          const allSelected = pills.every((p) => p.classList.contains("selected"));
+          pills.forEach((p) => p.classList.toggle("selected", !allSelected));
+          sync();
+          renderAgentProfileBrandGrid();
+        });
+      }
+    }
+
+    // Rebuilds #ap_brandGrid to show only brands from currently-checked
+    // #ap_countryGrid currencies, preserving any already-checked brand
+    // pills that are still valid (checking a 2nd currency doesn't lose
+    // the 1st currency's selections) — mirrors
+    // renderCreateAccountBrandGrid() exactly, just scoped to the ap_
+    // element ids used in the Agent Profile modal.
+    function renderAgentProfileBrandGrid() {
+      const countryPills = Array.from(document.querySelectorAll("#ap_countryGrid .brand-toggle-pill"));
+      const selectedCountries = countryPills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.country);
+      const grid = document.getElementById("ap_brandGrid");
+      if (!grid) return;
+      const previouslySelected = new Set(
+        Array.from(grid.querySelectorAll(".brand-toggle-pill.selected")).map((p) => p.dataset.brand)
+      );
+      const brands = (window.BRANDS || []).filter((b) => selectedCountries.includes(b.country));
+      grid.innerHTML = brands.map((b) =>
+        `<div class="brand-toggle-pill${previouslySelected.has(b.id) ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`
+      ).join("");
+      wireAgentProfileBrandPicker();
     }
 
     function wireAgentProfileBrandPicker() {
@@ -2757,6 +2840,11 @@ html[data-theme="light"] {
       if (roleSelect) {
         payload.role = roleSelect.value;
         payload.officeId = document.getElementById("ap_office").value || null;
+        const countryPills = Array.from(document.querySelectorAll("#ap_countryGrid .brand-toggle-pill"));
+        if (countryPills.length) {
+          const selectedCountries = countryPills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.country);
+          payload.allowedCountries = selectedCountries.length === countryPills.length ? "all" : selectedCountries;
+        }
         const pills = Array.from(document.querySelectorAll("#ap_brandGrid .brand-toggle-pill"));
         const selected = pills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.brand);
         payload.allowedBrands = pills.length > 0 && selected.length === pills.length ? "all" : selected;
