@@ -132,18 +132,148 @@ HTML 里真实的 `<script src="...?v=...">` 标签）才能正确避开这层�
 
 ---
 
+## 7. Betting Resources Links 面板 — 对齐/整洁度修复
+
+**问题**：`Results Finding Websites`（多条链接列表）每一行的
+Icon/Name/URL 三个输入框和旁边的拖拽手柄⠿、删除按钮🗑高低对不齐。
+
+**根因**：`public/assets/style.css` 里有条通用规则
+`.field { margin-bottom: 18px; }`。`HeyVIP Betting Resources`（单条
+链接表单）用的 `.edit-fields-row .field` 早就单独把这个 margin 清零
+了，但 `.br-result-row .field`（列表每一行）漏了这一条——于是每行里
+的三个输入框都带着这段多余下边距，旁边不受这条规则影响的拖拽手柄/
+删除按钮就顶不齐了。顺带发现单条链接表单的 Icon 输入框（emoji、字号
+更大）也没固定高度，字体度量差异会让它和 Name/URL 框高度略有出入。
+
+**改的文件**：`public/assets/style.css`
+- `.br-result-row .field` 补上 `margin: 0;`。
+- `.edit-fields-row .field input` 补上和列表行一致的固定高度规则
+  （`height:40px; line-height:38px; box-sizing:border-box;`）。
+
+**顺带处理**：这两个改动只涉及 CSS 文件本身，按项目自己的缓存规则
+重新计算了内容哈希（`?v=09d78b3d`），并同步更新了全部 11 个引用
+`style.css` 的 HTML 文件（`accounts-admin.html`、`activity-logs.html`、
+`announcements.html`、`betting-resources.html`、`deposit-backup.html`、
+`deposit-issue.html`、`form.html`、`index.html`、`login.html`、
+`promo.html`、`threads.html`），避免重蹈第 2/3 节里那个"改了内容但
+版本号没跟着换、被一年缓存卡住"的同一个坑。
+
+---
+
+## 8. Bot Token Settings — 修正上一版改动引入的样式回归
+
+**问题**：第 5 节把 Bot Token / Webhook Secret 两个输入框从"上下堆叠"
+改成"左右并排"时，误删了包裹这两个输入框的 `tgroute-fields` 这个
+class，导致输入框吃不到暗色主题样式，退回成浏览器默认的白底样式，
+和整体界面完全不搭——这是我的失误，用户发现后指出「不要擅自修改，
+只是删除文本」。
+
+**改的文件**：`public/index.html`（`renderBotTokenPanel()` 函数）
+
+**具体改动**：把 `<input id="botTokenInput">` 和
+`<input id="webhookSecretInput">` 重新用 `<div class="tgroute-fields">`
+包起来，恢复原本由 `.tgroute-fields input`（`style.css` 第 666 行）
+提供的暗色背景/边框样式。左右并排的网格布局、去掉状态说明文字这两处
+第 5 节确认过的改动本身没有变化——只修正了这一处不该发生的样式回归。
+
+---
+
+## 9. Web Link 面板 — 改成和 Bot Token Settings 一样的两级导航
+
+**问题**：原来的 Web Link 面板是一个**扁平的单层列表**——"All
+Countries" 模式下，INR/PKR/PHP 三国全部 16 个品牌混在一起、按国家分
+组用小标题隔开，一次性全部展示在左侧一个可滚动的长列表里，需要不停
+滚动查找。
+
+**改的文件**：`public/index.html`（`loadWebLinks()` /
+`renderWebLinks()` 函数）
+
+**具体改动**：改成两级选择，样式直接复用 Bot Token Settings 的既有
+class（不是新建样式）：
+- **第一级**（最左侧）：只列 3 个国家（India / Pakistan /
+  Philippines），点哪个切到哪个——markup 跟
+  `renderBotTokenPanel()` 的 `countryListHtml` 完全一致。
+- **第二级**（右侧上半部分）：选中国家后，显示**该国自己**的品牌
+  宽条列表（India 5 个：Crickex/Betjili/Mostplay/BetVisa/Jeetway；
+  Pakistan 9 个；Philippines 2 个），复用同一个 `.tgroute-brand`
+  样式，不再和其他国家混在一起。
+- 选中某个品牌后，下方照常显示 Pill Link 的 URL 编辑框 + Save/Reset
+  按钮，逻辑和原来完全一样，只是现在始终只在"当前选中国家的品牌
+  范围"内操作，不会再一次性把三国品牌摊平在一起。
+- 新增了两个状态变量 `acctWebLinkSelectedCountry`（当前选中国家）、
+  `acctWebLinkCountriesToShow`（这个账号能看到哪些国家），管理方式
+  和 `acctBotTokenSelectedCountry`/`acctBotTokenCountriesToShow`
+  完全对应。
+
+**修复过程中的一个小失误**：第一版改写时漏掉了
+`let acctWebLinkSelectedBrand = null;` 这行变量声明（被整段替换时
+不小心连带删掉了），跑语法检查时会报未定义——已经补回，最终版本已
+过 `node --check`。
+
+---
+
 ## 校验方式
 
 - 所有 `.js` 文件：`node --check`。
 - 所有改过的 `.html` 文件：提取内联 `<script>` 后单独 `node --check`
   （沿用 `PROJECT_STATUS.md` 里记录的、这个项目自己确认过的标准做法）。
-- `public/index.html` 改动前后 `<div>`/`</div>` 标签数量核对一致
-  （256 / 256），排除因为改动导致的标签未闭合问题。
+- `public/index.html` 每次改动前后都核对了 `<div>`/`</div>` 标签
+  数量一致，排除改动导致标签未闭合的问题（第 9 节改动后为 261/261）。
+- `style.css` 改动后核对了大括号 `{`/`}` 数量配平。
 
 ## 部署提醒
 
 `public/index.html`、`public/deposit-backup.html`、`public/form.html`
-这几个 `.html` 文件本身走 `no-cache`（见 `/_headers`），部署后硬刷新
-即可生效，不需要额外处理版本号。真正需要注意版本号的只有
-`public/assets/app.js` 和 `public/assets/spa-shell.js` 这两个
-`.js` 文件，已经按第 3 节更新好。
+等 `.html` 文件本身走 `no-cache`（见 `/_headers`），部署后硬刷新
+即可生效，不需要额外处理版本号。真正需要注意版本号的是 `.js`/`.css`
+资源文件，本次一共改了三个，版本号都已经按项目自己的算法（内容
+SHA1 前 8 位）重新计算并同步更新到所有引用它们的 HTML 里：
+
+| 文件 | 新版本号 |
+|---|---|
+| `public/assets/app.js` | `?v=6f370b0e` |
+| `public/assets/spa-shell.js` | `?v=b5a78ef0` |
+| `public/assets/style.css` | `?v=09d78b3d` |
+
+---
+
+## 10. PHP 数据搬运 + 正式接入（2026-08-23 追加）
+
+**背景**：PHP 项目曾在旧 Cloudflare 账号下真实跑过一段时间，产生了真实
+的工单、账号、截图数据。这次把这些数据搬到了当前部署所在的新账号，并
+正式在 `wrangler.toml` 里启用了 PHP。
+
+**搬了什么**：
+- **KV 业务数据**（2826 条）：`thread:`/`msgid:`/`route:`/`sheet:`/
+  `mention-registry:` 等，已导入新建的 `THREADS_KV_PHP`
+  （id `9b7c59c645064b08b79b89ad8a062102`）
+- **账号数据**（657 条）：PHP 原有 10 个账号（`kai`/`jade`/`jaycee`/
+  `edelyn`/`bea`/`loui`/`ash`/`sharra`/`virgielyn`/`daniel01`）+ 2 个
+  office + 索引 + 526 条 activitylog + 117 条 presence，已合并进现有
+  （暂时借用 INR namespace 的）`ACCOUNTS_KV`
+- **R2 截图**（363 个文件，544MB）：用 Cloudflare 官方 "Data
+  migration" 工具搬完，0 errors / 0 skipped
+
+**账号冲突处理**：PHP 和 INR/PKR 都各自有一个 `daniel01`（都是
+`role: owner`），核实是同一个人，已合并成一个账号 —— 密码沿用
+INR/PKR 那边原有的（迭代次数更高、更安全），`allowedCountries` 加上
+了 `"PHP"`，现在这一个账号能同时登录管理三国。
+
+**没搬的东西**：
+- `ipblock:124.43.217.223` / `ipaccess-log`（PHP 一条测试用的 IP 拦截
+  记录，原因写的是 "testing"）—— 新旧项目 IP 黑名单的 KV key 命名方案
+  不兼容（`ipblock:`/`ipaccess-log` vs 现在用的
+  `blocked-ips`/`pending-ips`/`ip-access-log`），且这条本来就像是当初
+  测试功能时随手拦的，判断不需要保留，如果之后真的需要拦这个 IP，去
+  新系统的 IP Access 管理页面手动加一次即可
+
+**改的文件**：`wrangler.toml` —— 取消注释 PHP 那一段，`id` 从旧账号的
+占位符换成新账号里真实建好的 `THREADS_KV_PHP` namespace id；
+`bucket_name` 保持 `php-issuescreenshot` 不变（新账号下重建的同名
+bucket）。`functions/_shared/countries.js` 等代码文件**没有改动**——
+`resolveThreadsKv()`/`resolveThreadsDb()` 本来就是绑定不存在时优雅返回
+`null`、绑定一旦存在就自动生效的写法，PHP 这条线在代码层面早就"随时
+可以接上"，缺的只是 `wrangler.toml` 里的真实数据。
+
+**PKR 依然保持未接入状态**——本次只搬了 PHP，PKR 的 KV/R2 数据还没有
+搬到新账号，`wrangler.toml` 里那部分继续保持注释。

@@ -58,14 +58,22 @@ database_id = "1327b88e-ceda-405d-94ff-8a7ea7da269d"
 # binding = "THREADS_KV_PKR"
 # id = "c8ca68f7781a4f1b88d0997af023aec7"
 
-# === PHP（暂时注释掉，原因同上 PKR ===
-# [[r2_buckets]]
-# binding = "SCREENSHOTS_BUCKET_PHP"
-# bucket_name = "php-issuescreenshot"
-#
-# [[kv_namespaces]]
-# binding = "THREADS_KV_PHP"
-# id = "0e6719a9def74126ad2071feb919d625"
+# === PHP（2026-08-23 已启用 —— PHP 的 KV/R2 数据已从旧账号搬到当前
+# 新账号：THREADS_KV_PHP 下的 2826 条工单/路由/mention 数据已通过
+# `wrangler kv bulk put` 导入；R2 的 363 个截图文件已通过 Cloudflare
+# 官方 Data Migration 工具搬完（0 errors, 0 skipped）；PHP 的 10 个账号
+# 也已经并入上面那个（暂时借用的）ACCOUNTS_KV —— 其中 daniel01 在
+# INR/PKR 那边本来就有账号，两边确认是同一个人，合并成了一个账号并把
+# allowedCountries 加上了 "PHP"，密码沿用 INR/PKR 那边原来的。下面的
+# id 已经是新账号下真实建好的 THREADS_KV_PHP namespace id，不是占位符
+# 了。===
+[[r2_buckets]]
+binding = "SCREENSHOTS_BUCKET_PHP"
+bucket_name = "php-issuescreenshot"
+
+[[kv_namespaces]]
+binding = "THREADS_KV_PHP"
+id = "9b7c59c645064b08b79b89ad8a062102"
 
 [vars]
 # Bot Token 走 Cloudflare 加密 secret（不进这个文件/git），部署后要在
