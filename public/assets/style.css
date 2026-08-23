@@ -496,6 +496,16 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
   background: var(--field-bg); border: 1.5px solid var(--border); border-radius: 8px;
   padding: 6px 10px; font-size: 12px; font-weight: 600; color: var(--ink); font-family: inherit; cursor: pointer;
 }
+/* MERGED (2026-08-23) — .edit-modal-header-row uses justify-content:
+   space-between, which was spreading "All currencies" and "All roles"
+   apart with a large gap despite being adjacent siblings in the DOM
+   (space-between distributes space evenly BETWEEN every direct flex
+   child, not just around the group as a whole). Wrapping both selects
+   in this one flex child keeps them hugging together regardless of how
+   much room the header row has, while the outer row's space-between
+   still spaces this whole group away from the title/search on the left
+   and the close button on the right. */
+.acct-profile-filters-group { display: flex; align-items: center; gap: 8px; }
 .acct-profile-search {
   background: var(--field-bg); border: 1.5px solid var(--border); border-radius: 8px;
   padding: 6px 10px; font-size: 12px; color: var(--ink); font-family: inherit;

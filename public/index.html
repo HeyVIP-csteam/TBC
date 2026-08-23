@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=09d78b3d" />
+<link rel="stylesheet" href="/assets/style.css?v=fab742c8" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -83,16 +83,18 @@ html[data-theme="light"] {
       <div class="edit-modal-header-row">
         <p class="edit-modal-title" id="acctModalTitle">Account Management</p>
         <input type="text" id="acctProfileSearch" class="acct-profile-search" placeholder="🔍 Search username, full name, PSD…" autocomplete="off" style="display:none;" />
-        <select id="acctProfileCountryFilter" class="acct-role-filter" style="display:none;">
-          <option value="all">All currencies</option>
-        </select>
-        <select id="acctProfileRoleFilter" class="acct-role-filter" style="display:none;">
-          <option value="all">All roles</option>
-          <option value="agent">Agent</option>
-          <option value="senior">Senior</option>
-          <option value="admin">Admin</option>
-          <option value="superadmin">SuperAdmin</option>
-        </select>
+        <div class="acct-profile-filters-group" id="acctProfileFiltersGroup">
+          <select id="acctProfileCountryFilter" class="acct-role-filter" style="display:none;">
+            <option value="all">All currencies</option>
+          </select>
+          <select id="acctProfileRoleFilter" class="acct-role-filter" style="display:none;">
+            <option value="all">All roles</option>
+            <option value="agent">Agent</option>
+            <option value="senior">Senior</option>
+            <option value="admin">Admin</option>
+            <option value="superadmin">SuperAdmin</option>
+          </select>
+        </div>
         <div class="ipa-header-actions" id="ipaHeaderActions" style="display:none;">
           <button type="button" class="ipa-header-btn" id="ipaManageOfficesBtn">+ Manage offices</button>
           <button type="button" class="ipa-header-btn" id="ipaRecordBtn">🕒 Record</button>
@@ -2615,6 +2617,8 @@ html[data-theme="light"] {
           <div class="edit-details-fields">
             <p class="agent-profile-section-label">Edit profile</p>
             <div class="field"><label>Username</label><input type="text" value="${acctEsc(a.username)}" disabled /></div>
+            <div class="field"><label>Full name</label><input type="text" id="ap_fullname" value="${acctEsc(a.fullName || "")}" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
+            <div class="field"><label>Agent PSD</label><input type="text" id="ap_pid" value="${acctEsc(a.pid || "")}" placeholder="e.g. PSD-014" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
             <div style="display:flex; gap:10px;">
               <div class="field" style="flex:1;">
                 <label>Role</label>
@@ -2632,8 +2636,6 @@ html[data-theme="light"] {
               <label>Office</label>
               ${canManageAccess ? `<select id="ap_office"><option value="">— none —</option>${officeOptions}</select>` : `<input type="text" value="${office ? acctEsc(office.name) : "—"}" disabled />`}
             </div>
-            <div class="field"><label>Full name</label><input type="text" id="ap_fullname" value="${acctEsc(a.fullName || "")}" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
-            <div class="field"><label>Agent PSD</label><input type="text" id="ap_pid" value="${acctEsc(a.pid || "")}" placeholder="e.g. PSD-014" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
             <div class="field">
               <label>Currencies</label>
               <div class="brand-toggle-label"><span></span>${canManageAccess ? `<span class="select-all-btn" id="ap_countrySelectAllBtn">${allCountriesSelected ? "✓ All Selected" : "Select All"}</span>` : ""}</div>
