@@ -957,7 +957,21 @@ html[data-theme="light"] {
         // this to be the one real place accounts get created going
         // forward). window.COUNTRY_CODES/window.COUNTRIES come from
         // countries.js (already loaded on this page).
-        const countryPills = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []).map((code) => {
+        //
+        // SCOPED TO THE CREATOR'S OWN CURRENCIES (2026-08-24) — this
+        // used to always offer all COUNTRY_CODES regardless of who was
+        // creating the account, which meant a PKR-only Admin could
+        // grant a brand-new account INR/PHP access they can't even see
+        // themselves — a real privilege-escalation gap, not just a
+        // display nicety (server-side enforces the same cap now too,
+        // see handlePost's 2026-08-24 note in
+        // functions/api/admin/accounts.js — this is the UX half so the
+        // form doesn't even offer a choice the server would reject).
+        // window.AgentCountry.getAllowedCountries() already resolves
+        // Owner/"all"/undefined/array exactly the way this needs —
+        // Owner still gets every country, same as before.
+        const creatableCountries = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []);
+        const countryPills = creatableCountries.map((code) => {
           const label = (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? COUNTRIES[code].name : code;
           return `<div class="brand-toggle-pill" data-country="${acctEsc(code)}">${acctEsc(label).toUpperCase()} <span class="brand-toggle-country">${acctEsc(code)}</span></div>`;
         }).join("");
@@ -2492,7 +2506,27 @@ html[data-theme="light"] {
       const selectedCountryCodes = allCountriesSelected
         ? (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : [])
         : (Array.isArray(a.allowedCountries) ? a.allowedCountries : []);
-      const countryPills = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []).map((code) => {
+      // SCOPED TO THE EDITOR'S OWN CURRENCIES (2026-08-24) — same fix,
+      // same reasoning, as Create Account's countryPills above: a
+      // PKR-only Admin editing an existing account must not be able to
+      // widen that account's Currencies to INR/PHP, which they can't
+      // even see themselves. Two subtleties worth being explicit about:
+      //   1. A currency the TARGET already has that the EDITOR can't
+      //      see (only reachable if the editor is Owner, or was granted
+      //      access after the target was — this is deliberately
+      //      inclusive: an already-granted currency stays visible/shown
+      //      as selected in this editor's view even if not in the
+      //      editor's own offerable set, since REMOVING a grant you
+      //      can't add is still safe — you just can't ADD a new one you
+      //      don't have. The set below is offerable-pills, not
+      //      selected-state, so this is naturally correct without extra
+      //      code: selectedCountryCodes (above) already reflects the
+      //      target's real stored value regardless of this list.
+      //   2. Server-side enforces the actual cap (handlePost's
+      //      2026-08-24 note in functions/api/admin/accounts.js) — this
+      //      is still just the UX half.
+      const editableCountries = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []);
+      const countryPills = Array.from(new Set([...editableCountries, ...selectedCountryCodes])).map((code) => {
         const label = (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? COUNTRIES[code].name : code;
         const isSelected = selectedCountryCodes.includes(code);
         return `<div class="brand-toggle-pill${isSelected ? " selected" : ""}" data-country="${acctEsc(code)}">${acctEsc(label).toUpperCase()} <span class="brand-toggle-country">${acctEsc(code)}</span></div>`;
