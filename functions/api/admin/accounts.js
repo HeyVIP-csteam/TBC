@@ -54,6 +54,9 @@
  */
 import { listAccounts, saveAccount, deleteAccount, getAccount, authenticateStaff, anySuperAdminExists, setAccountLocked, ROLE_RANK, rankOf, canSeeAdminSection, canEditAdminSection, canManageOthersAdminAccess, withSectionToggled, effectiveAllowedAdminSections, effectiveAdminSectionEditAccess, ADMIN_SECTIONS, EDITABLE_ADMIN_SECTIONS, requestIP } from "../../_shared/accounts.js";
 import { logActivity } from "../../_shared/activityLog.js";
+import { resolveAllowedCountries } from "../../_shared/countryAccess.js";
+import { COUNTRY_CODES } from "../../_shared/countries.js";
+import { getBrandCountry } from "../../_shared/routing.js";
 
 // An actor may act on a target only if strictly outranking it — same
 // rank can never manage same rank (this alone is what stops SuperAdmin
@@ -89,7 +92,11 @@ async function handleGet({ request, env }) {
   // viewerUsername comment on listAccounts() in _shared/accounts.js) —
   // everyone else, at any rank, still sees zero owner accounts.
   const viewerUsername = auth.account?.role === "owner" ? auth.account.username : undefined;
-  return json({ ok: true, accounts: await listAccounts(env, { viewerUsername }) });
+  // `viewer: auth.account` — the viewer's own account object, so
+  // listAccounts() can country-scope the results (see that function's
+  // own 2026-08-24 comment for why this wasn't previously happening at
+  // all).
+  return json({ ok: true, accounts: await listAccounts(env, { viewerUsername, viewer: auth.account }) });
 }
 
 export async function onRequestPost(context) {
@@ -129,6 +136,7 @@ async function handlePost({ request, env, waitUntil }) {
   if (body.action === "save" && body.role === "owner") {
     return json({ ok: false, error: "The Owner role cannot be assigned through this interface." }, 403);
   }
+
 
   // canManageAdminAccess (whether an account can itself delegate Account
   // Management Access to OTHER accounts) can ONLY ever be flipped by an
@@ -193,6 +201,56 @@ async function handlePost({ request, env, waitUntil }) {
       (Array.isArray(body.adminSectionEditAccess) && body.adminSectionEditAccess.includes("botToken") && !(Array.isArray(existingEditSections) && existingEditSections.includes("botToken")));
     if (botTokenNewlyGranted && auth.account?.role !== "owner") {
       return json({ ok: false, error: "Only the account owner can grant Bot Token Settings access." }, 403);
+    }
+
+    // CANNOT GRANT MORE COUNTRY/BRAND ACCESS THAN YOU YOURSELF HAVE
+    // (2026-08-24) — the actual security boundary behind "a PKR-only
+    // Admin shouldn't be able to create/edit an account that can see
+    // INR/PHP". index.html's Create Account and Agent Profile forms now
+    // only OFFER the actor's own countries as pickable options (see
+    // their own 2026-08-24 comments), but that's just UX — a direct API
+    // call could still send a disallowed value, so this is the real
+    // enforcement. Owner is exempt (same unconditional bypass Owner
+    // gets everywhere else — see canSeeCountry()'s header for why
+    // that's not a bolted-on special case).
+    //
+    // Delta-aware, same pattern as botTokenNewlyGranted just above:
+    // only a genuinely NEW country/brand (not already on
+    // existingTarget) trips this. A target that already has a broader
+    // grant than the current actor's own scope (e.g. an Owner gave it
+    // INR access, and the account editing it today only has PKR) keeps
+    // that existing grant untouched on an unrelated resave — REMOVING
+    // access isn't the dangerous direction, only ADDING a country/brand
+    // the actor can't see themselves is.
+    if (auth.account?.role !== "owner") {
+      const actorCountries = resolveAllowedCountries(auth.account, COUNTRY_CODES);
+      if (body.allowedCountries !== undefined) {
+        const requested = body.allowedCountries === "all" ? [...COUNTRY_CODES] : (Array.isArray(body.allowedCountries) ? body.allowedCountries : []);
+        const existingCountries = existingTarget
+          ? resolveAllowedCountries(existingTarget, COUNTRY_CODES)
+          : [];
+        const newlyRequested = requested.filter((c) => !existingCountries.includes(c));
+        const disallowed = newlyRequested.filter((c) => !actorCountries.includes(c));
+        if (disallowed.length) {
+          return json({ ok: false, error: `You can't grant access to ${disallowed.join(", ")} — you don't have access to ${disallowed.length === 1 ? "that currency" : "those currencies"} yourself.` }, 403);
+        }
+      }
+      if (body.allowedBrands !== undefined && body.allowedBrands !== "all" && Array.isArray(body.allowedBrands)) {
+        // "all" is legal even for a scoped actor here — it resolves
+        // dynamically to "every brand THIS TARGET's own countries
+        // allow" at read time (same as everywhere else "all" is used in
+        // this codebase), not literally every brand in the system, so
+        // it can never leak brands outside the actor's own reach.
+        const existingBrands = new Set(Array.isArray(existingTarget?.allowedBrands) ? existingTarget.allowedBrands : []);
+        const newlyRequestedBrands = body.allowedBrands.filter((brandId) => !existingBrands.has(brandId));
+        const disallowedBrands = newlyRequestedBrands.filter((brandId) => {
+          const brandCountry = getBrandCountry(brandId);
+          return brandCountry && !actorCountries.includes(brandCountry);
+        });
+        if (disallowedBrands.length) {
+          return json({ ok: false, error: `You can't grant access to ${disallowedBrands.join(", ")} — that brand's currency isn't one you have access to yourself.` }, 403);
+        }
+      }
     }
     // Populated inside the "editing existing account" branch below when
     // this request touches Announcement access; read afterwards by the

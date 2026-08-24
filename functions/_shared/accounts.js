@@ -533,12 +533,36 @@ export async function deleteOffice(env, id) {
 // regardless of any of this — that's necessary for the owner to be able
 // to log in at all — but nothing that enumerates "all accounts" ever
 // surfaces it to anyone but that one account.
-export async function listAccounts(env, { viewerUsername } = {}) {
+//
+// COUNTRY-SCOPING THE LIST ITSELF (2026-08-24) — this previously
+// returned literally every account in the system to any viewer who
+// could open Agent Profile at all, with zero regard for the VIEWER's
+// own allowedCountries. That's inconsistent with every other
+// country-scoped surface in this codebase (threads, deposits, promo
+// search, presence — all gated through canSeeCountry()) and defeats
+// the actual purpose of setting an account's Currencies in the first
+// place: a PKR-only agent could still see the full roster of INR/PHP
+// accounts. `viewer` (the caller's own account object, from
+// authenticateStaff() — NOT just their username) is now required so
+// this can apply the same canSeeCountry() gate row-by-row: a row is
+// visible only if the viewer can see AT LEAST ONE of that row's own
+// allowedCountries (an "all"-scoped row is visible to any viewer who
+// can see any country at all, mirroring canSeeCountry("all")'s own
+// semantics). Owner bypasses this same as canSeeCountry() already
+// bypasses everywhere else — unconditional top authority, not a
+// special case bolted on here.
+export async function listAccounts(env, { viewerUsername, viewer } = {}) {
   const raw = await env.ACCOUNTS_KV.get(ACCOUNTS_INDEX_KEY);
   const usernames = raw ? JSON.parse(raw) : [];
   const accounts = await Promise.all(usernames.map((u) => env.ACCOUNTS_KV.get(`account:${u}`)));
   return accounts.filter(Boolean).map((a) => JSON.parse(a))
     .filter((a) => a.role !== "owner" || a.username === viewerUsername)
+    .filter((a) => {
+      if (!viewer) return true; // no viewer context passed — don't break existing callers
+      if (viewer.role === "owner") return true;
+      const rowCountries = a.allowedCountries === "all" ? COUNTRY_CODES : (a.allowedCountries || []);
+      return rowCountries.some((c) => canSeeCountry(viewer, c));
+    })
     .map(stripSecret);
 }
 
