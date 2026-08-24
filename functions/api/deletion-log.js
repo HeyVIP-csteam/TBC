@@ -13,8 +13,19 @@
  * visibility check for this section already went through this exact
  * fix once (see the comment in bootDashboard() there); this file had
  * fallen out of sync with that fix — same class of bug, different file.
+ *
+ * REDESIGNED (2026-08-24) — Delete moved from an immediate hard purge to
+ * a 30-day soft-delete (see softDeleteThread()'s own header in
+ * threads.js for the full reasoning). This is the natural place to
+ * actually enforce that window: every load of this admin-only, already
+ * low-frequency page now also sweeps and purges any soft-deleted thread
+ * whose OWN deletion-log entry has aged past DELETED_RETENTION_DAYS
+ * (purgeExpiredDeletions() — driven by the log's ts, no separate index
+ * needed). Fired via waitUntil so it never adds latency to the actual
+ * response; the log entries themselves are never touched by this, only
+ * the thread record they point at.
  */
-import { listDeletions } from "../_shared/threads.js";
+import { listDeletions, purgeExpiredDeletions } from "../_shared/threads.js";
 import { authenticateAdmin } from "../_shared/accounts.js";
 import { resolveAllowedCountries } from "../_shared/countryAccess.js";
 import { COUNTRY_CODES, resolveThreadsStore } from "../_shared/countries.js";
@@ -33,7 +44,7 @@ export async function onRequestGet(context) {
   }
 }
 
-async function handleGet({ request, env }) {
+async function handleGet({ request, env, waitUntil }) {
   const auth = await authenticateAdmin(request, env);
   if (!auth.ok) return json({ ok: false, error: "Admin login required." }, 401);
 
@@ -44,6 +55,13 @@ async function handleGet({ request, env }) {
     allowedCountries.map(async (country) => {
       const store = resolveThreadsStore(env, country);
       if (!store.kv) return [];
+      // Background sweep — see this file's own 2026-08-24 header note.
+      // Deliberately not awaited: whether this run happens to find
+      // anything to purge has zero bearing on what gets returned below
+      // (the log entries are unaffected either way), so there's no
+      // reason to make the admin's page load wait on it.
+      const purge = purgeExpiredDeletions(store);
+      if (waitUntil) waitUntil(purge); else purge.catch(() => {});
       const entries = await listDeletions(store);
       return entries.map((e) => ({ ...e, country }));
     })

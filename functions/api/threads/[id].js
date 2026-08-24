@@ -53,7 +53,7 @@ import {
   updateRootText, updateThreadDetails, markRootRecalled, editMessageInThread, removeMessageFromThread,
   logDeletion, purgeOrphanIfStray,
 } from "../../_shared/threads.js";
-import { verifyRequest, canSeeBrand, canSeeCountry, requestIP } from "../../_shared/accounts.js";
+import { verifyRequest, canSeeBrand, canSeeCountry, requestIP, rankOf, ROLE_RANK } from "../../_shared/accounts.js";
 import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken } from "../../_shared/routing.js";
 import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
 import { updateRowByColumns } from "../../_shared/googleSheets.js";
@@ -75,12 +75,27 @@ import { logActivity } from "../../_shared/activityLog.js";
 export async function onRequestGet({ request, env, params }) {
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
-  const country = (new URL(request.url).searchParams.get("country") || "").toUpperCase();
+  const url = new URL(request.url);
+  const country = (url.searchParams.get("country") || "").toUpperCase();
   if (!isValidCountry(country) || !canSeeCountry(account, country)) return json({ ok: false, error: "Not found." }, 404);
   const store = resolveThreadsStore(env, country);
   if (!store.kv) return json({ ok: false, error: `${country}'s ticket storage is not bound yet.` }, 500);
   const thread = await getThread(store, params.id);
-  if (thread && !thread.deleted && canSeeBrand(account, thread.brand)) {
+  // includeDeleted (2026-08-24) — ADMIN-ONLY bypass of the normal
+  // "a soft-deleted thread doesn't exist" rule, used exclusively by the
+  // Recall log's own detail view (threads.html's openRecallDetail()) so
+  // an admin can actually read a deleted ticket's full content within
+  // its retention window (see softDeleteThread()'s header in
+  // threads.js). Every OTHER caller of this endpoint — the normal
+  // Active/Solved thread-open flow included — must keep treating a
+  // deleted thread as gone, or a stale bookmark/tab could reopen
+  // something an agent deliberately deleted. Gated to admin rank
+  // specifically (not just "logged in") because that's the exact same
+  // floor deletion-log.js's authenticateAdmin() already requires to see
+  // the Recall log at all — an agent passing this query param by hand
+  // still gets the normal 404.
+  const includeDeleted = url.searchParams.get("includeDeleted") === "1" && rankOf(account.role) >= ROLE_RANK.admin;
+  if (thread && (!thread.deleted || includeDeleted) && canSeeBrand(account, thread.brand)) {
     return json({ ok: true, thread: { ...thread, country } });
   }
   // thread === null means genuinely no record anywhere (not just a
@@ -201,19 +216,23 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     // this branch's own log entry text below, unchanged from before).
     // That split meant a ticket could be "Deleted" here while its
     // original message sat untouched in the real Telegram group
-    // forever, with no way back to actually recall it afterward (the
-    // thread record — chatId/rootMessageId(s), the only things that let
-    // Telegram's API find that specific message again — gets purged
-    // permanently the moment softDeleteThread() runs, a few lines down).
-    // Direct decision: Delete now ALSO performs the real Telegram recall
-    // of the ROOT ticket message before untracking, so "Deleted" always
+    // forever, with no way back to actually recall it afterward. Direct
+    // decision: Delete now ALSO performs the real Telegram recall of
+    // the ROOT ticket message before untracking, so "Deleted" always
     // means the same thing "Recalled" already did for the root message
     // — no more silent limbo state. Only the root message is recalled
     // here, not every reply in the thread — a reply is the AGENT's own
     // conversation history in that Telegram group, not the ticket
     // submission itself, and stays out of scope for this change; an
     // agent who wants to recall a specific reply still uses the
-    // existing per-reply ↩️ Recall action for that.
+    // existing per-reply ↩️ Recall action for that. The standalone
+    // header-level "Recall" button (root-message-only, no untracking)
+    // was removed from threads.html the same day this shipped — Delete
+    // fully subsumes what it did, so keeping both onscreen just made
+    // people wonder which one to click; the recallRoot ACTION below
+    // stays in this file only because per-reply recall still needs the
+    // same Telegram-deletion machinery, not because anything still
+    // calls it for a root message.
     if (!before.rootRecalled && botToken) {
       const idsToDelete = before.rootMessageIds && before.rootMessageIds.length ? before.rootMessageIds : [before.rootMessageId];
       const results = await Promise.all(idsToDelete.map((mid) => callTelegram(botToken, "deleteMessage", { chat_id: before.chatId, message_id: mid })));
@@ -225,7 +244,10 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
       // in Telegram, no way back" limbo this change exists to close.
       if (firstFailure) return json({ ok: false, error: telegramDeleteError(firstFailure) }, 502);
     }
-    const thread = await softDeleteThread(store, id);
+    // SOFT delete (2026-08-24) — see softDeleteThread()'s own header in
+    // threads.js. `account.username` becomes `thread.deletedBy`, read
+    // back by the Recall log's detail view.
+    const thread = await softDeleteThread(store, id, account.username);
     if (!thread) return json({ ok: false, error: "Not found." }, 404);
     await logDeletion(store, {
       type: "delete-thread",

@@ -1104,10 +1104,62 @@ export async function removeMessageFromThread(store, threadId, messageId) {
   return thread;
 }
 
-export async function softDeleteThread(store, threadId) {
+// SOFT delete (2026-08-24 redesign) — used to call purgeThread() and
+// erase the KV record immediately; changed on direct request so a
+// deleted ticket's full content stays reachable from the Recall log for
+// a window afterward instead of being gone the instant Delete is
+// clicked, with zero way back short of Telegram itself still having the
+// message (and even then, only the original ticket text, never the
+// reply conversation that lived in this record). `thread.deleted` was
+// already a real field the read paths (onRequestGet here, the guard at
+// the top of every action in [id].js) have checked for — this is what
+// finally makes that check meaningful, since purgeThread() erasing the
+// whole record on delete meant `.deleted` could never actually be true
+// on anything getThread() still returned.
+//
+// Retention: DELETED_RETENTION_DAYS below. The deletion-log entry
+// itself (threadId/title/brand/content snapshot/who/when) is untouched
+// by any of this and is kept forever regardless — see
+// purgeExpiredDeletions() further down, which is what actually erases
+// the underlying thread record once its window closes, using the log's
+// own `ts` as the clock. A thread this old the next time anyone (any
+// list, any lookup) reads it just isn't there anymore, same as any
+// other purge.
+export const DELETED_RETENTION_DAYS = 30;
+
+export async function softDeleteThread(store, threadId, deletedBy) {
   const thread = await getThread(store, threadId);
   if (!thread) return null;
-  await purgeThread(store, thread);
+  thread.deleted = true;
+  thread.deletedAt = new Date().toISOString();
+  thread.deletedBy = deletedBy || null;
+  await saveThread(store, thread);
   await patchListCache(store.kv, thread, { remove: true }); // instant sidebar update — drop it immediately, don't wait for the next scan to notice it's gone
   return thread;
 }
+
+// Actually erases thread records whose DELETION (not creation, not last
+// activity — this is specifically about the Delete action's own 30-day
+// grace window) is older than DELETED_RETENTION_DAYS. Driven by the
+// deletion-log itself rather than a separate "which threads are
+// currently soft-deleted" index — every soft-delete already writes a
+// `delete-thread` log entry with the exact threadId + timestamp needed,
+// so there's nothing new to track. Safe to call repeatedly/concurrently:
+// deleting an already-gone KV key is a no-op, not an error, so calling
+// this on every deletion-log read (see api/deletion-log.js) rather than
+// on a schedule is fine — no separate cron trigger needed. The log
+// entries themselves are NEVER touched here, only the underlying
+// `thread:<id>` (and its msgIds) records they point at — see this
+// file's own header on why the log is permanent audit trail while the
+// thread record it references is not.
+export async function purgeExpiredDeletions(store) {
+  const entries = await listDeletions(store);
+  const cutoff = Date.now() - DELETED_RETENTION_DAYS * 86400000;
+  const candidates = entries.filter((e) => e.type === "delete-thread" && e.ts && new Date(e.ts).getTime() < cutoff);
+  if (!candidates.length) return;
+  await Promise.all(candidates.map(async (e) => {
+    const thread = await getThread(store, e.threadId);
+    if (thread) await purgeThread(store, thread);
+  }));
+}
+
