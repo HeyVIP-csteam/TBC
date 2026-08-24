@@ -657,7 +657,14 @@ html[data-theme="light"] {
       try {
         const res = await window.AgentAuth.authFetch("/api/announcements", { cache: "no-store" });
         const data = await res.json();
-        const count = data.ok ? (data.announcements || []).length : 0;
+        // FIXED (2026-08-24) — same fix as announcement-banner.js's own
+        // load(): the API always returns every allowed country's
+        // announcements, this card's own count just never scoped that
+        // down to the currently-selected country before counting.
+        const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+        const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+        const scoped = data.ok ? (data.announcements || []).filter((a) => !country || isAll || a.country === country) : [];
+        const count = scoped.length;
         document.getElementById("announceIcon")?.classList.toggle("breathing", count > 0);
         const stat = document.getElementById("announceStat");
         if (stat) stat.textContent = count > 0 ? `${count} active` : "None active";

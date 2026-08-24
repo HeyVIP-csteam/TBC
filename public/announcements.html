@@ -463,7 +463,7 @@ html[data-theme="light"] {
 
     loadAnnouncements();
     setInterval(pollAnnouncements, 30000);
-    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => loadAnnouncements());
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => { loadAnnouncements(); window.refreshAnnouncementBanner?.(); });
   </script>
 </body>
 </html>

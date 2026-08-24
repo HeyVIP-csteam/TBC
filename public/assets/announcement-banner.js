@@ -157,11 +157,28 @@
     }
   }
 
+  // FIXED (2026-08-24) — /api/announcements deliberately returns EVERY
+  // country the account can see (same "backend returns the full
+  // allowed set, frontend scopes it to the current country switcher
+  // selection" pattern every other Integration Portal page already
+  // uses — see index.html's getCountryScopedBrands() for the reference
+  // implementation) — this file just never actually did that last
+  // step, so the reminder banner showed announcements from every
+  // allowed country at once regardless of which one was selected up
+  // top. "All Countries" mode still shows everything, same as
+  // elsewhere.
+  function scopeToCurrentCountry(announcements) {
+    const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+    const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+    if (!country || isAll) return announcements;
+    return announcements.filter((a) => a.country === country);
+  }
+
   async function load() {
     try {
       const res = await window.AgentAuth.authFetch("/api/announcements", { cache: "no-store" });
       const data = await res.json();
-      items = data.ok ? (data.announcements || []) : [];
+      items = data.ok ? scopeToCurrentCountry(data.announcements || []) : [];
       if (data.ok && Number.isFinite(data.rotateIntervalMs) && data.rotateIntervalMs > 0) rotateMs = data.rotateIntervalMs;
     } catch {
       // Network hiccup — leave whatever was already showing, try again next poll.

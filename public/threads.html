@@ -149,7 +149,7 @@ html[data-theme="light"] {
       // see, tagged with t.country, and expects the frontend to filter
       // — see that endpoint's own comment). This page previously never
       // did that filtering step at all.
-      if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => renderLists());
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => { renderLists(); window.refreshAnnouncementBanner?.(); });
       loadList();
       if (isAdmin) loadRecallLog();
       polishEmoji();

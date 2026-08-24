@@ -78,7 +78,7 @@ html[data-theme="light"] {
     window.initClock();
     window.HubNav.mount("hubNavMount", {});
     window.BrandRow.mount("pageBrandRow");
-    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => load());
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => { load(); window.refreshAnnouncementBanner?.(); });
 
     function esc(str) {
       return String(str == null ? "" : str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
