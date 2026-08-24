@@ -2066,6 +2066,11 @@ html[data-theme="light"] {
               ${canClear ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary" id="botTokenClearBoth">Revert both to Cloudflare secrets</button>' : ""}
             </div>` : '<p class="edit-modal-note">View only.</p>'}
             <p class="edit-modal-note" style="opacity:0.75; margin-top:10px;">Leave a field blank to keep what's already configured for it. Saving re-registers the Telegram webhook automatically.</p>
+            <details class="bot-token-manual-fallback" style="margin-top:10px;">
+              <summary style="cursor:pointer; color:var(--ink-soft); font-size:12px;">If Save's automatic webhook registration fails, run this manually instead</summary>
+              <p class="edit-modal-note" style="opacity:0.75; margin-top:6px; margin-bottom:4px;">Paste your own Bot Token and Webhook Secret into the URL below (same values as the fields above), then open it in a browser tab. A response containing <code>"ok":true</code> means it worked — the Bot Token itself still needs to be saved above separately, this URL only tells Telegram where to send messages.</p>
+              <code style="display:block; font-family:var(--font-mono); font-size:11.5px; line-height:1.5; color:var(--ink); background:rgba(255,255,255,0.04); border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px; word-break:break-all; user-select:all;">https://api.telegram.org/bot&lt;BOT_TOKEN&gt;/setWebhook?url=${acctEsc(location.origin)}/api/telegram-webhook/${acctEsc(country.toLowerCase())}&amp;secret_token=&lt;WEBHOOK_SECRET&gt;</code>
+            </details>
           </div>`;
       }
 
