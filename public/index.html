@@ -1203,7 +1203,7 @@ html[data-theme="light"] {
       return brands.filter((b) => b.country === country);
     }
 
-    function renderTgRoutes() {
+    function renderTgRoutes(preserveScroll) {
       if (!acctRoutesData) return;
       const { modules, routes, securityAlerts } = acctRoutesData;
       const brands = getCountryScopedBrands(acctRoutesData.brands);
@@ -1215,9 +1215,38 @@ html[data-theme="light"] {
       const canEditRoutes = canEditAdminSection("tgRoutes");
       const roAttr = canEditRoutes ? "" : "disabled";
 
+      // FIXED (2026-08-24) — acctBody.innerHTML fully rebuilds the DOM
+      // on every render, which reset BOTH scrollable panels (the left
+      // .tgroute-brands sidebar AND the right .tgroute-modules list) to
+      // the top every time — clicking a brand deep in PKR's 9-brand
+      // list (or Save/Reset on a module row) kept snapping the sidebar
+      // itself back to the top, forcing a re-scroll to reach the next
+      // brand. Capture both from the OLD DOM before replacing it,
+      // restore on the NEW DOM after — same pattern as
+      // renderIssueSheets()'s own 2026-08-24 fix, just extended to
+      // cover the LEFT sidebar too (that page's version only needed the
+      // right list, since switching brands there intentionally starts
+      // fresh at the top — this page has no such reason for the
+      // sidebar itself to ever jump).
+      const oldBrandsEl = preserveScroll ? acctBody.querySelector(".tgroute-brands") : null;
+      const oldModulesEl = preserveScroll ? acctBody.querySelector(".tgroute-modules") : null;
+      const brandsScrollTop = oldBrandsEl ? oldBrandsEl.scrollTop : 0;
+      const modulesScrollTop = oldModulesEl ? oldModulesEl.scrollTop : 0;
+
       const brandListHtml = groupedBrandListHtml(brands, acctRoutesSelectedBrand) + `
         <div class="tgroute-brand tgroute-security${isSecuritySelected ? " selected" : ""}" data-brand="${SECURITY_ROW_ID}">🔒 Security Alerts</div>
       `;
+
+      const restoreScroll = () => {
+        if (brandsScrollTop) {
+          const el = acctBody.querySelector(".tgroute-brands");
+          if (el) el.scrollTop = brandsScrollTop;
+        }
+        if (modulesScrollTop) {
+          const el = acctBody.querySelector(".tgroute-modules");
+          if (el) el.scrollTop = modulesScrollTop;
+        }
+      };
 
       if (isSecuritySelected) {
         const r = securityAlerts || { chatId: "", topicId: null, isOverride: false };
@@ -1243,11 +1272,12 @@ html[data-theme="light"] {
           <hr class="tgroute-divider" />
           ${canEditRoutes ? "" : '<p class="edit-modal-note">View only.</p>'}
           <p class="edit-modal-note tgroute-footnote">This isn't a brand — it's where login sends a Telegram alert when a correct password is used from an IP that isn't office-whitelisted, or when an account gets auto-locked (5 wrong passwords, or 5 different unrecognized IPs in an hour). Login stays blocked exactly the same either way; this only controls where the heads-up message goes. "default" is whatever's set in the SECURITY_ALERTS_CHAT_ID Cloudflare secret (empty = no alerts sent yet).</p>`;
+        restoreScroll();
         acctBody.querySelectorAll(".tgroute-brand").forEach((el) => {
           el.addEventListener("click", () => {
             acctRoutesSelectedBrand = el.dataset.brand;
             setAcctNote("");
-            renderTgRoutes();
+            renderTgRoutes(true);
           });
         });
         acctBody.querySelectorAll(".tgroute-save").forEach((btn) => {
@@ -1294,12 +1324,13 @@ html[data-theme="light"] {
         <hr class="tgroute-divider" />
         ${canEditRoutes ? "" : '<p class="edit-modal-note">View only.</p>'}
         <p class="edit-modal-note tgroute-footnote">Changes apply to the very next form submission — no redeploy needed. "default" rows are still using the value built into the code; "custom" rows have been overridden here.</p>`;
+      restoreScroll();
 
       acctBody.querySelectorAll(".tgroute-brand").forEach((el) => {
         el.addEventListener("click", () => {
           acctRoutesSelectedBrand = el.dataset.brand;
           setAcctNote("");
-          renderTgRoutes();
+          renderTgRoutes(true);
         });
       });
       acctBody.querySelectorAll(".tgroute-save").forEach((btn) => {
@@ -1328,7 +1359,7 @@ html[data-theme="light"] {
         acctRoutesData.routes[`${acctRoutesSelectedBrand}|${moduleId}`] = data.route;
       }
       setAcctNote("Saved.", "ok");
-      renderTgRoutes();
+      renderTgRoutes(true);
     }
 
     async function resetTgRouteRow(row) {
@@ -1346,7 +1377,7 @@ html[data-theme="light"] {
         acctRoutesData.routes[`${acctRoutesSelectedBrand}|${moduleId}`] = data.route;
       }
       setAcctNote("Reset to default.", "ok");
-      renderTgRoutes();
+      renderTgRoutes(true);
     }
 
     // ---- Issue Submission Gsheet (2026-08) — same brand-sidebar +
