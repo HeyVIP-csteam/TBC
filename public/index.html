@@ -516,7 +516,13 @@ html[data-theme="light"] {
     const sortedVisibleModules = window.sortModulesForCountry
       ? window.sortModulesForCountry(visibleModules, window.AgentCountry ? window.AgentCountry.getCountry() : null)
       : visibleModules;
+    // Currencies count — same "read the live list, never hardcode"
+    // pattern as Brands/Modules above, so this stays correct with zero
+    // edits here if a 4th country is ever added (see countries.js's own
+    // header comment on what adding one actually requires).
+    const currencyCount = window.COUNTRY_CODES ? window.COUNTRY_CODES.length : 0;
     hubStats.innerHTML = `
+      <div class="stat"><b>${currencyCount}</b><span>Currencies</span></div>
       <div class="stat"><b>${visibleBrandCount}</b><span>Brands</span></div>
       <div class="stat"><b>${visibleModules.length}</b><span>Modules</span></div>
       <div class="stat"><b>24/7</b><span>Live routing</span></div>
