@@ -415,6 +415,25 @@ html[data-theme="light"] {
     async function openRecallDetail(idx) {
       const entry = recallEntries[idx];
       if (!entry) return;
+      // FIXED (2026-08-24) — this is the actual bug behind "clicking a
+      // Recall entry snaps back to whatever Active/Solved ticket was
+      // last open": selectedId/selectedThread are GLOBAL state only
+      // openThread() used to ever set, and the 6-second background poll
+      // (pollTimer -> refreshOpenThread(), see bootDashboard() above)
+      // keeps re-fetching and re-rendering whatever selectedId still
+      // points at REGARDLESS of which tab/panel is actually showing —
+      // it has no idea a Recall detail is on screen instead. This
+      // render WAS correct, briefly — the very next poll tick (up to
+      // 6s later) then silently overwrote it back to the old ticket,
+      // which read exactly like "the click didn't do anything."
+      // Clearing both here makes refreshOpenThread()'s own
+      // `if (!selectedId) return;` guard the fix — it already existed
+      // for exactly this kind of situation (see deleteThread() doing
+      // the same pair of assignments when it closes a thread), this
+      // code path just never triggered it before.
+      selectedId = null;
+      selectedThread = null;
+      renderLists();
       const meta = RECALL_TYPE_META[entry.type] || { icon: "🗑", badge: entry.type };
       main.innerHTML = `<div class="threads-placeholder">Loading…</div>`;
       let thread = null;
