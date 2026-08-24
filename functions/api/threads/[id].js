@@ -194,6 +194,37 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
 
   if (action === "delete") {
     const before = existingThread;
+    // MERGED (2026-08-24) — Delete and Recall used to be two genuinely
+    // different things: Recall calls Telegram's real deleteMessage API
+    // (the message is actually gone from the group); Delete only ever
+    // untracked the ticket on OUR side — "Telegram/Sheet untouched" (see
+    // this branch's own log entry text below, unchanged from before).
+    // That split meant a ticket could be "Deleted" here while its
+    // original message sat untouched in the real Telegram group
+    // forever, with no way back to actually recall it afterward (the
+    // thread record — chatId/rootMessageId(s), the only things that let
+    // Telegram's API find that specific message again — gets purged
+    // permanently the moment softDeleteThread() runs, a few lines down).
+    // Direct decision: Delete now ALSO performs the real Telegram recall
+    // of the ROOT ticket message before untracking, so "Deleted" always
+    // means the same thing "Recalled" already did for the root message
+    // — no more silent limbo state. Only the root message is recalled
+    // here, not every reply in the thread — a reply is the AGENT's own
+    // conversation history in that Telegram group, not the ticket
+    // submission itself, and stays out of scope for this change; an
+    // agent who wants to recall a specific reply still uses the
+    // existing per-reply ↩️ Recall action for that.
+    if (!before.rootRecalled && botToken) {
+      const idsToDelete = before.rootMessageIds && before.rootMessageIds.length ? before.rootMessageIds : [before.rootMessageId];
+      const results = await Promise.all(idsToDelete.map((mid) => callTelegram(botToken, "deleteMessage", { chat_id: before.chatId, message_id: mid })));
+      const firstFailure = results.find((r) => !r.ok);
+      // Matches recallRoot's own strictness just below in this file: a
+      // failed Telegram deletion blocks the WHOLE delete action rather
+      // than silently untracking anyway — untracking on a failed recall
+      // would just recreate the exact "gone from our side, still live
+      // in Telegram, no way back" limbo this change exists to close.
+      if (firstFailure) return json({ ok: false, error: telegramDeleteError(firstFailure) }, 502);
+    }
     const thread = await softDeleteThread(store, id);
     if (!thread) return json({ ok: false, error: "Not found." }, 404);
     await logDeletion(store, {
