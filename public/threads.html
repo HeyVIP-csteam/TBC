@@ -375,46 +375,132 @@ html[data-theme="light"] {
       }
       list.innerHTML = recallEntries.map((e, i) => {
         const meta = RECALL_TYPE_META[e.type] || { icon: "🗑", badge: e.type };
-        const full = e.content || "";
-        // Preview clamps at 120 chars same as before; anything longer
-        // gets a "show more" toggle instead of just being cut off with
-        // no way to ever see the rest — the API already returns the
-        // FULL content, this was purely a rendering limit (see
-        // loadRecallLog()'s own comment on why nothing needed to change
-        // server-side for this).
-        const isLong = full.length > 120;
-        const preview = isLong ? full.slice(0, 120) + "…" : full;
         return `
           <div class="thread-item recall-item" data-idx="${i}">
             <div class="icon">${meta.icon}</div>
             <div class="meta">
               <div class="t-title"><span class="badge">${escapeHtml(meta.badge)}</span>${escapeHtml(e.threadTitle || "")}</div>
               <div class="t-sub">${escapeHtml(e.by || "unknown")} · ${timeAgo(e.ts)}${e.brand ? " · " + escapeHtml(e.brand) : ""}${e.country ? " · " + escapeHtml(e.country) : ""}</div>
-              <div class="t-content recall-content" data-expanded="false">${escapeHtml(preview)}</div>
-              ${isLong ? `<button type="button" class="recall-expand-btn">Show more</button>` : ""}
+              <div class="t-content">${escapeHtml((e.content || "").slice(0, 120))}</div>
             </div>
           </div>`;
       }).join("");
-      list.querySelectorAll(".recall-expand-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const item = btn.closest(".recall-item");
-          const idx = Number(item.dataset.idx);
-          const contentEl = item.querySelector(".recall-content");
-          const full = recallEntries[idx].content || "";
-          const isExpanded = contentEl.dataset.expanded === "true";
-          if (isExpanded) {
-            contentEl.textContent = full.length > 120 ? full.slice(0, 120) + "…" : full;
-            contentEl.dataset.expanded = "false";
-            btn.textContent = "Show more";
-          } else {
-            contentEl.textContent = full;
-            contentEl.dataset.expanded = "true";
-            btn.textContent = "Show less";
-          }
-        });
+      list.querySelectorAll(".recall-item").forEach((el) => {
+        el.addEventListener("click", () => openRecallDetail(Number(el.dataset.idx)));
       });
       polishEmoji();
       updateAllThreadsCard();
+    }
+
+    // Opens a Recall-log entry's full detail directly in the main
+    // content area (2026-08-24) — same "click, content shows right
+    // there" pattern as opening a normal thread, deliberately NOT a
+    // separate popup/modal and NOT a "preview then click again to see
+    // the real thing" two-step. Both entry types below end up in the
+    // SAME renderRecallDetail() renderer so the panel looks and behaves
+    // identically either way — the only thing that differs is what data
+    // is available to hand it:
+    //   - "recall-root"/"recall-reply": the THREAD ITSELF is still
+    //     alive (only one message was pulled from Telegram, the ticket
+    //     wasn't deleted) — fetched with a normal, unprivileged GET,
+    //     same endpoint the regular thread-open flow already uses.
+    //   - "delete-thread": the thread was SOFT-deleted (see
+    //     softDeleteThread()'s header in threads.js) and only readable
+    //     for DELETED_RETENTION_DAYS afterward, via the admin-only
+    //     includeDeleted=1 flag on that same endpoint (see its own
+    //     2026-08-24 comment in functions/api/threads/[id].js). Past
+    //     that window the fetch legitimately 404s — not an error, just
+    //     the expected "this one's gone now" outcome — and the panel
+    //     falls back to the log entry's own permanently-kept summary.
+    async function openRecallDetail(idx) {
+      const entry = recallEntries[idx];
+      if (!entry) return;
+      const meta = RECALL_TYPE_META[entry.type] || { icon: "🗑", badge: entry.type };
+      main.innerHTML = `<div class="threads-placeholder">Loading…</div>`;
+      let thread = null;
+      if (entry.threadId && entry.country) {
+        const suffix = entry.type === "delete-thread" ? "&includeDeleted=1" : "";
+        try {
+          const res = await authFetch(`/api/threads/${entry.threadId}?country=${encodeURIComponent(entry.country)}${suffix}`, { cache: "no-store" });
+          const data = await res.json();
+          if (data.ok) thread = data.thread;
+        } catch {}
+      }
+      renderRecallDetail(entry, meta, thread);
+    }
+
+    function renderRecallDetail(entry, meta, thread) {
+      const isDeleteType = entry.type === "delete-thread";
+      // Three distinct states this panel can be in — each gets its own
+      // banner, never silently blended together:
+      //   1. Not a delete at all (recalled-message types) — no banner,
+      //      the thread is just... still there, same as any other open.
+      //   2. Deleted, still within its retention window — a yellow
+      //      "here's who/when, it goes away for good on X" heads-up.
+      //   3. Deleted, past the window (thread came back null) — a
+      //      plain "no longer available" notice, not styled as an
+      //      error (this is expected lifecycle, not something broken).
+      let banner = "";
+      if (isDeleteType && thread) {
+        const deletedAtMs = new Date(entry.ts || thread.deletedAt || Date.now()).getTime();
+        const purgeDate = new Date(deletedAtMs + 30 * 86400000);
+        banner = `
+          <div class="edit-modal-note" style="background:rgba(200,145,47,0.14); border:1px solid var(--accent-gold); border-radius:8px; padding:10px 12px; font-size:12.5px; margin-bottom:14px;">
+            ⚠️ Deleted by <b>${escapeHtml(entry.by || "unknown")}</b> on ${escapeHtml(new Date(entry.ts).toLocaleString())}. The full record will be permanently removed on ${escapeHtml(purgeDate.toLocaleDateString())} (30 days after deletion).
+          </div>`;
+      } else if (isDeleteType && !thread) {
+        banner = `
+          <div class="edit-modal-note err" style="font-size:12.5px; margin-bottom:14px;">
+            This ticket's data was stored for more than 30 days and can no longer be read. Deleted by <b>${escapeHtml(entry.by || "unknown")}</b> on ${escapeHtml(new Date(entry.ts).toLocaleString())}.
+          </div>`;
+      }
+
+      const readOnlyConversationHtml = thread && thread.messages && thread.messages.length
+        ? thread.messages.map((m) => renderMsgReadOnly(m)).join("")
+        : "";
+
+      main.innerHTML = `
+        <div class="thread-top-fixed">
+          <div class="thread-detail-header">
+            <div>
+              <div class="thread-detail-title"><span>${meta.icon}</span> ${escapeHtml(entry.threadTitle || "")}</div>
+              <div class="thread-detail-sub">👤 ${escapeHtml((thread && thread.submitter) || entry.by || "unknown")} &nbsp;·&nbsp; 📅 ${timeAgo((thread && thread.submittedAt) || entry.ts)} &nbsp;·&nbsp; ${escapeHtml(entry.brand || "")}${entry.country ? ` (${escapeHtml(entry.country)})` : ""}</div>
+            </div>
+          </div>
+          <hr class="thread-divider" />
+        </div>
+        <div class="thread-scroll-area">
+          ${banner}
+          <div class="thread-summary-card" style="margin-bottom:14px;">
+            <div class="row" style="margin-bottom:6px;"><b>${escapeHtml(meta.badge)} content:</b></div>
+            <div style="white-space:pre-wrap; font-size:13px; line-height:1.6;">${escapeHtml(entry.content || "")}</div>
+          </div>
+          ${thread ? `
+            <div class="conversation-title">Full conversation (${thread.messages.length})</div>
+            <div class="conversation">${readOnlyConversationHtml || '<div class="threads-empty">No replies.</div>'}</div>
+          ` : ""}
+        </div>
+      `;
+      polishEmoji();
+    }
+
+    // Read-only message bubble — same visual classes as renderMsg() so
+    // it looks identical, deliberately WITHOUT any of that function's
+    // interactive controls (edit/recall-reply/reply-target buttons):
+    // this is a look-back view of history, not a live conversation an
+    // admin should be able to act on from here.
+    function renderMsgReadOnly(m) {
+      const initials = (m.from || "?").trim().slice(0, 2).toUpperCase();
+      const color = m.self ? "var(--accent-gold)" : colorFor(m.from || "?");
+      return `
+        <div class="msg-row ${m.self ? "self" : ""}">
+          <div class="msg-avatar" style="background:${color};">${initials}</div>
+          <div class="msg-body">
+            <div class="msg-who">${escapeHtml(m.from)}${m.handle ? ` <span class="msg-handle">${escapeHtml(m.handle)}</span>` : ""}${m.editedAt ? ' <span class="msg-edited">(edited)</span>' : ""}</div>
+            <div class="msg-bubble">${escapeHtml(m.text)}</div>
+            <div class="msg-time">${timeAgo(m.ts)}</div>
+          </div>
+        </div>`;
     }
 
     document.getElementById("threadSearch").addEventListener("input", (e) => {
@@ -848,8 +934,7 @@ html[data-theme="light"] {
             ${!t.rootRecalled && (!t.fieldMap || !t.brandId) ? '<button class="icon-btn labeled" id="editRootBtn" title="Edit the original Telegram message (plain text — this ticket predates field-level editing)">✏️ Edit</button>' : ""}
             ${!t.rootRecalled && t.fieldMap && t.brandId ? '<button class="icon-btn labeled" id="editDetailsBtn" title="Edit fields — syncs the Telegram message + the Sheet row (if any)">📊 Edit</button>' : ""}
             ${t.fieldMap && t.brandId ? '<button class="icon-btn labeled" id="forwardBtn" title="Generate a new ticket in another Topic, pre-filled from this one">↗️ Forward</button>' : ""}
-            ${!t.rootRecalled ? '<button class="icon-btn labeled" id="recallRootBtn" title="Recall (delete) the original Telegram message">↩️ Recall</button>' : ""}
-            <button class="icon-btn labeled" id="deleteBtn" title="Delete this tracking record (Telegram + Sheet are untouched)">🗑 Delete</button>
+            <button class="icon-btn labeled" id="deleteBtn" title="Delete — recalls the original Telegram message and removes this ticket from your lists (recoverable from the Recall log for 30 days)">🗑 Delete</button>
             <button class="icon-btn labeled" id="refreshBtn" title="Refresh this thread">🔄 Refresh</button>
           </div>
         </div>
@@ -991,7 +1076,6 @@ html[data-theme="light"] {
       document.getElementById("editRootBtn")?.addEventListener("click", () => editRoot());
       document.getElementById("editDetailsBtn")?.addEventListener("click", () => openEditDetailsModal());
       document.getElementById("forwardBtn")?.addEventListener("click", () => openForwardModal());
-      document.getElementById("recallRootBtn")?.addEventListener("click", () => recallRoot());
       document.getElementById("refreshBtn")?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;
         btn.classList.add("spinning");
@@ -1273,7 +1357,7 @@ html[data-theme="light"] {
     }
 
     async function deleteThread() {
-      if (!confirm("Delete this tracking record? Telegram and the Sheet are untouched — this only removes it from the dashboard.")) return;
+      if (!confirm("Delete this ticket? This recalls the original message from Telegram and removes the ticket from your lists — full details stay recoverable from the Recall log for 30 days.")) return;
       const deletedId = selectedThread.id;
       const deletedCountry = selectedThread.country;
       const res = await authFetch(`/api/threads/${deletedId}`, {
@@ -1734,15 +1818,13 @@ html[data-theme="light"] {
       });
     }
 
-    async function recallRoot() {
-      if (!confirm("Recall the original ticket message from Telegram? This removes it from the group. Your tracking record, the Sheet row, and this conversation stay.")) return;
-      const res = await postAction({ action: "recallRoot" });
-      if (!res.ok) return alert(res.error || "Recall failed.");
-      selectedThread = res.thread;
-      updateThreadContent(selectedThread);
-      patchLocalThread(selectedThread);
-      loadList();
-    }
+    // recallRoot() (frontend) was removed 2026-08-24 alongside the
+    // header's standalone ↩️ Recall button — Delete now covers what it
+    // did (see deleteThread() above and buildHeaderHTML()'s own note).
+    // The BACKEND "recallRoot" action stays in [id].js purely as the
+    // Telegram-deletion machinery Delete itself now calls into — this
+    // frontend wrapper had no other caller left, so it's gone rather
+    // than kept as dead code.
 
     async function editReply(messageId, currentText) {
       const newText = prompt("Edit this reply:", currentText || "");
