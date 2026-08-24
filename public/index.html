@@ -1387,11 +1387,23 @@ html[data-theme="light"] {
         </div>`;
     }
 
-    function renderIssueSheets() {
+    function renderIssueSheets(preserveScroll) {
       if (!acctIssueSheetsData) return;
       const { modules, sheets, promotions } = acctIssueSheetsData;
       const brands = getCountryScopedBrands(acctIssueSheetsData.brands);
       const canEdit = canEditAdminSection("issueSubmissionSheet");
+
+      // Full re-render replaces acctBody's innerHTML wholesale, which
+      // resets .tgroute-modules's scroll to the top by default — after a
+      // Save deep in a long module list (e.g. Withdraw Issue or one of
+      // the per-promotion rows further down), that snap-to-top reads as
+      // "jumped back to the first row" even though the selected brand
+      // itself was never reset. Capture the scroll position from the
+      // OLD DOM (before replacing it) whenever this re-render was
+      // triggered by a save/reset rather than a fresh brand click, and
+      // restore it on the NEW DOM after.
+      const oldModulesEl = preserveScroll ? acctBody.querySelector(".tgroute-modules") : null;
+      const scrollTop = oldModulesEl ? oldModulesEl.scrollTop : 0;
 
       const brandListHtml = groupedBrandListHtml(brands, acctIssueSheetsSelectedBrand);
 
@@ -1419,11 +1431,16 @@ html[data-theme="light"] {
         ${canEdit ? "" : '<p class="edit-modal-note">View only.</p>'}
         <p class="edit-modal-note tgroute-footnote">Changes apply to the very next form submission — no redeploy needed. "default" rows are still using the usual Sheet/tab; "custom" rows have been pointed somewhere else here. More than one tab name (comma separated) means "try these in order against what's actually on the sheet."</p>`;
 
+      if (scrollTop) {
+        const newModulesEl = acctBody.querySelector(".tgroute-modules");
+        if (newModulesEl) newModulesEl.scrollTop = scrollTop;
+      }
+
       acctBody.querySelectorAll(".tgroute-brand").forEach((el) => {
         el.addEventListener("click", () => {
           acctIssueSheetsSelectedBrand = el.dataset.brand;
           setAcctNote("");
-          renderIssueSheets();
+          renderIssueSheets(); // brand switch — start at the top on purpose
         });
       });
       acctBody.querySelectorAll(".issuesheet-save").forEach((btn) => {
@@ -1455,7 +1472,7 @@ html[data-theme="light"] {
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
       acctIssueSheetsData.sheets[`${acctIssueSheetsSelectedBrand}|${moduleId}`] = data.sheet;
       setAcctNote("Saved — takes effect on the next submission.", "ok");
-      renderIssueSheets();
+      renderIssueSheets(true);
     }
 
     async function resetIssueSheetRow(row) {
@@ -1469,7 +1486,7 @@ html[data-theme="light"] {
       if (!data.ok) return setAcctNote(data.error || "Reset failed.", "err");
       acctIssueSheetsData.sheets[`${acctIssueSheetsSelectedBrand}|${moduleId}`] = data.sheet;
       setAcctNote("Reset to default.", "ok");
-      renderIssueSheets();
+      renderIssueSheets(true);
     }
 
     // Same as saveIssueSheetRow/resetIssueSheetRow above, but for a
@@ -1490,7 +1507,7 @@ html[data-theme="light"] {
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
       updatePromotionRowInPlace(promotion, { promotion, ...data.sheet });
       setAcctNote("Saved — takes effect on the next submission.", "ok");
-      renderIssueSheets();
+      renderIssueSheets(true);
     }
 
     async function resetPromotionSheetRow(row) {
@@ -1504,7 +1521,7 @@ html[data-theme="light"] {
       if (!data.ok) return setAcctNote(data.error || "Reset failed.", "err");
       updatePromotionRowInPlace(promotion, { promotion, ...data.sheet });
       setAcctNote("Reset to default.", "ok");
-      renderIssueSheets();
+      renderIssueSheets(true);
     }
 
     function updatePromotionRowInPlace(promotion, updated) {
