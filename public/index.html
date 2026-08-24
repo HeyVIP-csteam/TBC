@@ -1796,18 +1796,42 @@ html[data-theme="light"] {
         return `<div class="tgroute-brand${code === acctWebLinkSelectedCountry ? " selected" : ""}" data-country="${acctEsc(code)}">${acctEsc(label)} <span class="brand-toggle-country">${acctEsc(code)}</span></div>`;
       }).join("");
 
-      // Level 2 — the selected country's brands only, as wide rows
-      // (plain .tgroute-brand pills, no grouping needed — there's only
-      // ever one country's worth here now).
+      // Level 2 — the selected country's brands only, as wide rows. The
+      // SELECTED brand's row is now the Pill Link editor itself (input +
+      // Save/Reset inline on the same row) instead of a separate block
+      // rendered below the whole list — direct follow-up request: with
+      // the link field sitting below all 5/9/2 brand rows, it wasn't
+      // obviously "this row's" editor at a glance, especially for
+      // Pakistan's 9-brand list where it could be scrolled well out of
+      // view from the brand you'd just clicked. Every OTHER (unselected)
+      // brand stays the plain clickable pill it always was.
       const brandsInCountry = (window.BRANDS || []).filter((b) => b.country === acctWebLinkSelectedCountry);
-      const brandListHtml = brandsInCountry
-        .map((b) => `<div class="tgroute-brand${b.id === acctWebLinkSelectedBrand ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>`)
-        .join("");
-
       const entry = brandConfig[acctWebLinkSelectedBrand] || {};
       const hasLink = !!entry.link;
       const brandName = (brandsInCountry.find((b) => b.id === acctWebLinkSelectedBrand) || {}).name || acctWebLinkSelectedBrand;
       const countryLabel = (window.COUNTRIES && window.COUNTRIES[acctWebLinkSelectedCountry]) ? window.COUNTRIES[acctWebLinkSelectedCountry].name : acctWebLinkSelectedCountry;
+
+      const brandListHtml = brandsInCountry.map((b) => {
+        if (b.id !== acctWebLinkSelectedBrand) {
+          return `<div class="tgroute-brand" data-brand="${acctEsc(b.id)}">${acctEsc(b.name)}</div>`;
+        }
+        // Selected brand — same clickable pill class (still highlighted
+        // via .selected, still re-clickable — clicking it again is a
+        // harmless no-op re-render, same as before) PLUS the inline
+        // editor fields, all inside one row.
+        return `
+          <div class="tgroute-brand selected tgroute-brand-inline-edit" data-brand="${acctEsc(b.id)}">
+            <span class="tgroute-brand-inline-name">${acctEsc(b.name)}</span>
+            <span class="route-tag${hasLink ? " custom" : ""}">${hasLink ? "SET" : "not set"}</span>
+            <div class="tgroute-fields" data-brand="${acctEsc(b.id)}">
+              <input type="text" class="weblink-url" placeholder="https://..." value="${acctEsc(entry.link || "")}" ${roAttr} autocomplete="off" onclick="event.stopPropagation()" />
+              ${canEdit ? `<div class="tgroute-row-actions">
+                <button type="button" class="tgroute-action-btn weblink-save">Save</button>
+                ${hasLink ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary weblink-reset">Reset</button>' : ""}
+              </div>` : ""}
+            </div>
+          </div>`;
+      }).join("");
 
       acctBody.innerHTML = `
         <div class="tgroute-layout">
@@ -1815,19 +1839,6 @@ html[data-theme="light"] {
           <div class="tgroute-modules">
             <div class="tgroute-brand-group-label">${acctEsc(countryLabel)} (${acctEsc(acctWebLinkSelectedCountry)}) brands</div>
             ${brandListHtml || '<p class="edit-modal-note">No brands for this country.</p>'}
-            ${acctWebLinkSelectedBrand ? `
-            <div class="tgroute-row" data-brand="${acctEsc(acctWebLinkSelectedBrand)}" style="margin-top:4px;">
-              <div class="tgroute-mod-name">🔗 Pill Link
-                <span class="route-tag${hasLink ? " custom" : ""}">${hasLink ? "SET" : "not set"}</span>
-              </div>
-              <div class="tgroute-fields">
-                <input type="text" class="weblink-url" placeholder="https://..." value="${acctEsc(entry.link || "")}" ${roAttr} autocomplete="off" />
-                ${canEdit ? `<div class="tgroute-row-actions">
-                  <button type="button" class="tgroute-action-btn weblink-save">Save</button>
-                  ${hasLink ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary weblink-reset">Reset</button>' : ""}
-                </div>` : ""}
-              </div>
-            </div>` : ""}
           </div>
         </div>
         <hr class="tgroute-divider" />
@@ -1853,10 +1864,16 @@ html[data-theme="light"] {
         });
       });
       acctBody.querySelectorAll(".weblink-save").forEach((btn) => {
-        btn.addEventListener("click", () => saveWebLinkRow(btn.closest(".tgroute-row")));
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          saveWebLinkRow(btn.closest(".tgroute-brand-inline-edit"));
+        });
       });
       acctBody.querySelectorAll(".weblink-reset").forEach((btn) => {
-        btn.addEventListener("click", () => saveWebLinkRow(btn.closest(".tgroute-row"), true));
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          saveWebLinkRow(btn.closest(".tgroute-brand-inline-edit"), true);
+        });
       });
     }
 

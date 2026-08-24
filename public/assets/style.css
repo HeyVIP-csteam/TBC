@@ -639,6 +639,21 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
   background: linear-gradient(135deg, rgba(200, 145, 47, 0.28), rgba(200, 145, 47, 0.14));
   border-color: var(--accent-gold); color: #f3c463;
 }
+/* Web Link (2026-08-24) — the selected brand's row IS the Pill Link
+   editor now (input + Save/Reset inline), not a separate block below
+   the brand list — see renderWebLinks()'s own comment in index.html.
+   Overrides .tgroute-brand's plain single-line padding with a flex row
+   that fits the brand name + status tag + input + buttons on one line;
+   falls back to wrapping on narrow viewports via the existing
+   .tgroute-fields { flex-wrap } mobile rule below. */
+.tgroute-brand.tgroute-brand-inline-edit {
+  display: flex; align-items: center; gap: 10px; cursor: default;
+  padding: 8px 8px 8px 12px;
+}
+.tgroute-brand-inline-name { font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.tgroute-brand-inline-edit .tgroute-fields { flex: 1; min-width: 0; }
+.tgroute-brand-inline-edit .tgroute-fields input { height: 30px; }
+.tgroute-brand-inline-edit .tgroute-row-actions .tgroute-action-btn { padding: 6px 12px; }
 /* Visually separated from the brand list above it — this isn't a brand,
    it's the login-security alerts row (see resolveSecurityAlertsRoute in
    functions/api/auth/login.js). */
@@ -702,6 +717,12 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
   .tgroute-brand-group-label { flex-basis: 100%; }
   .tgroute-fields { flex-wrap: wrap; }
   .tgroute-row-actions { width: 100%; justify-content: flex-end; }
+  /* Web Link's inline-edit row needs its own wrap rule — the default
+     .tgroute-brand pill is inline-sized, but this one now carries a
+     name + tag + full input + buttons, too much for one line under
+     720px. Stack it: name+tag on their own line, then the field row. */
+  .tgroute-brand.tgroute-brand-inline-edit { flex-wrap: wrap; }
+  .tgroute-brand-inline-edit .tgroute-fields { flex-basis: 100%; }
 }
 .tgroute-divider { border: none; border-top: 1px solid var(--panel-border); margin: 18px 0 0; }
 .tgroute-footnote { margin-top: 12px; }
