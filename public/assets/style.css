@@ -2106,6 +2106,20 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
   background: rgba(239, 68, 68, 0.16); color: #f87171; margin-right: 6px; vertical-align: middle;
 }
 .recall-item .t-content { font-size: 10.5px; color: var(--ink-soft); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Expanded state (2026-08-24) — the 120-char JS-side preview now has a
+   real "show more" toggle instead of being the permanent limit (see
+   renderRecallList() in threads.html). This is the CSS half: the
+   single-line nowrap/ellipsis above only applies to the collapsed
+   preview — once expanded, the full text needs to actually wrap and be
+   readable across multiple lines instead of staying clipped to one. */
+.recall-item .t-content[data-expanded="true"] {
+  white-space: pre-wrap; text-overflow: clip; overflow: visible; word-break: break-word;
+}
+.recall-expand-btn {
+  font-size: 10px; font-weight: 700; color: var(--accent-gold); background: none;
+  border: none; padding: 2px 0; margin-top: 2px; cursor: pointer;
+}
+.recall-expand-btn:hover { text-decoration: underline; }
 
 .thread-item {
   display: flex; align-items: center; gap: 10px;

@@ -373,18 +373,46 @@ html[data-theme="light"] {
         list.innerHTML = '<div class="threads-empty">No deletions logged yet.</div>';
         return;
       }
-      list.innerHTML = recallEntries.map((e) => {
+      list.innerHTML = recallEntries.map((e, i) => {
         const meta = RECALL_TYPE_META[e.type] || { icon: "🗑", badge: e.type };
+        const full = e.content || "";
+        // Preview clamps at 120 chars same as before; anything longer
+        // gets a "show more" toggle instead of just being cut off with
+        // no way to ever see the rest — the API already returns the
+        // FULL content, this was purely a rendering limit (see
+        // loadRecallLog()'s own comment on why nothing needed to change
+        // server-side for this).
+        const isLong = full.length > 120;
+        const preview = isLong ? full.slice(0, 120) + "…" : full;
         return `
-          <div class="thread-item recall-item">
+          <div class="thread-item recall-item" data-idx="${i}">
             <div class="icon">${meta.icon}</div>
             <div class="meta">
               <div class="t-title"><span class="badge">${escapeHtml(meta.badge)}</span>${escapeHtml(e.threadTitle || "")}</div>
-              <div class="t-sub">${escapeHtml(e.by || "unknown")} · ${timeAgo(e.ts)}${e.brand ? " · " + escapeHtml(e.brand) : ""}</div>
-              <div class="t-content">${escapeHtml((e.content || "").slice(0, 120))}</div>
+              <div class="t-sub">${escapeHtml(e.by || "unknown")} · ${timeAgo(e.ts)}${e.brand ? " · " + escapeHtml(e.brand) : ""}${e.country ? " · " + escapeHtml(e.country) : ""}</div>
+              <div class="t-content recall-content" data-expanded="false">${escapeHtml(preview)}</div>
+              ${isLong ? `<button type="button" class="recall-expand-btn">Show more</button>` : ""}
             </div>
           </div>`;
       }).join("");
+      list.querySelectorAll(".recall-expand-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const item = btn.closest(".recall-item");
+          const idx = Number(item.dataset.idx);
+          const contentEl = item.querySelector(".recall-content");
+          const full = recallEntries[idx].content || "";
+          const isExpanded = contentEl.dataset.expanded === "true";
+          if (isExpanded) {
+            contentEl.textContent = full.length > 120 ? full.slice(0, 120) + "…" : full;
+            contentEl.dataset.expanded = "false";
+            btn.textContent = "Show more";
+          } else {
+            contentEl.textContent = full;
+            contentEl.dataset.expanded = "true";
+            btn.textContent = "Show less";
+          }
+        });
+      });
       polishEmoji();
       updateAllThreadsCard();
     }
