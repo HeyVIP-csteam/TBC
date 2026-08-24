@@ -1,0 +1,1914 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TG Reply Threads</title>
+<script src="/assets/theme.js?v=c61fb537"></script>
+<style>
+html {
+  background-color: #090c1c;
+  background-image:
+    linear-gradient(180deg, rgba(3,4,13,0.35) 0%, rgba(3,4,13,0.55) 55%, rgba(3,4,13,0.75) 100%),
+    url('/assets/img/bg-space.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+html[data-theme="light"] {
+  background-color: #dbe7fb;
+  background-image:
+    radial-gradient(900px 500px at 90% 0%, #eaf1ff 0%, transparent 55%),
+    linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
+}
+</style>
+<link rel="stylesheet" href="/assets/style.css?v=fab742c8" />
+<link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
+<script src="/assets/toast.js?v=d9d84724"></script>
+<script src="/assets/starfield.js?v=b6e92821" defer></script>
+<script src="/assets/authguard.js?v=101bd636"></script>
+<script src="/assets/countries.js?v=78bdc076"></script>
+<script src="/assets/country-modules.js?v=7cb5b511"></script>
+<script src="/assets/agent-country.js?v=9d067776"></script>
+<script src="/assets/presence-heartbeat.js?v=10aea858"></script>
+<script src="/assets/announcement-banner.js?v=26c15118" defer></script>
+<script src="/assets/schemas.js?v=3f70df87"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/twemoji.min.js"></script>
+</head>
+<body class="threads-page">
+  <div class="attach-lightbox" id="attachLightbox">
+    <button type="button" class="attach-lightbox-close" id="attachLightboxClose" title="Close">✕</button>
+    <div class="attach-lightbox-body" id="attachLightboxBody"></div>
+  </div>
+  <header class="topbar">
+    <div class="topbar-left">
+      <img src="/assets/img/logo.webp" alt="HeyVIP" class="logo-img" />
+      <span class="wordmark">CS TEAM - TBC</span>
+    </div>
+    <div class="topbar-right">
+      <span class="clock" id="liveClock"></span>
+      <span class="country-switcher-mount" id="countrySwitcherMount"></span>
+      <button class="theme-pill" id="themeToggle"></button>
+    </div>
+  </header>
+
+  <div class="threads-shell" id="threadsShell">
+    <aside class="sidebar" id="hubNavMount"></aside>
+    <div class="threads-content-col">
+      <nav class="brand-row" id="pageBrandRow"><div class="brand-row-track"></div></nav>
+      <div id="announcementBanner"></div>
+      <div class="threads-body-row">
+    <aside class="threads-sidebar" id="threadsSidebar">
+      <div class="threads-tabs" id="threadsTabs">
+        <button type="button" class="threads-tab tab-active" data-tab="active" id="tabActive">
+          <span class="threads-tab-label">Active</span>
+          <span class="threads-tab-count" id="activeCount">0</span>
+        </button>
+        <button type="button" class="threads-tab tab-solved" data-tab="solved" id="tabSolved">
+          <span class="threads-tab-label">Solved</span>
+          <span class="threads-tab-count" id="solvedCount">0</span>
+        </button>
+        <button type="button" class="threads-tab tab-recall" data-tab="recall" id="tabRecall" style="display:none;">
+          <span class="threads-tab-label">Recall</span>
+          <span class="threads-tab-count" id="recallCount">0</span>
+        </button>
+      </div>
+
+      <div class="all-threads-card">
+        <div class="all-threads-row">
+          <div class="all-threads-titles">
+            <div class="all-threads-title">All threads</div>
+            <div class="all-threads-sub" id="allThreadsSub">Active threads · 0 new replies</div>
+          </div>
+          <div class="all-threads-right">
+            <span class="all-threads-count" id="allThreadsCount">0</span>
+            <button type="button" class="bulk-cancel" id="selectToggleBtn">Select</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="threads-search">
+        <span>🔍</span>
+        <input type="text" id="threadSearch" placeholder="Search username, TID, UID..." autocomplete="off" />
+      </div>
+
+      <div class="bulk-action-bar" id="bulkActionBar" style="display:none;">
+        <label class="bulk-select-all"><input type="checkbox" id="tabSelectAll" />Select all</label>
+        <button type="button" class="bulk-action-btn" id="bulkReadBtn"></button>
+        <button type="button" class="bulk-action-btn" id="bulkSolveBtn"></button>
+      </div>
+
+      <div class="threads-section" id="activeSection" data-tab-panel="active">
+        <div class="thread-list" id="activeList"></div>
+      </div>
+
+      <div class="threads-section" id="solvedSection" data-tab-panel="solved" style="display:none;">
+        <div class="thread-list" id="solvedList"></div>
+      </div>
+
+      <div class="threads-section recall" id="recallSection" data-tab-panel="recall" style="display:none;">
+        <div class="thread-list" id="recallList"></div>
+      </div>
+    </aside>
+
+    <div class="threads-right-col">
+      <main class="threads-main" id="threadsMain">
+      <div class="threads-placeholder">Pick a thread on the left, or submit a form to start one.</div>
+    </main>
+    </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/hub-nav.js?v=615e67a7"></script>
+  <script src="/assets/brand-row.js?v=ea371f55"></script>
+  <script>
+    window.HubNav.mount("hubNavMount", {});
+    window.BrandRow.mount("pageBrandRow");
+
+    window.initThemeToggle();
+
+    window.initClock();
+
+    const authFetch = window.AgentAuth.authFetch;
+    const getAuth = window.AgentAuth.getAuth;
+
+    function bootDashboard() {
+      const auth = getAuth();
+      const ROLE_RANK = { agent: 0, senior: 1, admin: 2, superadmin: 3, owner: 4 };
+      const isAdmin = (ROLE_RANK[auth.role] ?? 0) >= ROLE_RANK.admin;
+      isAdminForRecall = isAdmin;
+      document.getElementById("tabRecall").style.display = isAdmin ? "" : "none";
+      // COUNTRY-FILTER FIX (2026-08-23) — mounts the country switcher
+      // and wires its onChange to re-render the already-fetched thread
+      // list through filterByCountry() (see renderLists() below). No
+      // server refetch needed on change: every allowed country's
+      // threads are already merged in activeThreads/solvedThreads (see
+      // GET /api/threads — it always returns everything the account can
+      // see, tagged with t.country, and expects the frontend to filter
+      // — see that endpoint's own comment). This page previously never
+      // did that filtering step at all.
+      if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => renderLists());
+      loadList();
+      if (isAdmin) loadRecallLog();
+      polishEmoji();
+      pollTimer = setInterval(() => {
+        refreshOpenThread();
+      }, 6000);
+      listPollTimer = setInterval(() => {
+        loadList(document.getElementById("threadSearch").value);
+        if (isAdmin) loadRecallLog();
+      }, 30000);
+    }
+
+    let activeThreads = [];
+    let solvedThreads = [];
+    let recallEntries = [];
+    let selectedId = null;
+    let selectedThread = null;
+    let pollTimer = null;
+    let listPollTimer = null;
+    let searchTimer = null;
+
+    const renderedItemEls = new Map();
+
+    const CARD_HEIGHT = 58;
+    const ROW_GAP = 6;
+    const ROW_HEIGHT = CARD_HEIGHT + ROW_GAP;
+    const OVERSCAN_ROWS = 8;
+    const threadsSidebarEl = document.getElementById("threadsSidebar");
+    const virtualScaffolds = {
+      active: { sizerEl: null },
+      solved: { sizerEl: null },
+    };
+
+    function ensureVirtualScaffold(tab, container) {
+      const scaffold = virtualScaffolds[tab];
+      if (scaffold.sizerEl && scaffold.sizerEl.parentNode === container) return scaffold;
+      container.innerHTML = "";
+      const sizerEl = document.createElement("div");
+      sizerEl.setAttribute("aria-hidden", "true");
+      sizerEl.style.cssText = "position:absolute; top:0; left:0; width:1px; pointer-events:none; visibility:hidden;";
+      container.appendChild(sizerEl);
+      scaffold.sizerEl = sizerEl;
+      return scaffold;
+    }
+
+    function getListScrollWindow(container) {
+      const sidebarRect = threadsSidebarEl.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const containerTopWithinSidebar = (containerRect.top - sidebarRect.top) + threadsSidebarEl.scrollTop;
+      const scrollTop = Math.max(0, threadsSidebarEl.scrollTop - containerTopWithinSidebar);
+      const viewportH = threadsSidebarEl.clientHeight || 500;
+      return { scrollTop, viewportH };
+    }
+
+    function renderVirtualWindow(tab, container, items) {
+      const scaffold = ensureVirtualScaffold(tab, container);
+      scaffold.sizerEl.style.height = (items.length * ROW_HEIGHT) + "px";
+      if (!items.length) return;
+
+      const { scrollTop, viewportH } = getListScrollWindow(container);
+      let start = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS;
+      let end = Math.ceil((scrollTop + viewportH) / ROW_HEIGHT) + OVERSCAN_ROWS;
+      start = Math.max(0, start);
+      end = Math.min(items.length, end);
+
+      const touchedEls = [];
+      const windowIds = new Set();
+
+      for (let i = start; i < end; i++) {
+        const item = items[i];
+        windowIds.add(item.id);
+        const key = itemRenderKey(item);
+        let entry = renderedItemEls.get(item.id);
+        if (!entry || entry.key !== key) {
+          if (entry && entry.el.parentNode) entry.el.remove();
+          entry = { el: renderItem(item), key };
+          entry.el.style.position = "absolute";
+          entry.el.style.left = "0";
+          entry.el.style.right = "0";
+          entry.el.style.height = CARD_HEIGHT + "px";
+          entry.el.style.overflow = "hidden";
+          entry.el.style.boxSizing = "border-box";
+          renderedItemEls.set(item.id, entry);
+          touchedEls.push(entry.el);
+        }
+        patchItemViewState(entry.el, item);
+        entry.el.style.top = (i * ROW_HEIGHT) + "px";
+        if (entry.el.parentNode !== container) container.appendChild(entry.el);
+      }
+
+      for (const [id, entry] of renderedItemEls) {
+        if (windowIds.has(id)) continue;
+        if (entry.el.parentNode === container) entry.el.remove();
+      }
+
+      if (touchedEls.length) polishEmoji(container);
+    }
+
+    let virtualRafPending = false;
+    function scheduleVirtualWindowRender() {
+      if (virtualRafPending) return;
+      virtualRafPending = true;
+      requestAnimationFrame(() => {
+        virtualRafPending = false;
+        if (currentTab === "active") renderVirtualWindow("active", activeList, activeThreads);
+        else if (currentTab === "solved") renderVirtualWindow("solved", solvedList, solvedThreads);
+      });
+    }
+    threadsSidebarEl.addEventListener("scroll", scheduleVirtualWindowRender, { passive: true });
+
+    let openItemMenuId = null;
+    let selectMode = false;
+    let selectedIds = new Set();
+
+    const mentionCandidatesCache = {};
+    let currentMentionCandidates = [];
+    let mentionActiveIndex = -1;
+
+    const localPatches = new Map();
+    const PATCH_TTL_MS = 20000;
+
+    function summaryFromThread(t) {
+      return {
+        id: t.id, module: t.module, moduleName: t.moduleName, icon: t.icon, accent: t.accent,
+        brand: t.brand, title: t.title, submitter: t.submitter, submittedAt: t.submittedAt,
+        lastActivity: t.lastActivity, solved: t.solved, solvedAt: t.solvedAt,
+        replyCount: t.messages.length,
+      };
+    }
+
+    function patchLocalThread(t) {
+      localPatches.set(t.id, { summary: summaryFromThread(t), expiresAt: Date.now() + PATCH_TTL_MS });
+      applyLocalPatches();
+      renderLists();
+    }
+
+    function removeLocalThread(id) {
+      localPatches.set(id, { summary: null, expiresAt: Date.now() + PATCH_TTL_MS });
+      applyLocalPatches();
+      renderLists();
+    }
+
+    function applyLocalPatches() {
+      const now = Date.now();
+      for (const [id, patch] of Array.from(localPatches.entries())) {
+        if (patch.expiresAt < now) { localPatches.delete(id); continue; }
+        activeThreads = activeThreads.filter((t) => t.id !== id);
+        solvedThreads = solvedThreads.filter((t) => t.id !== id);
+        if (patch.summary) (patch.summary.solved ? solvedThreads : activeThreads).unshift(patch.summary);
+      }
+    }
+
+    const activeList = document.getElementById("activeList");
+    const solvedList = document.getElementById("solvedList");
+    const activeCount = document.getElementById("activeCount");
+    const solvedCount = document.getElementById("solvedCount");
+    const main = document.getElementById("threadsMain");
+
+    let currentTab = "active";
+    let isAdminForRecall = false;
+
+    function switchTab(tab) {
+      if (tab === "recall" && !isAdminForRecall) return;
+      if (selectMode) { selectMode = false; selectedIds.clear(); }
+      openItemMenuId = null;
+      currentTab = tab;
+      document.querySelectorAll(".threads-section[data-tab-panel]").forEach((sec) => {
+        sec.style.display = sec.dataset.tabPanel === tab ? "" : "none";
+      });
+      document.querySelectorAll(".threads-tab").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.tab === tab);
+      });
+      threadsSidebarEl.scrollTop = 0;
+      renderLists();
+      if (tab === "recall") renderRecallList();
+    }
+    document.querySelectorAll(".threads-tab").forEach((btn) => {
+      btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+    });
+    switchTab("active");
+
+    document.getElementById("selectToggleBtn").addEventListener("click", () => {
+      selectMode = !selectMode;
+      selectedIds.clear();
+      renderLists();
+    });
+    document.getElementById("bulkReadBtn").addEventListener("click", runBulkReadToggle);
+    document.getElementById("bulkSolveBtn").addEventListener("click", runBulkSolveToggle);
+    document.getElementById("tabSelectAll").addEventListener("click", (e) => e.stopPropagation());
+    document.getElementById("tabSelectAll").addEventListener("change", (e) => {
+      selectMode = true;
+      const arr = filterByCountry(currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []));
+      arr.forEach((t) => (e.target.checked ? selectedIds.add(t.id) : selectedIds.delete(t.id)));
+      renderLists();
+    });
+    document.addEventListener("click", () => {
+      if (openItemMenuId !== null) { openItemMenuId = null; renderLists(); }
+    });
+
+    const RECALL_TYPE_META = {
+      "delete-thread": { icon: "🗑", badge: "Deleted" },
+      "recall-root": { icon: "↩️", badge: "Recalled" },
+      "recall-reply": { icon: "↩️", badge: "Recalled reply" },
+    };
+
+    async function loadRecallLog() {
+      try {
+        const res = await authFetch("/api/deletion-log", { cache: "no-store" });
+        if (res.status === 401) return;
+        const data = await res.json();
+        if (!data.ok) return;
+        recallEntries = data.entries || [];
+        renderRecallList();
+      } catch {}
+    }
+
+    function renderRecallList() {
+      document.getElementById("recallCount").textContent = recallEntries.length;
+      const list = document.getElementById("recallList");
+      if (!recallEntries.length) {
+        list.innerHTML = '<div class="threads-empty">No deletions logged yet.</div>';
+        return;
+      }
+      list.innerHTML = recallEntries.map((e) => {
+        const meta = RECALL_TYPE_META[e.type] || { icon: "🗑", badge: e.type };
+        return `
+          <div class="thread-item recall-item">
+            <div class="icon">${meta.icon}</div>
+            <div class="meta">
+              <div class="t-title"><span class="badge">${escapeHtml(meta.badge)}</span>${escapeHtml(e.threadTitle || "")}</div>
+              <div class="t-sub">${escapeHtml(e.by || "unknown")} · ${timeAgo(e.ts)}${e.brand ? " · " + escapeHtml(e.brand) : ""}</div>
+              <div class="t-content">${escapeHtml((e.content || "").slice(0, 120))}</div>
+            </div>
+          </div>`;
+      }).join("");
+      polishEmoji();
+      updateAllThreadsCard();
+    }
+
+    document.getElementById("threadSearch").addEventListener("input", (e) => {
+      clearTimeout(searchTimer);
+      const q = e.target.value;
+      searchTimer = setTimeout(() => loadList(q), 250);
+    });
+
+    let pendingAttachments = [];
+    const MAX_REPLY_ATTACHMENTS = 10;
+    const MAX_ATTACHMENT_MB = 45;
+    let replyTarget = null;
+
+    function setReplyTarget(messageId, from, text) {
+      replyTarget = { messageId: Number(messageId), from, text };
+      renderReplyTargetBanner();
+      document.getElementById("replyInput")?.focus();
+    }
+    function clearReplyTarget() {
+      replyTarget = null;
+      renderReplyTargetBanner();
+    }
+    function renderReplyTargetBanner() {
+      const el = document.getElementById("replyTargetBanner");
+      if (!el) return;
+      if (!replyTarget) { el.innerHTML = ""; return; }
+      el.innerHTML = `
+        <span class="reply-target-chip">
+          ↳ Replying to <b>${escapeHtml(replyTarget.from)}</b>: ${escapeHtml((replyTarget.text || "").slice(0, 60))}
+          <button type="button" id="cancelReplyTarget">✕</button>
+        </span>`;
+      document.getElementById("cancelReplyTarget").addEventListener("click", clearReplyTarget);
+      polishEmoji();
+    }
+
+    function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function renderAttachPreview() {
+      const el = document.getElementById("replyAttachPreview");
+      if (!el) return;
+      if (!pendingAttachments.length) { el.innerHTML = ""; return; }
+      el.innerHTML = pendingAttachments.map((f, i) => `
+        <span class="attach-chip">📎 ${escapeHtml(f.name)} (${Math.round(f.size / 1024)} KB)
+          <button type="button" data-clear-attach="${i}">✕</button>
+        </span>`).join("");
+      el.querySelectorAll("[data-clear-attach]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          pendingAttachments.splice(Number(btn.dataset.clearAttach), 1);
+          document.getElementById("replyFileInput").value = "";
+          renderAttachPreview();
+        });
+      });
+      polishEmoji();
+    }
+
+    function queueAttachments(files) {
+      if (!files.length) return;
+      const tooBig = files.filter((f) => f.size > MAX_ATTACHMENT_MB * 1024 * 1024);
+      const sized = files.filter((f) => f.size <= MAX_ATTACHMENT_MB * 1024 * 1024);
+      if (tooBig.length) alert(`${tooBig.map((f) => f.name).join(", ")} — over ${MAX_ATTACHMENT_MB}MB, Telegram will reject it. Not added.`);
+      const room = MAX_REPLY_ATTACHMENTS - pendingAttachments.length;
+      if (sized.length > room) alert(`You can attach up to ${MAX_REPLY_ATTACHMENTS} files in one message — only the first ${Math.max(room, 0)} of your new selection were added.`);
+      pendingAttachments.push(...sized.slice(0, Math.max(room, 0)));
+      renderAttachPreview();
+    }
+
+    function timeAgo(iso) {
+      const d = new Date(iso);
+      return d.toLocaleDateString(undefined, { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function getSeenCount(id) {
+      return parseInt(localStorage.getItem(`lastseen:${id}`) || "0", 10);
+    }
+    function markSeen(id, count) {
+      localStorage.setItem(`lastseen:${id}`, String(count));
+    }
+
+    function itemRenderKey(t) {
+      return [
+        t.title, t.submitter, t.lastActivity, t.replyCount, t.solved,
+        t.accent, t.icon, getSeenCount(t.id), t.country,
+      ].join("|");
+    }
+
+    function patchItemViewState(el, t) {
+      el.classList.toggle("selected", t.id === selectedId);
+      el.classList.toggle("select-mode", selectMode);
+
+      const existingCheck = el.querySelector(":scope > .thread-item-check");
+      const existingIcon = el.querySelector(":scope > .icon");
+      const existingMenuBtn = el.querySelector(":scope > .item-menu-btn");
+
+      if (selectMode) {
+        if (existingIcon) existingIcon.remove();
+        if (existingMenuBtn) existingMenuBtn.remove();
+        const openMenu = el.querySelector(":scope > .item-menu");
+        if (openMenu) openMenu.remove();
+        let check = existingCheck;
+        if (!check) {
+          check = document.createElement("input");
+          check.type = "checkbox";
+          check.className = "thread-item-check";
+          el.insertBefore(check, el.firstChild);
+        }
+        check.checked = selectedIds.has(t.id);
+        check.onchange = () => toggleThreadSelected(t.id);
+        el.onclick = (e) => {
+          if (e.target.closest(".thread-item-check")) return;
+          toggleThreadSelected(t.id);
+        };
+      } else {
+        if (existingCheck) existingCheck.remove();
+        if (!existingIcon) {
+          const icon = document.createElement("div");
+          icon.className = "icon";
+          icon.style.background = (t.accent || "#7c6cf0") + "33";
+          icon.textContent = t.icon || "🔔";
+          el.insertBefore(icon, el.firstChild);
+        }
+        let menuBtn = existingMenuBtn;
+        if (!menuBtn) {
+          menuBtn = document.createElement("button");
+          menuBtn.type = "button";
+          menuBtn.className = "item-menu-btn";
+          menuBtn.title = "More";
+          menuBtn.textContent = "⋮";
+          el.appendChild(menuBtn);
+        }
+        menuBtn.onclick = (e) => {
+          e.stopPropagation();
+          openItemMenuId = openItemMenuId === t.id ? null : t.id;
+          renderLists();
+        };
+        el.onclick = (e) => {
+          if (e.target.closest(".item-menu-btn")) return;
+          if (t.id !== selectedId) { pendingAttachments = []; replyTarget = null; }
+          openThread(t.id, t.country);
+        };
+        const unread = Math.max(0, (t.replyCount || 0) - getSeenCount(t.id));
+        const existingMenuEl = el.querySelector(":scope > .item-menu");
+        if (openItemMenuId === t.id && !existingMenuEl) {
+          el.appendChild(buildItemMenu(t, unread));
+        } else if (openItemMenuId !== t.id && existingMenuEl) {
+          existingMenuEl.remove();
+        }
+      }
+    }
+
+    function renderItem(t) {
+      const el = document.createElement("div");
+      el.className = "thread-item";
+      el.style.setProperty("--thread-accent", t.accent || "#7c6cf0");
+      const unread = Math.max(0, (t.replyCount || 0) - getSeenCount(t.id));
+      const showCountryBadge = window.AgentCountry && window.AgentCountry.getAllowedCountries().length > 1 && t.country;
+      const countryBadge = showCountryBadge ? `<span class="thread-country-badge">${escapeHtml(t.country)}</span>` : "";
+      el.innerHTML = `
+        <div class="meta">
+          <div class="t-title">${countryBadge}${escapeHtml(t.title)}</div>
+          <div class="t-sub">${escapeHtml(t.submitter)} · ${timeAgo(t.lastActivity)}${t.replyCount ? " · " + t.replyCount + " reply" : ""}</div>
+        </div>
+        ${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}
+        ${t.solved ? '<span class="t-done">✓</span>' : ""}
+      `;
+      return el;
+    }
+
+    function buildItemMenu(t, unread) {
+      const menu = document.createElement("div");
+      menu.className = "item-menu";
+      menu.innerHTML = `
+        <div class="item-menu-option" data-action="select"><span class="item-menu-icon">☐</span>Select</div>
+        ${unread > 0
+          ? '<div class="item-menu-option" data-action="markread"><span class="item-menu-icon ok">✓</span>Mark as read</div>'
+          : '<div class="item-menu-option" data-action="markunread"><span class="item-menu-icon">○</span>Mark as unread</div>'}
+        ${t.solved
+          ? '<div class="item-menu-option" data-action="unsolve"><span class="item-menu-icon danger">✕</span>Not solved</div>'
+          : '<div class="item-menu-option" data-action="solve"><span class="item-menu-icon ok">✅</span>Solved</div>'}
+      `;
+      menu.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const opt = e.target.closest("[data-action]");
+        if (!opt) return;
+        handleItemMenuAction(t, opt.dataset.action);
+      });
+      return menu;
+    }
+
+    function toggleThreadSelected(id) {
+      if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+      renderLists();
+    }
+
+    function handleItemMenuAction(t, action) {
+      openItemMenuId = null;
+      if (action === "select") {
+        selectMode = true;
+        selectedIds.add(t.id);
+      } else if (action === "markread") {
+        markSeen(t.id, t.replyCount || 0);
+      } else if (action === "markunread") {
+        markSeen(t.id, 0);
+      } else if (action === "solve" || action === "unsolve") {
+        setThreadSolvedById(t.id, action === "solve", t.country);
+      }
+      renderLists();
+    }
+
+    function findThreadCountry(id) {
+      const t = activeThreads.find((x) => x.id === id) || solvedThreads.find((x) => x.id === id);
+      return t ? t.country : (selectedThread && selectedThread.id === id ? selectedThread.country : undefined);
+    }
+
+    async function setThreadSolvedById(id, solved, country) {
+      try {
+        const res = await authFetch(`/api/threads/${id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: solved ? "solve" : "unsolve", country: country || findThreadCountry(id) }),
+        });
+        const data = await res.json();
+        if (!data.ok) return;
+        patchLocalThread(data.thread);
+        if (selectedId === id) {
+          selectedThread = data.thread;
+          updateThreadContent(selectedThread, true);
+        }
+      } catch {}
+    }
+
+    function renderBulkBar() {
+      const bar = document.getElementById("bulkActionBar");
+      if (!selectMode) { bar.style.display = "none"; return; }
+      bar.style.display = "flex";
+      const inSelection = [...activeThreads, ...solvedThreads].filter((t) => selectedIds.has(t.id));
+      const readBtn = document.getElementById("bulkReadBtn");
+      const solveBtn = document.getElementById("bulkSolveBtn");
+      const nothingSelected = inSelection.length === 0;
+      readBtn.disabled = nothingSelected;
+      solveBtn.disabled = nothingSelected;
+      if (nothingSelected) return;
+      const anyUnread = inSelection.some((t) => Math.max(0, (t.replyCount || 0) - getSeenCount(t.id)) > 0);
+      readBtn.textContent = anyUnread ? "✓ Mark as read" : "○ Mark as unread";
+      readBtn.classList.toggle("tone-positive", anyUnread);
+      readBtn.classList.toggle("tone-negative", !anyUnread);
+      readBtn.dataset.mode = anyUnread ? "read" : "unread";
+      const anyUnsolved = inSelection.some((t) => !t.solved);
+      solveBtn.textContent = anyUnsolved ? "✅ Solved" : "✕ Not solved";
+      solveBtn.classList.toggle("tone-positive", anyUnsolved);
+      solveBtn.classList.toggle("tone-negative", !anyUnsolved);
+      solveBtn.dataset.mode = anyUnsolved ? "solve" : "unsolve";
+    }
+
+    function syncTabSelectAll() {
+      const cb = document.getElementById("tabSelectAll");
+      const arr = filterByCountry(currentTab === "active" ? activeThreads : (currentTab === "solved" ? solvedThreads : []));
+      cb.checked = arr.length > 0 && arr.every((t) => selectedIds.has(t.id));
+    }
+
+    function updateAllThreadsCard() {
+      const labelMap = { active: "Active", solved: "Solved", recall: "Recall" };
+      const sub = document.getElementById("allThreadsSub");
+      const countEl = document.getElementById("allThreadsCount");
+      const toggleBtn = document.getElementById("selectToggleBtn");
+      toggleBtn.style.display = currentTab === "recall" ? "none" : "";
+      toggleBtn.textContent = selectMode ? "Cancel" : "Select";
+      if (currentTab === "recall") {
+        sub.textContent = `Recall log · ${recallEntries.length} ${recallEntries.length === 1 ? "entry" : "entries"}`;
+        countEl.textContent = recallEntries.length;
+        return;
+      }
+      const arr = filterByCountry(currentTab === "active" ? activeThreads : solvedThreads);
+      const unread = arr.filter((t) => Math.max(0, (t.replyCount || 0) - getSeenCount(t.id)) > 0).length;
+      sub.textContent = `${labelMap[currentTab]} threads · ${unread} new ${unread === 1 ? "reply" : "replies"}`;
+      countEl.textContent = selectMode ? selectedIds.size : arr.length;
+    }
+
+    function runBulkReadToggle() {
+      const makeRead = document.getElementById("bulkReadBtn").dataset.mode === "read";
+      [...activeThreads, ...solvedThreads].forEach((t) => {
+        if (selectedIds.has(t.id)) markSeen(t.id, makeRead ? (t.replyCount || 0) : 0);
+      });
+      selectMode = false;
+      selectedIds.clear();
+      renderLists();
+    }
+
+    async function runBulkSolveToggle() {
+      const readBtn = document.getElementById("bulkReadBtn");
+      const solveBtn = document.getElementById("bulkSolveBtn");
+      const solving = solveBtn.dataset.mode === "solve";
+      const ids = Array.from(selectedIds);
+      readBtn.disabled = true;
+      solveBtn.disabled = true;
+      await Promise.all(ids.map((id) => setThreadSolvedById(id, solving)));
+      readBtn.disabled = false;
+      solveBtn.disabled = false;
+      selectMode = false;
+      selectedIds.clear();
+      renderLists();
+      loadList(document.getElementById("threadSearch").value);
+    }
+
+    function polishEmoji(root) {
+      if (window.twemoji) window.twemoji.parse(root || document.body, { folder: "svg", ext: ".svg" });
+    }
+
+    function renderSection(tab, container, threads) {
+      const emptyEl = container.querySelector(".threads-empty");
+      if (!threads.length) {
+        if (!emptyEl) {
+          container.innerHTML = tab === "active"
+            ? '<div class="threads-empty">No active threads.<br/>Submit a form to start one.</div>'
+            : '<div class="threads-empty">No solved threads yet.</div>';
+          virtualScaffolds[tab].sizerEl = null;
+        }
+        return;
+      }
+      if (emptyEl) emptyEl.remove();
+      renderVirtualWindow(tab, container, threads);
+    }
+
+    // COUNTRY-FILTER FIX (2026-08-23) — filters the already-fetched
+    // activeThreads/solvedThreads (which always contain EVERY country
+    // the account can see, tagged with t.country — see GET /api/threads'
+    // own comment) down to whichever country is currently selected in
+    // the switcher. Verified against the real agent-country.js source
+    // (window.AgentCountry.getCountry() / .isAll()) rather than assumed.
+    // Only filters at render time — activeThreads/solvedThreads
+    // themselves stay untouched, since other code (findThreadCountry,
+    // delete/patch bookkeeping, search) still needs the full list.
+    function filterByCountry(threads) {
+      if (!window.AgentCountry) return threads;
+      const selected = AgentCountry.getCountry();
+      if (!selected || AgentCountry.isAll(selected)) return threads;
+      return threads.filter((t) => t.country === selected);
+    }
+
+    function renderLists() {
+      const filteredActive = filterByCountry(activeThreads);
+      const filteredSolved = filterByCountry(solvedThreads);
+
+      activeCount.textContent = filteredActive.length;
+      solvedCount.textContent = filteredSolved.length;
+
+      if (currentTab === "active") renderSection("active", activeList, filteredActive);
+      else if (currentTab === "solved") renderSection("solved", solvedList, filteredSolved);
+
+      // Drop tracked nodes for threads no longer in either FILTERED list
+      // (deleted, filtered out by search, or hidden by a country switch)
+      // — still checks both arrays regardless of currentTab, same as
+      // before.
+      const currentIds = new Set([...filteredActive, ...filteredSolved].map((t) => t.id));
+      for (const [id, entry] of renderedItemEls) {
+        if (!currentIds.has(id)) {
+          entry.el.remove();
+          renderedItemEls.delete(id);
+        }
+      }
+
+      renderBulkBar();
+      syncTabSelectAll();
+      updateAllThreadsCard();
+    }
+
+    async function loadList(q) {
+      try {
+        const res = await authFetch(`/api/threads${q ? "?q=" + encodeURIComponent(q) : ""}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.ok) return;
+        activeThreads = data.active || [];
+        solvedThreads = data.solved || [];
+        applyLocalPatches();
+        renderLists();
+      } catch {}
+    }
+
+    async function openThread(id, country) {
+      selectedId = id;
+      renderLists();
+      if (!country) {
+        main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — missing country.</div>`;
+        return;
+      }
+      try {
+        const res = await authFetch(`/api/threads/${id}?country=${encodeURIComponent(country)}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.ok) {
+          main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread.</div>`;
+          return;
+        }
+        selectedThread = data.thread;
+        renderDetail();
+        markSeen(id, selectedThread.messages.length);
+        renderLists();
+      } catch {
+        main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — check your connection.</div>`;
+      }
+    }
+
+    async function refreshOpenThread() {
+      if (!selectedId) return;
+      try {
+        const res = await authFetch(`/api/threads/${selectedId}?country=${encodeURIComponent((selectedThread && selectedThread.country) || "")}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.ok) return;
+        selectedThread = data.thread;
+        updateThreadContent(selectedThread);
+        markSeen(selectedId, selectedThread.messages.length);
+        renderLists();
+        loadMentionCandidatesForThread(selectedThread);
+      } catch {}
+    }
+
+    function buildHeaderHTML(t) {
+      return `
+        <div class="thread-detail-header">
+          <div>
+            <div class="thread-detail-title"><span>${t.icon || "🔔"}</span> ${escapeHtml(t.title)}</div>
+            <div class="thread-detail-sub">👤 ${escapeHtml(t.submitter)} &nbsp;·&nbsp; 📅 ${timeAgo(t.submittedAt)} &nbsp;·&nbsp; ${escapeHtml(t.brand)}${t.country ? ` (${escapeHtml(t.country)})` : ""}</div>
+          </div>
+          <div class="thread-detail-actions">
+            <button class="status-chip ${t.solved ? "solved" : "unsolved"}" id="solveBtn">${t.solved ? "✅ Solved" : "❌ Not Solved"}</button>
+            ${!t.rootRecalled && (!t.fieldMap || !t.brandId) ? '<button class="icon-btn labeled" id="editRootBtn" title="Edit the original Telegram message (plain text — this ticket predates field-level editing)">✏️ Edit</button>' : ""}
+            ${!t.rootRecalled && t.fieldMap && t.brandId ? '<button class="icon-btn labeled" id="editDetailsBtn" title="Edit fields — syncs the Telegram message + the Sheet row (if any)">📊 Edit</button>' : ""}
+            ${t.fieldMap && t.brandId ? '<button class="icon-btn labeled" id="forwardBtn" title="Generate a new ticket in another Topic, pre-filled from this one">↗️ Forward</button>' : ""}
+            ${!t.rootRecalled ? '<button class="icon-btn labeled" id="recallRootBtn" title="Recall (delete) the original Telegram message">↩️ Recall</button>' : ""}
+            <button class="icon-btn labeled" id="deleteBtn" title="Delete this tracking record (Telegram + Sheet are untouched)">🗑 Delete</button>
+            <button class="icon-btn labeled" id="refreshBtn" title="Refresh this thread">🔄 Refresh</button>
+          </div>
+        </div>
+        <hr class="thread-divider" />
+      `;
+    }
+
+    function buildSummaryHTML(t) {
+      return `
+        ${t.rootRecalled ? `
+          <div class="edit-modal-note err" style="font-size:12.5px; margin-bottom:14px;">
+            ⚠️ The original message was recalled from Telegram — this ticket no longer exists in the group.
+          </div>` : ""}
+
+        ${(() => {
+          const fileIds = t.attachmentFileIds || [];
+          const attachmentButtons = fileIds.length ? `
+            <div class="thread-summary-attachments">
+              ${fileIds.map((fid, i) => `
+                <div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="ticket-attachment-${i + 1}" data-attachment-country="${escapeAttr(t.country || "")}">
+                  <div class="inline-attach-loading">Loading attachment…</div>
+                </div>
+              `).join("")}
+            </div>` : "";
+
+          if (t.rootEdited) {
+            return `
+              <div class="thread-summary-card">
+                <div class="row" style="margin-bottom:6px;"><b style="color:var(--accent-gold);">✏️ Edited — current message text:</b></div>
+                <div style="white-space:pre-wrap; font-size:13px;">${escapeHtml(stripHtmlTags(t.rootText || ""))}</div>
+                ${attachmentButtons}
+              </div>`;
+          }
+          if (t.rootText) {
+            return `
+              <div class="thread-summary-card">
+                <div style="white-space:pre-wrap; font-size:13px; line-height:1.6;">${escapeHtml(stripHtmlTags(t.rootText))}</div>
+                ${attachmentButtons}
+              </div>`;
+          }
+          if (t.summary && t.summary.length) {
+            return `
+              <div class="thread-summary-card">
+                ${t.summary.map((s) => `<div class="row"><b>${escapeHtml(s.label)}:</b> <span>${escapeHtml(s.value)}</span></div>`).join("")}
+                ${attachmentButtons}
+              </div>`;
+          }
+          return "";
+        })()}
+
+        ${t.forwardedFrom ? `
+          <div class="forward-link-card" data-goto-thread="${escapeAttr(t.forwardedFrom.threadId)}" data-goto-country="${escapeAttr(t.country || "")}">
+            ↩️ Forwarded from <b>${escapeHtml(t.forwardedFrom.moduleName)}</b> — ${escapeHtml(t.forwardedFrom.title)}
+          </div>` : ""}
+        ${(t.forwardedTo || []).map((link) => `
+          <div class="forward-link-card" data-goto-thread="${escapeAttr(link.threadId)}" data-goto-country="${escapeAttr(t.country || "")}">
+            ↗️ Forwarded to <b>${escapeHtml(link.moduleName)}</b> — ${escapeHtml(link.title)} &nbsp;<span class="forward-link-time">${timeAgo(link.at)}</span>
+          </div>`).join("")}
+      `;
+    }
+
+    function stripHtmlTags(str) {
+      return String(str).replace(/<[^>]*>/g, "");
+    }
+
+    let renderedMsgEls = new Map();
+
+    function msgKey(m) {
+      return m.messageId != null ? `id:${m.messageId}` : `i:${m.ts || ""}:${m.from || ""}`;
+    }
+
+    function buildMsgById(t) {
+      const msgById = {};
+      if (t.rootMessageId) {
+        msgById[t.rootMessageId] = { from: "Original ticket", text: stripHtmlTags(t.rootText || t.title || "") };
+      }
+      t.messages.forEach((m) => {
+        if (m.messageId) msgById[m.messageId] = { from: m.from, text: m.text };
+      });
+      return msgById;
+    }
+
+    function reconcileConversation(container, messages, msgById) {
+      let prevEl = null;
+      const seen = new Set();
+      messages.forEach((m) => {
+        const key = msgKey(m);
+        seen.add(key);
+        const sig = JSON.stringify(m);
+        let entry = renderedMsgEls.get(key);
+        if (!entry || entry.sig !== sig) {
+          if (entry) entry.el.remove();
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = renderMsg(m, msgById).trim();
+          const el = wrapper.firstElementChild;
+          wireMessageRowButtons(el);
+          entry = { el, sig };
+          renderedMsgEls.set(key, entry);
+        }
+        const wantPos = prevEl ? prevEl.nextSibling : container.firstChild;
+        if (entry.el.parentNode !== container || entry.el !== wantPos) {
+          container.insertBefore(entry.el, wantPos);
+        }
+        prevEl = entry.el;
+      });
+      for (const [key, entry] of renderedMsgEls) {
+        if (!seen.has(key)) {
+          entry.el.remove();
+          renderedMsgEls.delete(key);
+        }
+      }
+    }
+
+    function summarySignature(t) {
+      return JSON.stringify({
+        rootRecalled: t.rootRecalled, rootEdited: t.rootEdited, rootText: t.rootText,
+        attachmentFileIds: t.attachmentFileIds, summary: t.summary,
+        forwardedFrom: t.forwardedFrom, forwardedTo: t.forwardedTo,
+      });
+    }
+    let lastSummarySig = null;
+
+    function renderConversationList(t) {
+      const listEl = document.getElementById("conversationList");
+      if (!listEl) return;
+      if (!t.messages.length) {
+        renderedMsgEls.clear();
+        listEl.innerHTML = '<div class="threads-empty">No replies yet — they\'ll show up here as soon as someone replies in Telegram.</div>';
+        return;
+      }
+      const placeholder = listEl.querySelector(".threads-empty");
+      if (placeholder) placeholder.remove();
+      reconcileConversation(listEl, t.messages, buildMsgById(t));
+    }
+
+    function wireTopButtons() {
+      document.getElementById("solveBtn")?.addEventListener("click", () => toggleSolved());
+      document.getElementById("deleteBtn")?.addEventListener("click", () => deleteThread());
+      document.getElementById("editRootBtn")?.addEventListener("click", () => editRoot());
+      document.getElementById("editDetailsBtn")?.addEventListener("click", () => openEditDetailsModal());
+      document.getElementById("forwardBtn")?.addEventListener("click", () => openForwardModal());
+      document.getElementById("recallRootBtn")?.addEventListener("click", () => recallRoot());
+      document.getElementById("refreshBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("spinning");
+        btn.disabled = true;
+        const startedAt = Date.now();
+        const MIN_VISIBLE_MS = 2000;
+        try {
+          await loadList(document.getElementById("threadSearch").value);
+          await refreshOpenThread();
+        } finally {
+          const elapsed = Date.now() - startedAt;
+          if (elapsed < MIN_VISIBLE_MS) await new Promise((r) => setTimeout(r, MIN_VISIBLE_MS - elapsed));
+          document.getElementById("refreshBtn")?.classList.remove("spinning");
+          if (document.getElementById("refreshBtn")) document.getElementById("refreshBtn").disabled = false;
+        }
+      });
+    }
+
+    function wireGotoThreadCards(root) {
+      root.querySelectorAll("[data-goto-thread]").forEach((card) => {
+        card.addEventListener("click", () => openThread(card.dataset.gotoThread, card.dataset.gotoCountry));
+      });
+    }
+
+    function wireMessageRowButtons(el) {
+      el.querySelectorAll("[data-edit-reply]").forEach((btn) => {
+        btn.addEventListener("click", () => editReply(btn.dataset.editReply, btn.dataset.currentText));
+      });
+      el.querySelectorAll("[data-recall-reply]").forEach((btn) => {
+        btn.addEventListener("click", () => recallReply(btn.dataset.recallReply));
+      });
+      el.querySelectorAll("[data-reply-target]").forEach((btn) => {
+        btn.addEventListener("click", () => setReplyTarget(btn.dataset.replyTarget, btn.dataset.replyFrom, btn.dataset.replyText));
+      });
+    }
+
+    function isNearBottom(el) {
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    }
+
+    function scrollConversation(force) {
+      const area = document.getElementById("threadScrollArea");
+      if (!area) return;
+      if (force || isNearBottom(area)) area.scrollTop = area.scrollHeight;
+    }
+
+    function renderDetail() {
+      const t = selectedThread;
+      if (!t) return;
+      main.innerHTML = `
+        <div class="thread-top-fixed" id="threadTopFixed">${buildHeaderHTML(t)}</div>
+        <div class="thread-scroll-area" id="threadScrollArea">
+          <div id="threadSummaryBlock">${buildSummaryHTML(t)}</div>
+          <div class="conversation-title" id="conversationTitle">Conversation (${t.messages.length})</div>
+          <div class="conversation" id="conversationList"></div>
+        </div>
+        <div class="thread-reply-fixed">
+          <div id="replyTargetBanner"></div>
+          <div class="reply-attach-preview" id="replyAttachPreview"></div>
+          <div class="reply-box">
+            <div class="reply-input-wrap">
+              <button class="attach-btn" id="attachBtn" title="Attach images, videos, or PDFs (multiple allowed, or paste an image directly into the box)">🔗</button>
+              <input type="file" id="replyFileInput" accept="image/*,video/*,application/pdf" multiple hidden />
+              <input type="text" id="replyInput" placeholder="Reply into the Telegram thread..." autocomplete="off" />
+              <div class="mention-dropdown" id="mentionDropdown" style="display:none;"></div>
+            </div>
+            <button id="replySend">Send</button>
+          </div>
+        </div>
+      `;
+      renderedMsgEls.clear();
+      lastSummarySig = summarySignature(t);
+      renderConversationList(t);
+      wireGotoThreadCards(document.getElementById("threadSummaryBlock"));
+      wireTopButtons();
+      document.getElementById("replySend").addEventListener("click", sendReply);
+      document.getElementById("replyInput").addEventListener("input", handleMentionInput);
+      document.getElementById("replyInput").addEventListener("keydown", (e) => {
+        if (handleMentionKeydown(e)) return;
+        if (e.key === "Enter") sendReply();
+      });
+      document.getElementById("attachBtn").addEventListener("click", () => document.getElementById("replyFileInput").click());
+      document.getElementById("replyFileInput").addEventListener("change", (e) => {
+        queueAttachments(Array.from(e.target.files || []));
+        e.target.value = "";
+      });
+      renderAttachPreview();
+      scrollConversation(true);
+      polishEmoji();
+      loadInlineAttachments();
+      loadMentionCandidatesForThread(t);
+    }
+
+    async function loadMentionCandidatesForThread(t) {
+      currentMentionCandidates = [];
+      if (!t.brandId || !t.module) return;
+      const cacheKey = `${t.brandId}::${t.module}`;
+      let fromServer = mentionCandidatesCache[cacheKey];
+      if (!fromServer) {
+        try {
+          const res = await authFetch(`/api/mention-candidates?brandId=${encodeURIComponent(t.brandId)}&module=${encodeURIComponent(t.module)}`, { cache: "no-store" });
+          const data = await res.json();
+          fromServer = data.ok ? (data.candidates || []) : [];
+        } catch {
+          fromServer = [];
+        }
+        mentionCandidatesCache[cacheKey] = fromServer;
+      }
+      const merged = new Map();
+      fromServer.forEach((c) => merged.set(c.handle, { handle: c.handle, from: c.from }));
+      (t.messages || []).forEach((m) => {
+        if (!m.self && m.handle) merged.set(m.handle, { handle: m.handle, from: m.from });
+      });
+      if (selectedThread && selectedThread.id === t.id) {
+        currentMentionCandidates = Array.from(merged.values());
+      }
+    }
+
+    function closeMentionDropdown() {
+      const dd = document.getElementById("mentionDropdown");
+      if (dd) { dd.style.display = "none"; dd.innerHTML = ""; }
+      mentionActiveIndex = -1;
+    }
+
+    function handleMentionInput(e) {
+      const input = e.target;
+      const match = input.value.match(/(?:^|\s)@(\w*)$/);
+      if (!match || !currentMentionCandidates.length) { closeMentionDropdown(); return; }
+      const frag = match[1].toLowerCase();
+      const matches = currentMentionCandidates.filter((c) => c.handle.slice(1).toLowerCase().startsWith(frag));
+      if (!matches.length) { closeMentionDropdown(); return; }
+      renderMentionDropdown(matches);
+    }
+
+    function renderMentionDropdown(matches) {
+      const dd = document.getElementById("mentionDropdown");
+      if (!dd) return;
+      mentionActiveIndex = 0;
+      dd.innerHTML = matches.map((c, i) => `
+        <div class="mention-option${i === 0 ? " active" : ""}" data-handle="${escapeAttr(c.handle)}" data-idx="${i}">
+          <span class="mention-handle">${escapeHtml(c.handle)}</span>
+          <span class="mention-from">${escapeHtml(c.from || "")}</span>
+        </div>
+      `).join("");
+      dd.style.display = "block";
+      dd.querySelectorAll(".mention-option").forEach((opt) => {
+        opt.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          selectMentionCandidate(opt.dataset.handle);
+        });
+      });
+    }
+
+    function selectMentionCandidate(handle) {
+      const input = document.getElementById("replyInput");
+      if (!input) return;
+      input.value = input.value.replace(/(?:^|\s)@(\w*)$/, (m) => (m[0] === " " ? " " : "") + handle + " ");
+      closeMentionDropdown();
+      input.focus();
+    }
+
+    function handleMentionKeydown(e) {
+      const dd = document.getElementById("mentionDropdown");
+      if (!dd || dd.style.display === "none") return false;
+      const options = Array.from(dd.querySelectorAll(".mention-option"));
+      if (!options.length) return false;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        mentionActiveIndex = (mentionActiveIndex + 1) % options.length;
+        options.forEach((o, i) => o.classList.toggle("active", i === mentionActiveIndex));
+        return true;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        mentionActiveIndex = (mentionActiveIndex - 1 + options.length) % options.length;
+        options.forEach((o, i) => o.classList.toggle("active", i === mentionActiveIndex));
+        return true;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const chosen = options[mentionActiveIndex] || options[0];
+        selectMentionCandidate(chosen.dataset.handle);
+        return true;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeMentionDropdown();
+        return true;
+      }
+      return false;
+    }
+
+    function updateThreadContent(t, forceScroll) {
+      const topFixed = document.getElementById("threadTopFixed");
+      const scrollArea = document.getElementById("threadScrollArea");
+      const summaryBlock = document.getElementById("threadSummaryBlock");
+      const titleEl = document.getElementById("conversationTitle");
+      if (!topFixed || !scrollArea || !summaryBlock || !titleEl) { renderDetail(); return; }
+      const wasNearBottom = isNearBottom(scrollArea);
+      const newHeaderHTML = buildHeaderHTML(t);
+      if (topFixed.innerHTML !== newHeaderHTML) {
+        topFixed.innerHTML = newHeaderHTML;
+        wireTopButtons();
+      }
+      const newSig = summarySignature(t);
+      if (newSig !== lastSummarySig) {
+        summaryBlock.innerHTML = buildSummaryHTML(t);
+        wireGotoThreadCards(summaryBlock);
+        lastSummarySig = newSig;
+      }
+      titleEl.textContent = `Conversation (${t.messages.length})`;
+      renderConversationList(t);
+      if (forceScroll || wasNearBottom) scrollConversation(true);
+      polishEmoji(topFixed);
+      polishEmoji(scrollArea);
+      loadInlineAttachments();
+    }
+
+    const AVATAR_COLORS = ["#60A5FA", "#FBBF24", "#F87171", "#F472B6", "#34D399", "#A78BFA", "#38bdf8", "#fb923c"];
+    function colorFor(name) {
+      let hash = 0;
+      for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+      return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+    }
+
+    function renderMsg(m, msgById) {
+      const isAlbum = m.messageIds && m.messageIds.length > 1;
+      const selfControls = m.self && m.messageId ? `
+        <span class="msg-actions">
+          ${isAlbum ? "" : `<button data-edit-reply="${m.messageId}" data-current-text="${escapeAttr(m.text)}" title="Edit">✏️</button>`}
+          <button data-recall-reply="${m.messageId}" title="Recall">↩️</button>
+        </span>` : "";
+      const replyTargetBtn = m.messageId
+        ? `<button class="reply-target-btn" data-reply-target="${m.messageId}" data-reply-from="${escapeAttr(m.from)}" data-reply-text="${escapeAttr(m.text)}" title="Reply to this message">↳</button>`
+        : "";
+      const quoted = m.replyToMessageId && msgById && msgById[m.replyToMessageId];
+      const replyQuote = quoted
+        ? `<div class="reply-quote-preview"><b>${escapeHtml(quoted.from)}</b>${escapeHtml((quoted.text || "").slice(0, 80))}</div>`
+        : "";
+      const initials = (m.from || "?").trim().slice(0, 2).toUpperCase();
+      const color = m.self ? "var(--accent-gold)" : colorFor(m.from || "?");
+      const deliveredTick = m.self ? '<span class="msg-tick" title="Delivered">✓</span>' : "";
+      const attachTag = m.hasAttachment
+        ? (m.attachmentFileIds && m.attachmentFileIds.length > 1
+            ? `<div class="msg-multi-attach">${m.attachmentFileIds.map((fid, i) => `
+                <div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="${escapeAttr((m.attachmentNames && m.attachmentNames[i]) || `attachment-${i + 1}`)}" data-attachment-country="${escapeAttr((selectedThread && selectedThread.country) || "")}">
+                  <div class="inline-attach-loading">Loading attachment…</div>
+                </div>`).join("")}</div>`
+            : (m.attachmentFileId
+                ? `<div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(m.attachmentFileId)}" data-attachment-name="${escapeAttr(m.attachmentName || "attachment")}" data-attachment-country="${escapeAttr((selectedThread && selectedThread.country) || "")}"><div class="inline-attach-loading">Loading attachment…</div></div>`
+                : '<span class="msg-attach-tag" title="Sent before this dashboard could look attachments back up — check the Telegram group for it.">📎 attachment</span>'))
+        : "";
+      return `
+        <div class="msg-row ${m.self ? "self" : ""}">
+          <div class="msg-avatar" style="background:${color};">${initials}</div>
+          <div class="msg-body">
+            <div class="msg-who">${escapeHtml(m.from)}${m.handle ? ` <span class="msg-handle">${escapeHtml(m.handle)}</span>` : ""}${m.editedAt ? ' <span class="msg-edited">(edited)</span>' : ""}</div>
+            <div class="msg-bubble">${replyTargetBtn}${replyQuote}${escapeHtml(m.text)}${attachTag}</div>
+            <div class="msg-time">${timeAgo(m.ts)} ${deliveredTick} ${selfControls}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function toggleSolved() {
+      const action = selectedThread.solved ? "unsolve" : "solve";
+      const res = await authFetch(`/api/threads/${selectedThread.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, country: selectedThread.country }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        selectedThread = data.thread;
+        updateThreadContent(selectedThread, true);
+        patchLocalThread(selectedThread);
+        loadList();
+      }
+    }
+
+    async function deleteThread() {
+      if (!confirm("Delete this tracking record? Telegram and the Sheet are untouched — this only removes it from the dashboard.")) return;
+      const deletedId = selectedThread.id;
+      const deletedCountry = selectedThread.country;
+      const res = await authFetch(`/api/threads/${deletedId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", country: deletedCountry }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert(data.error || "Delete failed.");
+        return;
+      }
+      selectedId = null;
+      selectedThread = null;
+      main.innerHTML = `<div class="threads-placeholder">Pick a thread on the left, or submit a form to start one.</div>`;
+      removeLocalThread(deletedId);
+      loadList();
+    }
+
+    async function sendReply() {
+      const input = document.getElementById("replyInput");
+      const text = input.value.trim();
+      if (!text && !pendingAttachments.length) return;
+      const btn = document.getElementById("replySend");
+      btn.disabled = true;
+      btn.textContent = "Sending…";
+      try {
+        const payload = { action: "reply", text, country: selectedThread.country };
+        if (replyTarget) payload.replyToMessageId = replyTarget.messageId;
+        if (pendingAttachments.length) {
+          payload.attachments = await Promise.all(pendingAttachments.map(async (f) => ({
+            name: f.name,
+            type: f.type,
+            dataUrl: await fileToDataUrl(f),
+          })));
+        }
+        const res = await authFetch(`/api/threads/${selectedThread.id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          alert("❌ Send failed: " + (data.error || "unknown error") + "\n\nYour message wasn't sent — try again.");
+          return;
+        }
+        selectedThread = data.thread;
+        input.value = "";
+        pendingAttachments = [];
+        replyTarget = null;
+        renderReplyTargetBanner();
+        renderAttachPreview();
+        document.getElementById("replyFileInput").value = "";
+        updateThreadContent(selectedThread, true);
+        patchLocalThread(selectedThread);
+        loadList();
+      } catch {
+        alert("❌ Send failed: network error.\n\nYour message wasn't sent — try again.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Send";
+      }
+    }
+
+    async function editRoot() {
+      const newText = prompt("Edit the original Telegram message text:\n(This edits the exact message, including any formatting tags.)", selectedThread.rootText || "");
+      if (newText === null) return;
+      if (!newText.trim()) return alert("Text can't be empty.");
+      const res = await postAction({ action: "editRoot", text: newText });
+      if (!res.ok) return alert(res.error || "Edit failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+    }
+
+    function openEditDetailsModal() {
+      const t = selectedThread;
+      const module = (window.MODULES || []).find((m) => m.id === t.module);
+      if (!module) return alert(`Unknown module "${t.module}" — can't build an edit form for this ticket.`);
+      const fieldMap = t.fieldMap || {};
+      const fields = window.getModuleFields ? window.getModuleFields(module, t.country) : (module.fields || []);
+
+      const overlay = document.createElement("div");
+      overlay.className = "edit-details-overlay";
+      overlay.innerHTML = `
+        <div class="edit-details-modal">
+          <button type="button" class="modal-close-btn" id="editDetailsClose" title="Close" aria-label="Close">✕</button>
+          <div class="edit-details-title">${module.icon || "📊"} Edit fields — ${escapeHtml(module.name)}</div>
+          <div class="edit-details-sub">Updates the Telegram message${t.sheetRef ? " and the Google Sheet row" : ""} from these values — not a guess at parsed text.</div>
+          <div class="edit-details-fields" id="editDetailsFields"></div>
+          <div class="edit-details-status" id="editDetailsStatus"></div>
+          <div class="edit-details-actions">
+            <button type="button" class="icon-btn" id="editDetailsCancel" style="width:auto; padding:0 16px;">Cancel</button>
+            <button type="button" class="btn-submit" id="editDetailsSave" style="width:auto; padding:10px 22px;">Save &amp; Sync</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const container = overlay.querySelector("#editDetailsFields");
+      const fieldEls = {};
+
+      fields.forEach((f) => {
+        const wrap = document.createElement("div");
+        wrap.className = "field";
+        const value = fieldMap[f.key] != null ? fieldMap[f.key] : "";
+        let controlHtml;
+        if (f.type === "textarea") {
+          controlHtml = `<textarea name="${escapeAttr(f.key)}">${escapeHtml(value)}</textarea>`;
+        } else if (f.type === "select") {
+          const rawOpts = f.optionsByBrand ? (f.optionsByBrand[t.brandId] || []) : (f.options || []);
+          const opts = rawOpts.map((o) => (typeof o === "object" ? o.value : o));
+          controlHtml = `<select name="${escapeAttr(f.key)}">
+            <option value="">— Select —</option>
+            ${opts.map((o) => `<option value="${escapeAttr(o)}" ${o === value ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+          </select>`;
+        } else {
+          const inputType = f.type === "number" ? "number" : f.type === "date" ? "date" : "text";
+          controlHtml = `<input type="${inputType}" name="${escapeAttr(f.key)}" value="${escapeAttr(value)}" />`;
+        }
+        wrap.innerHTML = `<label>${escapeHtml(f.label)}${f.required ? ' <span class="required">*</span>' : ""}</label>${controlHtml}`;
+        container.appendChild(wrap);
+        fieldEls[f.key] = { wrap, control: wrap.querySelector("input,select,textarea") };
+      });
+
+      function conditionMet(showIf) {
+        const conditions = Array.isArray(showIf) ? showIf : [showIf];
+        return conditions.every((c) => {
+          if (c.field === "brand") return c.oneOf.includes(t.brandId);
+          const driver = fieldEls[c.field];
+          return driver && c.oneOf.includes(driver.control.value);
+        });
+      }
+      function refreshVisibility() {
+        fields.forEach((f) => {
+          if (!f.showIf) return;
+          fieldEls[f.key].wrap.style.display = conditionMet(f.showIf) ? "" : "none";
+        });
+      }
+      fields.forEach((f) => {
+        if (fieldEls[f.key].control.tagName === "SELECT") {
+          fieldEls[f.key].control.addEventListener("change", refreshVisibility);
+        }
+      });
+      refreshVisibility();
+
+      function close() { overlay.remove(); }
+      overlay.querySelector("#editDetailsClose").addEventListener("click", close);
+      overlay.querySelector("#editDetailsCancel").addEventListener("click", close);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+      overlay.querySelector("#editDetailsSave").addEventListener("click", async () => {
+        const submittedFields = fields
+          .filter((f) => !f.showIf || fieldEls[f.key].wrap.style.display !== "none")
+          .map((f) => ({ key: f.key, label: f.label, value: (fieldEls[f.key].control.value || "").trim() }));
+        const missingRequired = fields.find((f) =>
+          f.required && (!f.showIf || fieldEls[f.key].wrap.style.display !== "none") && !fieldEls[f.key].control.value.trim()
+        );
+        const statusEl = overlay.querySelector("#editDetailsStatus");
+        if (missingRequired) {
+          statusEl.textContent = `"${missingRequired.label}" is required.`;
+          statusEl.className = "edit-details-status err";
+          return;
+        }
+
+        const newFieldMap = Object.fromEntries(submittedFields.map((f) => [f.key, f.value]));
+        const saveBtn = overlay.querySelector("#editDetailsSave");
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving…";
+        statusEl.textContent = "";
+        statusEl.className = "edit-details-status";
+
+        const res = await postAction({ action: "editDetails", fields: submittedFields, fieldMap: newFieldMap });
+        if (!res.ok) {
+          statusEl.textContent = res.error || "Save failed.";
+          statusEl.className = "edit-details-status err";
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Save & Sync";
+          return;
+        }
+        selectedThread = res.thread;
+        updateThreadContent(selectedThread);
+        patchLocalThread(selectedThread);
+        loadList();
+        if (res.sheetHasRef && !res.sheetSynced) {
+          alert("Telegram message updated, but the Sheet row couldn't be updated:\n" + (res.sheetError || "unknown error") + "\n\nYou may need to fix that row manually.");
+        }
+        close();
+      });
+    }
+
+    function openForwardModal() {
+      const source = selectedThread;
+      const otherModules = (window.MODULES || []).filter((m) => m.id !== source.module);
+
+      const overlay = document.createElement("div");
+      overlay.className = "edit-details-overlay";
+      overlay.innerHTML = `
+        <div class="edit-details-modal">
+          <button type="button" class="modal-close-btn" id="fwdClose" title="Close" aria-label="Close">✕</button>
+          <div class="edit-details-title">↗️ Generate to another Topic</div>
+          <div class="edit-details-sub">Creates a brand-new ticket in the Topic you pick — new Telegram message, new Sheet row (if that Topic logs to one) — pre-filled from this ticket, same as submitting it fresh.</div>
+          <div class="field">
+            <label>Send to Topic</label>
+            <select id="fwdModule">
+              <option value="">— Select a Topic —</option>
+              ${otherModules.map((m) => `<option value="${escapeAttr(m.id)}">${m.icon || ""} ${escapeHtml(m.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div id="fwdFieldsWrap" style="display:none;">
+            <div class="field"><label>Brand</label><input type="text" value="${escapeAttr(source.brand)}" disabled /></div>
+            <div class="field"><label>Reporter / PIC <span class="required">*</span></label><input type="text" id="fwdReporter" value="${escapeAttr(getAuth()?.username || "")}" /></div>
+            <div class="edit-details-fields" id="fwdFields"></div>
+            <p class="agent-profile-section-label" style="margin-top:4px;">Attachments carried over</p>
+            <div class="thread-summary-attachments" id="fwdCarriedAttachments"></div>
+            <div class="field" style="margin-top:10px;">
+              <label>Add another attachment (optional — e.g. this Topic's group needs a photo the original one didn't)</label>
+              <div class="dropzone" id="fwdDropzone" tabindex="0">
+                <div class="dz-icon">📎</div>
+                <p class="dz-main">Click or drag files here</p>
+                <p class="dz-sub">JPG, PNG, PDF — Max 3 files, 20MB each</p>
+                <p class="dz-paste">📋 Ctrl+V / ⌘V to paste screenshot</p>
+              </div>
+              <div class="file-list" id="fwdFileList"></div>
+              <input type="file" id="fwdNewFile" multiple hidden />
+            </div>
+          </div>
+          <div class="edit-details-status" id="fwdStatus"></div>
+          <div class="edit-details-actions">
+            <button type="button" id="fwdCancel" style="width:auto; padding:14px 22px; font-size:14px; font-weight:800; border-radius:12px; border:1px solid var(--required); background:transparent; color:var(--required); cursor:pointer;">Cancel</button>
+            <button type="button" class="btn-submit" id="fwdSubmit" style="width:auto; padding:14px 22px;" disabled>Generate &amp; Send</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      function close() { window.removeEventListener("paste", onWindowPaste); overlay.remove(); }
+      overlay.querySelector("#fwdClose").addEventListener("click", close);
+      overlay.querySelector("#fwdCancel").addEventListener("click", close);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+      const fieldsWrap = overlay.querySelector("#fwdFieldsWrap");
+      const fieldsContainer = overlay.querySelector("#fwdFields");
+      const submitBtn = overlay.querySelector("#fwdSubmit");
+      const statusEl = overlay.querySelector("#fwdStatus");
+      const newFileListEl = overlay.querySelector("#fwdFileList");
+      let fieldEls = {};
+      let targetModule = null;
+      let targetFields = [];
+      const newFiles = [];
+
+      const carriedFileIds = source.attachmentFileIds || [];
+      const carriedWrap = overlay.querySelector("#fwdCarriedAttachments");
+      carriedWrap.innerHTML = carriedFileIds.length
+        ? carriedFileIds.map((fid, i) => `<div class="inline-attach-slot" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="carried-${i + 1}" data-attachment-country="${escapeAttr(source.country || "")}"><div class="inline-attach-loading">Loading…</div></div>`).join("")
+        : `<p style="font-size:12.5px; color:var(--ink-soft); margin:4px 0 0;">This ticket has no attachments to carry over.</p>`;
+      loadInlineAttachments();
+
+      overlay.querySelector("#fwdModule").addEventListener("change", (e) => {
+        targetModule = otherModules.find((m) => m.id === e.target.value) || null;
+        fieldEls = {};
+        fieldsContainer.innerHTML = "";
+        if (!targetModule) {
+          fieldsWrap.style.display = "none";
+          submitBtn.disabled = true;
+          return;
+        }
+        targetFields = window.getModuleFields ? window.getModuleFields(targetModule, source.country) : (targetModule.fields || []);
+        fieldsWrap.style.display = "";
+        submitBtn.disabled = false;
+
+        const sourceFieldMap = source.fieldMap || {};
+        targetFields.forEach((f) => {
+          const wrap = document.createElement("div");
+          wrap.className = "field";
+          const value = sourceFieldMap[f.key] != null ? sourceFieldMap[f.key] : "";
+          let controlHtml;
+          if (f.type === "textarea") {
+            controlHtml = `<textarea name="${escapeAttr(f.key)}">${escapeHtml(value)}</textarea>`;
+          } else if (f.type === "select") {
+            const rawOpts = f.optionsByBrand ? (f.optionsByBrand[source.brandId] || []) : (f.options || []);
+            const opts = rawOpts.map((o) => (typeof o === "object" ? o.value : o));
+            controlHtml = `<select name="${escapeAttr(f.key)}">
+              <option value="">— Select —</option>
+              ${opts.map((o) => `<option value="${escapeAttr(o)}" ${o === value ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+            </select>`;
+          } else {
+            const inputType = f.type === "number" ? "number" : f.type === "date" ? "date" : "text";
+            controlHtml = `<input type="${inputType}" name="${escapeAttr(f.key)}" value="${escapeAttr(value)}" />`;
+          }
+          wrap.innerHTML = `<label>${escapeHtml(f.label)}${f.required ? ' <span class="required">*</span>' : ""}</label>${controlHtml}`;
+          fieldsContainer.appendChild(wrap);
+          fieldEls[f.key] = { wrap, control: wrap.querySelector("input,select,textarea") };
+        });
+
+        function conditionMet(showIf) {
+          const conditions = Array.isArray(showIf) ? showIf : [showIf];
+          return conditions.every((c) => {
+            if (c.field === "brand") return c.oneOf.includes(source.brandId);
+            const driver = fieldEls[c.field];
+            return driver && c.oneOf.includes(driver.control.value);
+          });
+        }
+        function refreshVisibility() {
+          targetFields.forEach((f) => {
+            if (!f.showIf) return;
+            fieldEls[f.key].wrap.style.display = conditionMet(f.showIf) ? "" : "none";
+          });
+        }
+        targetFields.forEach((f) => {
+          if (fieldEls[f.key].control.tagName === "SELECT") {
+            fieldEls[f.key].control.addEventListener("change", refreshVisibility);
+          }
+        });
+        refreshVisibility();
+      });
+
+      const fwdDropzone = overlay.querySelector("#fwdDropzone");
+      const fwdFileInput = overlay.querySelector("#fwdNewFile");
+      const FWD_MAX_FILES = 3;
+      const FWD_MAX_SIZE_MB = 20;
+
+      function renderNewFileList() {
+        newFileListEl.innerHTML = newFiles
+          .map((f, i) => `<div class="file-chip"><span class="name">${escapeHtml(f.name)}</span><button type="button" data-i="${i}">&times;</button></div>`)
+          .join("");
+        newFileListEl.querySelectorAll("button").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            newFiles.splice(Number(btn.dataset.i), 1);
+            renderNewFileList();
+          });
+        });
+      }
+
+      function addNewFiles(list) {
+        const rejected = [];
+        for (const f of list) {
+          if (newFiles.length >= FWD_MAX_FILES) break;
+          if (f.size > FWD_MAX_SIZE_MB * 1024 * 1024) {
+            rejected.push(f.name);
+            continue;
+          }
+          newFiles.push(f);
+        }
+        renderNewFileList();
+        if (rejected.length) {
+          statusEl.textContent = `Skipped (over ${FWD_MAX_SIZE_MB}MB): ${rejected.join(", ")}`;
+          statusEl.className = "edit-details-status err";
+        }
+      }
+
+      fwdDropzone.addEventListener("click", () => fwdFileInput.click());
+      fwdDropzone.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") fwdFileInput.click();
+      });
+      fwdFileInput.addEventListener("change", () => {
+        addNewFiles(fwdFileInput.files);
+        fwdFileInput.value = "";
+      });
+      ["dragenter", "dragover"].forEach((evt) =>
+        fwdDropzone.addEventListener(evt, (e) => { e.preventDefault(); fwdDropzone.classList.add("drag-over"); })
+      );
+      ["dragleave", "drop"].forEach((evt) =>
+        fwdDropzone.addEventListener(evt, (e) => { e.preventDefault(); fwdDropzone.classList.remove("drag-over"); })
+      );
+      fwdDropzone.addEventListener("drop", (e) => addNewFiles(e.dataTransfer.files));
+
+      function onWindowPaste(e) {
+        const items = Array.from(e.clipboardData.items).filter((i) => i.kind === "file");
+        if (!items.length) return;
+        addNewFiles(items.map((i) => i.getAsFile()).filter(Boolean));
+      }
+      window.addEventListener("paste", onWindowPaste);
+
+      function fileToDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+
+      submitBtn.addEventListener("click", async () => {
+        if (!targetModule) return;
+        const reporter = overlay.querySelector("#fwdReporter").value.trim();
+        if (!reporter) {
+          statusEl.textContent = "Reporter / PIC is required.";
+          statusEl.className = "edit-details-status err";
+          return;
+        }
+        const fields = targetFields
+          .filter((f) => !f.showIf || fieldEls[f.key].wrap.style.display !== "none")
+          .map((f) => ({ key: f.key, label: f.label, value: (fieldEls[f.key].control.value || "").trim() }));
+        const missingRequired = targetFields.find((f) =>
+          f.required && (!f.showIf || fieldEls[f.key].wrap.style.display !== "none") && !fieldEls[f.key].control.value.trim()
+        );
+        if (missingRequired) {
+          statusEl.textContent = `"${missingRequired.label}" is required.`;
+          statusEl.className = "edit-details-status err";
+          return;
+        }
+        const fieldMap = Object.fromEntries(fields.map((f) => [f.key, f.value]));
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Sending…";
+        statusEl.textContent = "";
+        statusEl.className = "edit-details-status";
+
+        let newAttachments;
+        try {
+          newAttachments = await Promise.all(newFiles.map(async (file) => ({
+            name: file.name, type: file.type, dataUrl: await fileToDataUrl(file),
+          })));
+        } catch {
+          statusEl.textContent = "Couldn't read one of the new attachments.";
+          statusEl.className = "edit-details-status err";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Generate & Send";
+          return;
+        }
+
+        let res;
+        try {
+          const r = await authFetch("/api/forward", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceThreadId: source.id, sourceCountry: source.country, targetModule: targetModule.id, fields, fieldMap, reporter, newAttachments }),
+          });
+          res = await r.json();
+        } catch {
+          statusEl.textContent = "Network error — check your connection and try again.";
+          statusEl.className = "edit-details-status err";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Generate & Send";
+          return;
+        }
+
+        if (!res.ok) {
+          statusEl.textContent = res.error || "Forward failed.";
+          statusEl.className = "edit-details-status err";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Generate & Send";
+          return;
+        }
+        if (res.sheetAttempted && !res.sheetLogged) {
+          alert("Ticket was generated and sent to Telegram, but the Sheet row couldn't be written:\n" + (res.sheetError || "unknown error"));
+        }
+
+        selectedThread = {
+          ...source,
+          forwardedTo: [...(source.forwardedTo || []), { threadId: res.thread.id, module: targetModule.id, moduleName: targetModule.name, title: res.thread.title, at: new Date().toISOString() }],
+        };
+        updateThreadContent(selectedThread);
+        patchLocalThread(selectedThread);
+        loadList();
+        close();
+        openThread(res.thread.id, source.country);
+      });
+    }
+
+    async function recallRoot() {
+      if (!confirm("Recall the original ticket message from Telegram? This removes it from the group. Your tracking record, the Sheet row, and this conversation stay.")) return;
+      const res = await postAction({ action: "recallRoot" });
+      if (!res.ok) return alert(res.error || "Recall failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+      patchLocalThread(selectedThread);
+      loadList();
+    }
+
+    async function editReply(messageId, currentText) {
+      const newText = prompt("Edit this reply:", currentText || "");
+      if (newText === null) return;
+      if (!newText.trim()) return alert("Text can't be empty.");
+      const res = await postAction({ action: "editReply", messageId: Number(messageId), text: newText });
+      if (!res.ok) return alert(res.error || "Edit failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+    }
+
+    async function recallReply(messageId) {
+      if (!confirm("Recall this reply from Telegram?")) return;
+      const res = await postAction({ action: "recallReply", messageId: Number(messageId) });
+      if (!res.ok) return alert(res.error || "Recall failed.");
+      selectedThread = res.thread;
+      updateThreadContent(selectedThread);
+    }
+
+    async function postAction(payload) {
+      const res = await authFetch(`/api/threads/${selectedThread.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, country: selectedThread.country }),
+      });
+      return res.json();
+    }
+
+
+    function escapeAttr(str) {
+      return escapeHtml(str).replace(/"/g, "&quot;");
+    }
+
+    function escapeHtml(str) {
+      return String(str == null ? "" : str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function guessExtensionFromMime(mimeType) {
+      const map = {
+        "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
+        "image/bmp": "bmp", "image/heic": "heic", "image/heif": "heif",
+        "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm", "video/3gpp": "3gp",
+        "application/pdf": "pdf",
+      };
+      return map[(mimeType || "").split(";")[0].trim().toLowerCase()] || null;
+    }
+
+    async function sniffTypeFromBlob(blob) {
+      const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+      const hex = Array.from(head).map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (hex.startsWith("25504446")) return "application/pdf";
+      if (hex.startsWith("ffd8ff")) return "image/jpeg";
+      if (hex.startsWith("89504e47")) return "image/png";
+      if (hex.startsWith("474946383761") || hex.startsWith("474946383961")) return "image/gif";
+      if (hex.startsWith("52494646") && hex.slice(16, 24) === "57454250") return "image/webp";
+      if (hex.startsWith("504b0304")) return "application/zip";
+      if (hex.startsWith("4d5a")) return "application/x-msdownload";
+      if (hex.slice(8, 16) === "66747970") return "video/mp4";
+      if (hex.startsWith("1f8b")) return "application/gzip";
+      return null;
+    }
+
+    function withExtension(name, mimeType) {
+      if (/\.[a-zA-Z0-9]{2,5}$/.test(name)) return name;
+      const ext = guessExtensionFromMime(mimeType);
+      return ext ? `${name}.${ext}` : name;
+    }
+
+    const attachLightbox = document.getElementById("attachLightbox");
+    const attachLightboxBody = document.getElementById("attachLightboxBody");
+
+    const attachmentCache = new Map();
+
+    function getAttachmentUrl(fileId, name, country) {
+      const cacheKey = `${country || ""}:${fileId}`;
+      if (!attachmentCache.has(cacheKey)) {
+        attachmentCache.set(cacheKey, (async () => {
+          const params = new URLSearchParams();
+          if (name) params.set("name", name);
+          if (country) params.set("country", country);
+          const qs = params.toString() ? `?${params.toString()}` : "";
+          const res = await authFetch(`/api/attachment/${encodeURIComponent(fileId)}${qs}`);
+          if (!res.ok) {
+            const msg = await res.text().catch(() => "");
+            throw new Error(msg || "Couldn't load this attachment.");
+          }
+          const blob = await res.blob();
+          let type = blob.type || "";
+          if (!type || type === "application/octet-stream") {
+            const sniffed = await sniffTypeFromBlob(blob).catch(() => null);
+            if (sniffed) type = sniffed;
+          }
+          return { url: URL.createObjectURL(blob), type };
+        })());
+      }
+      return attachmentCache.get(cacheKey);
+    }
+
+    function loadInlineAttachments() {
+      document.querySelectorAll(".inline-attach-slot[data-attachment-file]:not([data-filled])").forEach((slot) => {
+        const fileId = slot.dataset.attachmentFile;
+        const name = slot.dataset.attachmentName || "attachment";
+        const country = slot.dataset.attachmentCountry || (selectedThread && selectedThread.country) || "";
+        slot.setAttribute("data-filled", "1");
+        getAttachmentUrl(fileId, name, country).then(({ url, type }) => {
+          if (!document.body.contains(slot)) return;
+          if (type.startsWith("video/")) {
+            slot.innerHTML = `<video src="${url}" controls class="inline-attach-media"></video>`;
+          } else if (type.startsWith("image/")) {
+            slot.innerHTML = `<img src="${url}" alt="${escapeAttr(name)}" class="inline-attach-media" />`;
+          } else {
+            const img = document.createElement("img");
+            img.alt = name;
+            img.className = "inline-attach-media";
+            img.addEventListener("error", () => {
+              if (!document.body.contains(slot)) return;
+              const downloadName = withExtension(name, type);
+              slot.innerHTML = `<a href="${url}" download="${escapeAttr(downloadName)}" class="inline-attach-file">📎 ${escapeHtml(downloadName)} — click to download</a>`;
+            }, { once: true });
+            slot.innerHTML = "";
+            slot.appendChild(img);
+            img.src = url;
+          }
+          const media = slot.querySelector("img.inline-attach-media, video.inline-attach-media");
+          if (media) media.addEventListener("click", () => viewAttachment(fileId, name, country));
+        }).catch((err) => {
+          if (!document.body.contains(slot)) return;
+          slot.innerHTML = `<div class="inline-attach-error" title="${escapeAttr(String((err && err.message) || ""))}">⚠️ ${escapeHtml(String((err && err.message) || "Couldn't load this attachment."))}</div>`;
+        });
+      });
+    }
+
+    async function viewAttachment(fileId, name, country) {
+      attachLightbox.classList.add("is-open");
+      attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Loading…</div>`;
+      try {
+        const { url, type } = await getAttachmentUrl(fileId, name, country || (selectedThread && selectedThread.country));
+        if (type.startsWith("video/")) {
+          attachLightboxBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
+        } else if (type.startsWith("image/")) {
+          attachLightboxBody.innerHTML = `<img src="${url}" alt="${escapeAttr(name || "attachment")}" />`;
+        } else {
+          const img = document.createElement("img");
+          img.alt = name || "attachment";
+          img.addEventListener("error", () => {
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = name || "attachment";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Downloaded — this file type can't be previewed here.</div>`;
+          }, { once: true });
+          attachLightboxBody.innerHTML = "";
+          attachLightboxBody.appendChild(img);
+          img.src = url;
+        }
+      } catch (e) {
+        attachLightboxBody.innerHTML = `<div class="attach-lightbox-status attach-lightbox-error">${escapeHtml(String((e && e.message) || "Couldn't load this attachment."))}</div>`;
+      }
+    }
+
+    function closeAttachLightbox() {
+      attachLightbox.classList.remove("is-open");
+      attachLightboxBody.innerHTML = "";
+    }
+    document.getElementById("attachLightboxClose").addEventListener("click", closeAttachLightbox);
+    attachLightbox.addEventListener("click", (e) => { if (e.target === attachLightbox) closeAttachLightbox(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && attachLightbox.classList.contains("is-open")) closeAttachLightbox(); });
+
+    document.addEventListener("paste", (e) => {
+      if (!selectedThread) return;
+      if (document.querySelector(".edit-details-overlay")) return;
+      if (attachLightbox.classList.contains("is-open")) return;
+      const items = Array.from(e.clipboardData?.items || []);
+      const files = items.filter((it) => it.kind === "file").map((it) => it.getAsFile()).filter(Boolean);
+      if (!files.length) return;
+      e.preventDefault();
+      const named = files.map((f, i) => (f.name && f.name !== "image.png") ? f : new File([f], `pasted-${Date.now()}-${i}.${(f.type.split("/")[1] || "png")}`, { type: f.type }));
+      queueAttachments(named);
+      document.getElementById("replyInput")?.focus();
+    });
+
+    bootDashboard();
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        loadList(document.getElementById("threadSearch").value);
+        refreshOpenThread();
+      }
+    });
+  </script>
+</body>
+</html>

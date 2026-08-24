@@ -1,157 +1,164 @@
-# Issue Submission Hub → Telegram
+# TG Reply Threads · PHP 乱码修复工具包
 
-A small static site + Cloudflare Pages Function that takes form submissions
-(QA, Account Issue, Promotion Request, Daily Report, Genie Issue) and posts
-a formatted message to the right Telegram group/topic for the brand.
-Selected modules also get logged to that brand's Google Sheet.
+> **2026-08-23 更新（v3）**：你发来的 `report.json` 帮了大忙——拿真实
+> 数据抽查才发现 v2 还是没修干净一部分。查清楚了：这批数据是被
+> **win1252 误读一次、又被 cp850 误读一次**（两种不同工具/两次不同
+> 事故叠加，不是同一个错误重复了两次）。v2 只会用"同一种编码反复
+> 深挖"，永远搜不到"先 win1252 再 cp850"这种组合路径，所以修一半就
+> 停了。v3 改成真正的穷举搜索——每一层都可以换任意候选编码，不再
+> 假设是同一种编码重复损坏。拿你发来的 `report.json` 里全部 15 条
+> 真实样本重新验证，**这次全部修干净了**（包括那条 emoji 图标 🔑、
+> 破折号 ——，以及客服自己打的花体艺术字 𝗥𝗧𝗦 𝗥𝗜𝗦𝗞 这种正常内容都
+> 正确保留，没被误伤）。性能也测过，穷举没有变慢，全量 2822 条几秒
+> 内能跑完。
+>
+> **如果你已经跑过 v1/v2 的第 2 步，重新下载这个 zip 覆盖后，直接
+> 重跑 `node 2-fix.cjs` 就行**（如果发现 `php-kv-export.json` 又不
+> 见了——之前解压覆盖时丢过一次——就先重跑一遍 `node 1-export.cjs`
+> 重新导出，反正这一步不到一分钟）。
+
+
+
+对应交接文档"根因二"：导出 PHP 数据时 PowerShell 用错字符编码
+（CP850 而非 UTF-8），导致标题/回复内容里的中文、emoji、破折号变成
+类似 `Ã-Ä-±Ä-Ä-Ä` 这种乱码（截图里能看到）。
+
+跟上一轮不同的地方：这次不是让我根据"猜的 572 条"生成一份静态修复
+文件，而是一个**脚本工具**——直接从线上 KV 拉真实数据、自动检测
+（不用你手动数哪些坏了）、修复、校验、再生成可导入的文件。原因很
+简单：上一轮生成的 `php-threads-corrected.json` 等文件这次上传的
+zip 里并不存在（可能是对话中断丢了），与其再赌一次"这次生成的文件
+不会再弄丢"，不如做成随时能重新跑一次的工具，PKR 以后要是也踩坑，
+直接复用。
+
+**已在沙盒里用合成数据验证过整个流程跑得通**（包括一个边界情况的
+bug 已经修掉：D1 占位符类型的值不会被误判成完整工单记录进而冲掉
+metadata）。检测算法本身用中文+emoji 真实样本做了正确性测试：
+损坏文本 100% 正确逆转，未损坏的中文/URL/ID/时间戳零误伤。
+
+但没跑过的部分：**真实的线上数据**。我这边的沙盒环境访问不了
+`api.cloudflare.com`（网络白名单不包含），所以下面这几步需要你
+在自己电脑上跑（有 Node.js 就行，不需要额外装东西，`npm install`
+会自动装 `iconv-lite`）。
+
+---
+
+## 第 0 步：装依赖
+
+```bash
+cd mojibake-toolkit
+npm install iconv-lite
+```
+
+## 第 1 步：（可选）先用合成数据自测一遍，确认脚本在你的环境里也能跑通
+
+```bash
+node test.cjs              # 测试核心修复算法
+node make-fake-export.cjs  # 生成假的 php-kv-export.json
+node 2-fix.cjs              # 跑修复流程，检查输出的 php-threads-corrected.json
+```
+
+看到 `PASS` 和跟本说明里一致的输出就说明环境没问题，可以删掉这几个
+临时生成的 json 再进行下一步（避免跟真实导出的文件混在一起）。
+
+## 第 2 步：导出线上真实数据（只读，不改任何东西）
+
+需要一个 Cloudflare API Token（**Workers KV Storage: Read** 权限就够，
+不需要 Edit）：
+https://dash.cloudflare.com/profile/api-tokens → Create Token
+
+```bash
+CF_API_TOKEN=你的token \
+CF_ACCOUNT_ID=2eb52281c1a398ea026b3c3b025b83ea \
+CF_NAMESPACE_ID=9b7c59c645064b08b79b89ad8a062102 \
+node 1-export.cjs
+```
+
+（account id / namespace id 是从交接文档"五、关键 ID 备忘"抄的
+新账号 + THREADS_KV_PHP，如果记错了以 Cloudflare 控制台为准）
+
+会生成 `php-kv-export.json`，包含 `THREADS_KV_PHP` 里**每一个** key
+的 value + metadata（不只是 `thread:` 前缀的，`mention-registry:`/
+`route:` 等其他前缀也一起拉，因为交接文档提到的"其余 2925 条"应该
+指的就是这些）。
+
+## 第 3 步：跑修复
+
+```bash
+node 2-fix.cjs
+```
+
+生成三个文件：
+- `php-threads-corrected.json` —— 所有 `thread:` key，乱码修好 +
+  **metadata 全部重新生成**（这一步顺带把根因一也解决了：不管
+  原来的 metadata 是缺失、是坏的、还是已经被自愈机制修好的，这里
+  统一从修复后的完整记录重新算一遍，跟生产代码 `summarize()` 的
+  规则完全一致，不用再等 6 小时自愈）
+- `php-other-corrected.json` —— 其余所有 key
+- `report.json` —— 统计数字 + 最多 15 个 key 的修复前后样本，
+  **导入前务必先看这个**，确认修复结果看起来对
+
+终端输出会直接打印统计摘要，比如：
 
 ```
-public/                  ← static site (deployed as-is)
-  index.html              hub page (the card grid)
-  form.html                generic form, driven by ?module=<id>
-  assets/schemas.js        brands + field definitions (PUBLIC, no secrets)
-  assets/app.js             renders the form + calls /api/submit
-  assets/style.css
-functions/
-  api/submit.js            the API route: Telegram + optional Sheet log
-  _shared/routing.js        SERVER-ONLY: chat IDs, topic IDs, sheet URLs
-  _shared/telegramImageCompress.js  compresses oversized photos before
-                            sending to Telegram (needs @cf-wasm/photon —
-                            see the build-command note below)
-google-apps-script/
-  sheet-logger.gs           paste into Apps Script for sheet logging
-package.json                declares @cf-wasm/photon — Cloudflare Pages
-                             needs a Build command set (see below) or it
-                             won't get installed and Functions bundling
-                             will fail with "Could not resolve
-                             @cf-wasm/photon"
-wrangler.toml
+thread: keys        : xxx -> php-threads-corrected.json
+other keys          : xxx -> php-other-corrected.json
+keys with any fix   : xxx   <- 真正检测到损坏并修复的 key 数
+total strings fixed : xxx
+thread metadata regenerated: xxx
 ```
 
-> **⚠️ Build command is now REQUIRED (this was NOT true before the
-> photo-compression feature was added).**
-> This project used to be pure static + Functions with zero npm
-> dependencies, so leaving Cloudflare Pages' **Build command** field
-> blank was fine — Pages would skip the whole build step (including
-> `npm install`) and that was harmless because there was nothing to
-> install. That's no longer true now that `functions/_shared/telegramImageCompress.js`
-> imports `@cf-wasm/photon` (declared in `package.json`).
->
-> **This is a dashboard setting, not something in `wrangler.toml`** —
-> Cloudflare Pages' Wrangler config file has no `[build]` key (that's a
-> plain-Workers-only concept); a Pages project's build command can only
-> be set via the Cloudflare dashboard or the Pages REST API.
->
-> Go to **Cloudflare dashboard → Workers & Pages → this project →
-> Settings → Builds & deployments** and set:
-> - **Build command**: `npm install`
-> - **Build output directory**: `public` (unchanged)
->
-> Then retry the deployment (or push a new commit). Without this, the
-> build log will show `No build command specified. Skipping build step.`
-> and the Functions bundler will fail to resolve `@cf-wasm/photon`.
+**如果 `keys with any fix` 跟交接文档说的"572 + 一部分 2925 里的"
+数字差很多，先别急着导入**，把 `report.json` 发给我，我们一起核对
+是检测算法漏了还是文档里的数字本来就不准（这个工具是按"真实检测到
+才修"设计的，比"按数量猜"更可靠，但也要交叉验证一下）。
 
-## 1. Drop this into your existing repo
+## 第 4 步：抽查
 
-Copy `public/`, `functions/`, `google-apps-script/`, `package.json`,
-and `wrangler.toml` into your repo (merge folders if you already have
-a `functions/` dir). Commit and push — if the repo is already
-connected to Cloudflare Pages, this alone triggers a deploy (but see
-the Build command warning above — it needs to be set once, manually,
-in the dashboard; it isn't something a commit can set for you).
+打开 `report.json` 里的 `samples`，肉眼确认修复后的中文/emoji 看着
+正常。也可以挑几个 `php-threads-corrected.json` 里的具体 key 手动看
+一眼。
 
-## 2. Set the bot token as a secret
+## 第 5 步：导入（这一步才真正改线上数据）
 
-In the Cloudflare dashboard: **Pages → your project → Settings →
-Environment variables** → add `TELEGRAM_BOT_TOKEN` (your existing bot's
-token) for both **Production** and **Preview**, marked as a secret.
-Nothing else needs an env var — chat/topic routing lives in code (step 3).
+```bash
+wrangler kv bulk put php-threads-corrected.json --binding=THREADS_KV_PHP --remote
+wrangler kv bulk put php-other-corrected.json --binding=THREADS_KV_PHP --remote
+```
 
-For local dev only, `wrangler pages dev public --binding TELEGRAM_BOT_TOKEN=<token>`
-or add it to a `.dev.vars` file (already gitignored).
+## 第 6 步：删除两个过期缓存 key
 
-## 3. Fill in real routing
+```bash
+wrangler kv key delete "thread-list-cache" --binding=THREADS_KV_PHP --remote
+wrangler kv key delete "thread-list-scan-counter" --binding=THREADS_KV_PHP --remote
+```
 
-Open `functions/_shared/routing.js`. For each brand, replace the
-`-100XXXXXXXXXX` placeholders with real values:
+（这两个 key 是 `functions/_shared/threads.js` 里的 `LIST_CACHE_KEY`
+和每日扫描计数器，删掉后下次访问会强制重新全量扫描生成，不删的话
+最长要等 10 分钟缓存过期才能在界面上看到修复后的结果）
 
-- **chatId** — the group's chat ID (same for every topic in that group).
-- **topicId** — the topic's `message_thread_id`, or `null` to post to the
-  group's General thread.
+## 第 7 步：截图验证
 
-To find these: add the bot to the group, turn on **Topics** if you're
-using them, send one message in the target topic, then open
-`https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser — the JSON
-response has `chat.id` and `message_thread_id`.
+打开 PHP 的 TG Reply Threads 列表，确认：
+- 标题不再是"Ã-Ä-±Ä-Ä-Ä"这种乱码
+- 工单数量对得上（active + solved + recall 加起来应该匹配交接文档
+  说的 2826 条业务数据规模）
 
-Since one brand can span several groups/topics, you can point each module
-(`qa`, `account_issue`, `promotion_request`, `daily_report`, `genie_issue`)
-at a different `{ chatId, topicId }` independently — they don't have to
-share a group.
+## 用完记得清理
 
-## 4. Rename brands
+- 按交接文档的提醒，用完这个 API Token 记得去
+  https://dash.cloudflare.com/profile/api-tokens 删掉
+- `php-kv-export.json` 里是完整的线上数据（含客户信息），跑完流程
+  后建议本地删掉，不要留在电脑里或传去别处
 
-Brand keys must match in two places:
-- `public/assets/schemas.js` → `BRANDS` (shown in the dropdown)
-- `functions/_shared/routing.js` → `BRANDS` (routing + sheet URL)
+---
 
-Rename `brand2`…`brand5` to your real 5 INR brands (keep `betvisa` or
-rename it too) — just make sure both files agree on the key.
+## 文件说明
 
-## 5. Turn on Google Sheet logging
-
-Which modules get logged is controlled by `RECORD_TO_SHEET` in
-`routing.js` — change it any time, independent of Telegram routing.
-
-Logging goes straight to the Sheets API via a Google Cloud **service
-account** (no Apps Script deployment, no per-brand webhook).
-
-**One-time setup (shared by all brands):**
-1. In Google Cloud Console, create (or reuse) a service account and
-   download its JSON key.
-2. In Cloudflare Pages → **Settings → Environment variables**, add two
-   secrets for Production and Preview:
-   - `GOOGLE_SERVICE_ACCOUNT_EMAIL` — the `client_email` field from the JSON key
-   - `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` — the full `private_key` field
-     from the JSON key, including the `-----BEGIN PRIVATE KEY-----` /
-     `-----END PRIVATE KEY-----` lines
-
-**Per brand:**
-1. Set that brand's `sheetId` in `routing.js` — the long ID in the
-   sheet's URL: `https://docs.google.com/spreadsheets/d/<sheetId>/edit`.
-2. Open that sheet → **Share** → add the service account's email
-   (the same one as `GOOGLE_SERVICE_ACCOUNT_EMAIL`) as an **Editor**.
-   Without this share step, writes fail with a 403.
-
-Each module writes to its own tab, created automatically (with a header
-row) the first time a submission for that module comes in — Account
-Issue / Promotion Request / Daily Report / QA / Genie Issue rows never
-mix.
-
-`google-apps-script/sheet-logger.gs` is kept in the repo as a fallback —
-only needed if you ever want a brand's sheet to work without sharing it
-to the service account.
-
-## 6. Test it
-
-1. `wrangler pages dev public` (or just push and use the Cloudflare
-   preview URL).
-2. Open the hub, submit a test Account Issue.
-3. Confirm the message lands in the right Telegram topic, and (if
-   enabled for that module) a row appears in the sheet.
-
-## Adding a 6th module later
-
-Add an entry to `MODULES` in `schemas.js` (icon, description, fields),
-add a matching key to `MODULE_META` and `RECORD_TO_SHEET` in
-`routing.js`, and add a `telegram` route per brand. No other code
-changes needed — the hub card and form page are both generated from
-that config.
-
-## Not built yet (future scope)
-
-The reference screenshots also show **TG Reply Threads** (tracking
-replies back from Telegram into the form) and **multi-search / backup
-sheet search** tools. Those need a Telegram webhook endpoint
-(`setWebhook`) and a read path back into your sheets — happy to build
-those next if useful, just flag it.
+| 文件 | 作用 |
+|---|---|
+| `mojibake-fix.cjs` | 核心检测+修复算法（纯函数，无 I/O） |
+| `test.cjs` | 用已知样本验证算法正确性（含"不应误伤正常文本"的测试） |
+| `1-export.cjs` | 从 Cloudflare API 拉取 `THREADS_KV_PHP` 全部数据（只读） |
+| `2-fix.cjs` | 读导出文件，修复 + 重新生成 thread metadata，输出可导入文件 |
+| `make-fake-export.cjs` | 生成假数据，跑通流程用，不含任何真实数据 |
