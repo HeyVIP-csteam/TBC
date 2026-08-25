@@ -43,7 +43,14 @@ async function handleGet({ request, env }) {
     visibleBrands.map(async (b) => {
       const override = await getDepositSheetOverride(env, MODULE_SLOT, b.id);
       const sheetId = override ? override.sheetId : b.id === "crickex_pkr" ? DEFAULT_CRICKEX_PKR_SHEET_ID : null;
-      return { id: b.id, name: b.name, sheetId };
+      // country added (2026-08-25) — this response had no country
+      // dimension at all, so the "All Brands" directory view always
+      // showed every country's brands mixed together regardless of the
+      // switcher's current selection (INR's 5 + PKR's 9, all 14 at
+      // once) — same class of bug as moduleCountries()/issue-submission
+      // -sheets.js's own 2026-08-24/25 fixes, just found here a day
+      // later. See deposit-issue.html's matching fix for the actual filter.
+      return { id: b.id, name: b.name, sheetId, country: b.country };
     })
   );
 
