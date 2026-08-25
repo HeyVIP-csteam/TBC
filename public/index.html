@@ -1459,7 +1459,14 @@ html[data-theme="light"] {
 
       const brandListHtml = groupedBrandListHtml(brands, acctIssueSheetsSelectedBrand);
 
-      const moduleRowsHtml = modules.map((m) => issueSheetRowHtml({
+      // FIXED (2026-08-25) — same country-scoping renderTgRoutes()
+      // already does for its own module list (modulesForBrand there);
+      // this page never had it at all, so PHP-only modules
+      // (deposit_request/bank_issue, added to SHEET_LAYOUT 2026-08-24)
+      // were showing up as editable rows under every INR/PKR brand too.
+      const selectedBrandMeta = acctIssueSheetsData.brands.find((b) => b.id === acctIssueSheetsSelectedBrand);
+      const modulesForBrand = selectedBrandMeta ? modules.filter((m) => m.countries.includes(selectedBrandMeta.country)) : modules;
+      const moduleRowsHtml = modulesForBrand.map((m) => issueSheetRowHtml({
         icon: m.emoji, name: m.name, key: m.id, canEdit,
         entry: sheets[`${acctIssueSheetsSelectedBrand}|${m.id}`],
       })).join("");
