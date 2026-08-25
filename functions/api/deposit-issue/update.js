@@ -70,8 +70,25 @@ async function handleUpdate({ request, env }) {
     return json({ ok: false, error: "You don't have access to this brand." }, 403);
   }
 
-  const cols = getIssueColumns(brandMeta.country);
-  if (!cols) return json({ ok: false, error: `No known column layout for ${brandMeta.country}.` }, 500);
+  // PER-TAB LAYOUTS (2026-08-25) — getIssueColumns() now needs tabName
+  // for INR too (see depositColumns.js's 2026-08-25 note): "Main sheet"
+  // and "Pending case"/"Wait Information" are different layouts sharing
+  // one sheetId, and only the latter two have a real CS Remarks column.
+  const cols = getIssueColumns(brandMeta.country, tabName);
+  if (!cols) return json({ ok: false, error: `No known column layout for ${brandMeta.country} tab "${tabName}".` }, 500);
+
+  // INR Edit availability depends on WHICH tab this row came from
+  // (2026-08-25) — "Main sheet" has no CS-owned column (closest, "PG
+  // Remark", is PG-owned) so Edit stays off for it; "Pending case"/
+  // "Wait Information" DO have a real "CS Remarks" column, so Edit is
+  // allowed for those. `cols.csRemarks` being unset is exactly that
+  // signal — no need to special-case by country name here. The
+  // frontend already only shows the Edit button for rows where this is
+  // true; this is the server-side backstop so a stale/crafted request
+  // for a Main-sheet row can't write anyway.
+  if (brandMeta.country === "INR" && !cols.csRemarks) {
+    return json({ ok: false, error: "Editing is disabled for this sheet (no CS Remarks column)." }, 403);
+  }
 
   // FIXED (2026-08-25) — see updateRowByColumns()'s own 2026-08-25 note
   // in googleSheets.js: this write goes to another department's Sheet,

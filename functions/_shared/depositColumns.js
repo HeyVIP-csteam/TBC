@@ -70,18 +70,100 @@ const PKR_COLS = {
 };
 
 // ---- INR ----
-// Deposit Issue — confirmed from Crickex's real sheet screenshot.
-const INR_ISSUE_COLS = {
+// Deposit Issue — REPLACED (2026-08-25) with PER-TAB layouts, confirmed
+// from real screenshots of the live sheet's actual tabs. The sheet
+// ("CX INR Deposit Status V1.0") has several tabs, and — this is the
+// key discovery — they are NOT the same layout: "Main sheet" is one
+// business process (PG-side triage: PG Status/PG TID/Slip UTR/PG
+// Amount/PG Remark/...), while "Pending case" and "Wait Information"
+// are a different one (CS-side triage: PG staff name/Status/Agent UPI/
+// PG Remarks/CS Remarks/Payment Status/Order ID/...) that happens to
+// share IDENTICAL column layouts with each other. A single shared
+// INR_ISSUE_COLS (the previous 2026-08-25 version of this file) applied
+// the SAME column letters to every tab regardless of which of these two
+// it actually was — reading real data, just through the wrong lens
+// whenever the tab didn't match whichever screenshot that one layout
+// was confirmed from. Column layout is now resolved per (country, tab
+// name) — see getIssueColumns()'s new second parameter and
+// INR_ISSUE_TABS below — instead of per-country alone.
+//
+// Only "Main sheet" has "PG Status" (a dropdown value like "Not
+// received") — that's the column the old, since-corrected
+// `pgStaffName` key was actually reading (see the git history on this
+// file). "Pending case"/"Wait Information" separately have their OWN
+// real "PG staff name" column (G) — an actual person's name field,
+// genuinely named that — which the old shared layout never accounted
+// for at all.
+//
+// Editing: "Main sheet" has no CS-owned column (closest, "PG Remark"/K,
+// is PG-owned) — Edit stays disabled for results from this tab. "Pending
+// case"/"Wait Information" DO have a real "CS Remarks" column (P) — Edit
+// is enabled for results from these two tabs, writing to that column.
+// See update.js.
+
+// "Main sheet" tab — L (Chat TID), M (arrow/formatting column, no real
+// header), Q (BOT remark), R (Approved ID) confirmed present in the
+// sheet but deliberately not read — not fields Deposit Issue search
+// needs to show.
+const INR_MAIN_COLS = {
+  layout: "main", // see search.js's `issueLayout` on each result — frontend/update.js use this to know Edit is unavailable for this tab
   date: "A", time: "B", username: "C", pg: "D", utr: "E", slip: "F",
-  pgStaffName: "G",
-  // H — checkbox-formatted, no header, deliberately skipped everywhere
-  pgTid: "I", slipAmount: "J", status: "K",
-  followUpTimes: "L", chatIds: "M", agentUpi: "N", pgRemarks: "O",
-  csRemarks: "P", // the CS-editable column for Deposit Issue
-  paymentStatus: "Q", orderId: "R", picName: "S",
-  cartId: "T", amount: "U", statusFinal: "V", upi: "W",
-  lastCol: "W",
+  pgStatus: "G", // header "PG Status" — e.g. "Not received"
+  pgTid: "H", // header "PG TID"
+  slipUtr: "I", // header "Slip UTR"
+  pgAmount: "J", // header "PG Amount"
+  pgRemark: "K", // header "PG Remark" — PG-owned, not CS-editable
+  // L — Chat TID, M — arrow/formatting column: not read
+  tid: "N", // header "TID"
+  slipAmount: "O", // header "Slip Amount"
+  upi: "P", // header "UPI"
+  // Q — BOT remark, R — Approved ID: not read
+  paymentStatus: "S", // header "Payment status"
+  lastCol: "S",
+  // No csRemarks — this tab has no CS-owned column; Edit stays off.
 };
+
+// "Pending case" and "Wait Information" tabs — confirmed IDENTICAL
+// layout to each other. H (checkbox-formatted, no real header), L and M
+// (Chatids and an unlabeled column) confirmed present but not read.
+const INR_PENDING_COLS = {
+  layout: "pending", // has a real CS Remarks column — Edit is available for this tab
+  date: "A", time: "B", username: "C", pg: "D", utr: "E", slip: "F",
+  pgStaffName: "G", // header "PG staff name" — a real name field here
+  // H — checkbox-formatted, no real header: not read
+  pgTid: "I", // header "PG TID"
+  slipAmount: "J", // header "Slip Amount"
+  status: "K", // header "Status"
+  // L — Chatids, M — unlabeled: not read
+  agentUpi: "N", // header "Agent UPI"
+  pgRemarks: "O", // header "PG Remarks"
+  csRemarks: "P", // header "CS Remarks" — the CS-editable column here
+  paymentStatus: "Q", // header "Payment Status"
+  orderId: "R", // header "Order ID"
+  lastCol: "R",
+};
+
+// Maps a normalized tab name to the layout that tab actually uses.
+// Deliberately NOT a fallback-to-Main-sheet default for unrecognized
+// tab names (e.g. "Pending case/BOT", "transaction completed" —  seen
+// in the sheet's tab list but never confirmed from a real screenshot,
+// and "Dropdown"/"Chatids" are reference tabs, not deposit data at
+// all) — guessing a layout for a tab nobody's actually confirmed risks
+// silently misreading it the same way the old shared-layout bug did.
+// getIssueColumns() returns null for anything not in this map, and
+// callers must treat null as "unconfigured, skip with a warning."
+const INR_ISSUE_TABS = {
+  "main sheet": INR_MAIN_COLS,
+  "pending case": INR_PENDING_COLS,
+  "wait information": INR_PENDING_COLS,
+};
+
+// Same normalization search.js/depositBackup's own copies use — folds
+// invisible differences (double spaces, fullwidth punctuation) so a tab
+// name that LOOKS identical to the human eye still matches the map key.
+function normalizeTabNameForLookup(name) {
+  return String(name).normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+}
 
 // Deposit Backup — confirmed from BetVisa's real "BV INR Deposit August
 // Settled" sheet screenshot. Read-only in the app (no update.js for this
@@ -104,7 +186,8 @@ const INR_BACKUP_COLS = {
 
 export const ISSUE_COLUMNS_BY_COUNTRY = {
   PKR: PKR_COLS,
-  INR: INR_ISSUE_COLS,
+  // INR intentionally absent here — resolved per-tab via INR_ISSUE_TABS,
+  // not per-country. getIssueColumns() below branches on this.
 };
 
 export const BACKUP_COLUMNS_BY_COUNTRY = {
@@ -112,12 +195,21 @@ export const BACKUP_COLUMNS_BY_COUNTRY = {
   INR: INR_BACKUP_COLS,
 };
 
-// Returns null (not undefined) for a country with no known layout yet
-// (e.g. PHP, which doesn't have this module at all — see
-// countryModules.js) so callers can do a clean `if (!cols)` check
-// instead of `cols.someField` throwing on undefined.
-export function getIssueColumns(country) {
-  return ISSUE_COLUMNS_BY_COUNTRY[country] || null;
+// Returns null (not undefined) for a country/tab with no known layout
+// yet so callers can do a clean `if (!cols)` check instead of
+// `cols.someField` throwing on undefined.
+//
+// `tabName` is REQUIRED for INR (2026-08-25) — see INR_ISSUE_TABS above
+// for why guessing a default here would be actively dangerous (reading
+// the wrong tab's data through the wrong column lens). PKR ignores
+// `tabName` — every PKR brand/tab confirmed to share one layout.
+export function getIssueColumns(country, tabName) {
+  if (country === "PKR") return PKR_COLS;
+  if (country === "INR") {
+    const key = tabName ? normalizeTabNameForLookup(tabName) : null;
+    return (key && INR_ISSUE_TABS[key]) || null;
+  }
+  return null;
 }
 export function getBackupColumns(country) {
   return BACKUP_COLUMNS_BY_COUNTRY[country] || null;

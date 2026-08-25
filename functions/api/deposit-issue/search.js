@@ -192,8 +192,13 @@ async function handleSearch({ request, env }) {
     const accessToken = await tokenFor(target.country);
     if (!accessToken) continue; // this country's auth failed — already warned above, move on to the next target
 
-    const cols = getIssueColumns(target.country);
-    if (!cols) continue; // shouldn't happen — DEPOSIT_BRANDS only ever contains INR/PKR — but never guess a layout
+    // PER-TAB COLUMN LAYOUTS (2026-08-25) — getIssueColumns() moved
+    // inside the tab loop below (was called once per target here) —
+    // see depositColumns.js's 2026-08-25 note: INR's "Main sheet" and
+    // "Pending case"/"Wait Information" tabs are genuinely different
+    // layouts sharing one sheetId, so `cols` can no longer be resolved
+    // per-target/per-country alone. PKR still gets one lookup's worth
+    // of work either way since every PKR tab shares one layout.
 
     let realTabs;
     try {
@@ -216,6 +221,16 @@ async function handleSearch({ request, env }) {
 
     for (const { title: tab, gid } of tabsToQuery) {
       if (results.length >= MAX_RESULTS) break;
+
+      const cols = getIssueColumns(target.country, tab);
+      if (!cols) {
+        // Unrecognized tab for INR (see INR_ISSUE_TABS's "no default"
+        // note in depositColumns.js) — don't guess a layout, warn and
+        // skip just this tab; other tabs/brands still get read.
+        tabWarnings.push({ brand: target.brandName, missingTabs: [], actualSheetTabs: [], error: `No known column layout for tab "${tab}" — skipped.` });
+        continue;
+      }
+
       const range = `'${tab.replace(/'/g, "''")}'!A2:${cols.lastCol}`;
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${target.sheetId}/values/${encodeURIComponent(range)}`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -295,22 +310,35 @@ async function handleSearch({ request, env }) {
           correctUid: get(cols.correctUid),
           playersCartId: get(cols.playersCartId),
           paymentStatus: get(cols.paymentStatus),
-          // INR fields
+          // INR fields — REPLACED (2026-08-25) to match the real
+          // per-tab layouts, see depositColumns.js's 2026-08-25 note on
+          // INR_MAIN_COLS/INR_PENDING_COLS. `issueLayout` tells the
+          // frontend (and nothing else — update.js recomputes its own
+          // cols straight from tabName, doesn't trust this) which field
+          // set/Edit availability applies: 'main' (no CS-editable
+          // column, Edit off) vs 'pending' (Pending case/Wait
+          // Information — has CS Remarks, Edit on). Undefined for any
+          // INR tab that didn't resolve to a known layout (already
+          // warned about above, and skipped before reaching here).
+          issueLayout: target.country === "INR" ? cols.layout : undefined,
           utr: get(cols.utr),
           slip: get(cols.slip),
-          pgStaffName: get(cols.pgStaffName),
+          // 'main' tab fields
+          pgStatus: get(cols.pgStatus),
           pgTid: get(cols.pgTid),
+          slipUtr: get(cols.slipUtr),
+          pgAmount: get(cols.pgAmount),
+          pgRemark: get(cols.pgRemark),
+          tid: get(cols.tid),
           slipAmount: get(cols.slipAmount),
+          upi: get(cols.upi),
+          // 'pending' tab fields (Pending case / Wait Information)
+          pgStaffName: get(cols.pgStaffName),
           status: get(cols.status),
-          followUpTimes: get(cols.followUpTimes),
-          chatIds: get(cols.chatIds),
           agentUpi: get(cols.agentUpi),
           pgRemarks: get(cols.pgRemarks),
           csRemarks: get(cols.csRemarks),
           orderId: get(cols.orderId),
-          picName: get(cols.picName),
-          statusFinal: get(cols.statusFinal),
-          upi: get(cols.upi),
         });
       });
     }
