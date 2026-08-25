@@ -93,3 +93,42 @@ editReply、recallReply）全部只返回裸的 `thread`/`updated` 记录本身�
 `country`（跟 GET 保持一致的写法：`{ ...updated, country }`）。国家无关，
 INR/PKR/PHP 用的是同一份代码、同一个请求作用域内的 `country` 变量，一次
 修复三国全部生效。
+
+---
+
+## 附加：Telegram 消息里 Brand 行永远显示 "PKR" 后缀（全国家通用 bug）
+
+**现象**：INR 提交 Daily Report（以及 QA/Risk Issue/Account Issue/
+Withdraw Issue/Promotion Request/Genie Issue 等所有走"Brand/Platform"
+标签行的模块），Telegram 消息里显示的是 "BetVisa PKR"，而不是
+"BetVisa"——不管实际提交的品牌属于哪个国家，后缀永远是 "PKR"。
+
+**根因**：`functions/_shared/messageBuilders.js` 里有一个从"项目还是
+PKR 单一国家版本"那个年代遗留下来的写死常量：
+
+```js
+const CURRENCY_LABEL = "PKR";
+export function brandCurrencyLabel(name) {
+  return name && CURRENCY_LABEL ? `${name} ${CURRENCY_LABEL}` : name;
+}
+```
+
+合并 INR/PKR/PHP 三国之后，这处硬编码没人跟着改，所以每条消息的 Brand
+行都被无条件加上 "PKR"，跟这条工单实际选的品牌属于哪个国家完全无关。
+
+**改的文件**：`functions/_shared/messageBuilders.js` —— `CURRENCY_LABEL`
+常量删掉，`brandCurrencyLabel(name)` 改成 `brandCurrencyLabel(name,
+country)`，读品牌自己真正的 `country`（INR/PKR/PHP）而不是写死的字符串。
+从 `resolveColumnValues`、`resolveFieldValue`、
+`buildMessageFromTemplate`、`buildRiskIssueDynamicMessage`、
+`buildAccountIssueDynamicMessage`、`buildWithdrawIssueDynamicMessage`、
+`buildPromotionRequestMessage` 到最上层的调度函数 `buildTicketMessage`，
+全部 7 处调用点都补上了 `brandCountry`/`brand.country` 参数传递。
+`submit.js`/`threads/[id].js`（Edit fields 的 editDetails 动作）两处
+调用点不用改，它们传的 `brand` 本来就是 routing.js 里带 `country` 字段
+的完整品牌对象。
+
+注意：品牌标题行（"New Daily Report — BetVisa" 这种）本来就设计成不带国
+家后缀，这次没有改动，保持原样；Sheet 列里的 `brand`（纯品牌名）列也不受
+影响，只有明确用了 `brandCurrency` 列或消息里的 "Brand/Platform:" 标签
+行会带国家后缀，且现在带的是真实国家。

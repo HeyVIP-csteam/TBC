@@ -34,20 +34,27 @@ export function escapeHtml(str) {
 }
 
 // Business owner wants every TG-message "Platform"/"Brand" labeled ROW to
-// read "<Brand> PKR" (e.g. "Crickex PKR") — NOT the Sheet columns, and
-// NOT the "New X — Brand" title/header lines, both of which stay as the
-// plain brand name. Used at the spots that render a labeled brand row:
-// buildPromotionRequestMessage, resolveFieldValue (the MESSAGE_TEMPLATE
-// row renderer used by QA/Risk Issue/Genie Issue/Daily Report), and
-// buildAccountIssueDynamicMessage.
+// read "<Brand> <COUNTRY>" (e.g. "Crickex PKR") — NOT the Sheet columns,
+// and NOT the "New X — Brand" title/header lines, both of which stay as
+// the plain brand name. Used at the spots that render a labeled brand
+// row: buildPromotionRequestMessage, resolveFieldValue (the
+// MESSAGE_TEMPLATE row renderer used by QA/Risk Issue/Genie Issue/Daily
+// Report), and buildAccountIssueDynamicMessage.
 //
-// ONE PLACE TO EDIT when reusing this project for a different currency
-// market — change CURRENCY_LABEL below and every outgoing Telegram
-// message updates automatically. Leave it as "" to drop the suffix
-// entirely and show just the plain brand name.
-const CURRENCY_LABEL = "PKR";
-export function brandCurrencyLabel(name) {
-  return name && CURRENCY_LABEL ? `${name} ${CURRENCY_LABEL}` : name;
+// FIXED (2026-08-25) — this used to be a single hardcoded
+// `const CURRENCY_LABEL = "PKR"` applied to every message regardless of
+// which country the brand actually belonged to, a leftover from when
+// this project was PKR-only (see this function's own git history). That
+// meant an INR submission (e.g. Daily Report on `betvisa_inr`) would
+// still show "BetVisa PKR" in the outgoing Telegram message — the label
+// was never wrong about WHICH brand was picked, just wrong about what
+// to call it. Now takes the brand's own `country` (INR/PKR/PHP) instead
+// of a fixed string, sourced from `brand.country` at the one dispatch
+// point (buildTicketMessage below) that has the full brand object —
+// every builder in this file threads a `brandCountry` argument through
+// to get here instead of guessing or importing countries.js.
+export function brandCurrencyLabel(name, country) {
+  return name && country ? `${name} ${country}` : name;
 }
 
 export function resolveColumnValues(columns, { fieldMap, brand, reporter, screenshotLink, attachmentLinks }) {
@@ -63,7 +70,7 @@ export function resolveColumnValues(columns, { fieldMap, brand, reporter, screen
       // NOT Sheet columns, in general). This is an opt-in key, only used
       // where a sheet actually wants that suffix — it doesn't change the
       // plain "brand" behavior above for anyone else.
-      if (col === "brandCurrency") return brandCurrencyLabel(brand.name) || "-";
+      if (col === "brandCurrency") return brandCurrencyLabel(brand.name, brand.country) || "-";
       if (col === "pic") return reporter || "-";
       if (col === "screenshotLink") return (screenshotLink || (attachmentLinks || []).join(", ")) || "-";
       if (col === "dateFormatted") return formatDateDDMMYYYY(fieldMap.reportDate || fieldMap.date) || "-";
@@ -103,12 +110,12 @@ export function resolveTemplate(entry, fieldMap) {
   return { rows: entry.rows, spacing: entry.spacing || "tight", emptyPlaceholder: entry.emptyPlaceholder ?? "-", header: entry.header || null };
 }
 
-function resolveFieldValue(item, { brandName, fieldMap, reporter, screenshotLink }) {
+function resolveFieldValue(item, { brandName, brandCountry, fieldMap, reporter, screenshotLink }) {
   if (typeof item.key !== "string") {
     const [, fallbackKeys] = Object.entries(item.key)[0];
     return fallbackKeys.map((k) => fieldMap[k]).find((v) => v);
   }
-  if (item.key === "brand") return brandCurrencyLabel(brandName);
+  if (item.key === "brand") return brandCurrencyLabel(brandName, brandCountry);
   if (item.key === "screenshotLink") return screenshotLink;
   if (item.key === "pic") return reporter;
   if (item.key === "dateShift") return formatDateShift(fieldMap.reportDate, fieldMap.shift);
@@ -116,7 +123,7 @@ function resolveFieldValue(item, { brandName, fieldMap, reporter, screenshotLink
   return fieldMap[item.key];
 }
 
-export function buildMessageFromTemplate({ template, meta, brandName, fieldMap, reporter, screenshotLink }) {
+export function buildMessageFromTemplate({ template, meta, brandName, brandCountry, fieldMap, reporter, screenshotLink }) {
   const { rows, spacing, emptyPlaceholder, header } = template;
   const lines = [];
   if (header) {
@@ -128,7 +135,7 @@ export function buildMessageFromTemplate({ template, meta, brandName, fieldMap, 
     if (!header.noBlankAfter) lines.push("");
   }
   rows.forEach((item, i) => {
-    const value = resolveFieldValue(item, { brandName, fieldMap, reporter, screenshotLink });
+    const value = resolveFieldValue(item, { brandName, brandCountry, fieldMap, reporter, screenshotLink });
     if (item.raw) {
       if (!value) return; // skip entirely — no placeholder line for optional raw notes
       lines.push(`${item.emoji} ${escapeHtml(value)}`);
@@ -168,9 +175,9 @@ export function formatDateDDMMYYYY(isoDate) {
 // MESSAGE_TEMPLATE.risk_issue.templates — keeps the same visual style
 // (emoji-labeled bold rows, header showing the Issue Type) without needing
 // a hand-written template for all issue types up front.
-export function buildRiskIssueDynamicMessage({ brandName, fields, fieldMap, reporter }) {
+export function buildRiskIssueDynamicMessage({ brandName, brandCountry, fields, fieldMap, reporter }) {
   const lines = [`⚠️ <b>Risk Issue — ${escapeHtml(fieldMap.issueType || "-")}</b>`, ""];
-  lines.push(`🎮 <b>Brand/Platform:</b> ${escapeHtml(brandCurrencyLabel(brandName))}`);
+  lines.push(`🎮 <b>Brand/Platform:</b> ${escapeHtml(brandCurrencyLabel(brandName, brandCountry))}`);
   lines.push(`👤 <b>Username:</b> ${escapeHtml(fieldMap.uid || "-")}`);
 
   const middleFields = fields.filter((f) => !["issueType", "uid", "remark"].includes(f.key) && f.value);
@@ -198,9 +205,9 @@ export function buildRiskIssueDynamicMessage({ brandName, fields, fieldMap, repo
 // Account Issue: header shows Issue Type, Brand/Username/type-specific
 // fields are all grouped together (no blank lines between them), then one
 // blank line before Remark and another before PIC.
-export function buildAccountIssueDynamicMessage({ brandName, fields, fieldMap, reporter }) {
+export function buildAccountIssueDynamicMessage({ brandName, brandCountry, fields, fieldMap, reporter }) {
   const lines = [`🔑 <b>Account Issue — ${escapeHtml(fieldMap.issueType || "-")}</b>`, ""];
-  lines.push(`🎮 <b>Brand/Platform:</b> ${escapeHtml(brandCurrencyLabel(brandName))}`);
+  lines.push(`🎮 <b>Brand/Platform:</b> ${escapeHtml(brandCurrencyLabel(brandName, brandCountry))}`);
   // "Forget Username & Gmail" is the one issue type whose form never shows
   // a UID field at all (see showIf on the "uid" field in schemas.js) —
   // fieldMap.uid is always empty for it, so this line used to always print
@@ -230,9 +237,9 @@ export function buildAccountIssueDynamicMessage({ brandName, fields, fieldMap, r
 // line before Remark and another before PIC. Identifier field here is
 // "username" (not "uid" like most other modules) — that's this module's
 // own design, not a mismatch to fix.
-export function buildWithdrawIssueDynamicMessage({ brandName, fields, fieldMap, reporter }) {
+export function buildWithdrawIssueDynamicMessage({ brandName, brandCountry, fields, fieldMap, reporter }) {
   const lines = [`💸 <b>Withdraw Issue — ${escapeHtml(fieldMap.issueType || "-")}</b>`, ""];
-  lines.push(`🎮 <b>Brand/Platform:</b> ${escapeHtml(brandCurrencyLabel(brandName))}`);
+  lines.push(`🎮 <b>Brand/Platform:</b> ${escapeHtml(brandCurrencyLabel(brandName, brandCountry))}`);
   lines.push(`👤 <b>Username:</b> ${escapeHtml(fieldMap.username || "-")}`);
 
   fields
@@ -265,12 +272,12 @@ export function buildMessage({ meta, brandName, reporter, fields, moduleId, fiel
 // Promotion Request: plain "Particular information" list (no emoji/header
 // styling, matches the reference format exactly). `key` can be a field key,
 // "brand", "pic", or { fixed: "..." } for an always-the-same value.
-export function buildPromotionRequestMessage(rows, { brandName, fieldMap, reporter }) {
+export function buildPromotionRequestMessage(rows, { brandName, brandCountry, fieldMap, reporter }) {
   const lines = ["<b>Particular information</b>"];
   rows.forEach((item) => {
     let value;
     if (typeof item.key === "object") value = item.key.fixed;
-    else if (item.key === "brand") value = brandCurrencyLabel(brandName);
+    else if (item.key === "brand") value = brandCurrencyLabel(brandName, brandCountry);
     else if (item.key === "pic") value = reporter;
     else value = fieldMap[item.key];
     lines.push(`<b>${escapeHtml(item.label)}:</b> ${escapeHtml(value || "-")}`);
@@ -291,13 +298,13 @@ export function buildPromotionRequestMessage(rows, { brandName, fieldMap, report
 export function buildTicketMessage({ moduleId, brandId, meta, brand, fieldMap, fields, reporter, screenshotLink, messageTemplate, promotionMessageTemplate }) {
   const template = resolveTemplate(messageTemplate[moduleId], fieldMap);
   if (template) {
-    return buildMessageFromTemplate({ template, meta, brandName: brand.name, fieldMap, reporter, screenshotLink });
+    return buildMessageFromTemplate({ template, meta, brandName: brand.name, brandCountry: brand.country, fieldMap, reporter, screenshotLink });
   }
-  if (moduleId === "risk_issue") return buildRiskIssueDynamicMessage({ brandName: brand.name, fields, fieldMap, reporter });
-  if (moduleId === "account_issue") return buildAccountIssueDynamicMessage({ brandName: brand.name, fields, fieldMap, reporter });
-  if (moduleId === "withdraw_issue") return buildWithdrawIssueDynamicMessage({ brandName: brand.name, fields, fieldMap, reporter });
+  if (moduleId === "risk_issue") return buildRiskIssueDynamicMessage({ brandName: brand.name, brandCountry: brand.country, fields, fieldMap, reporter });
+  if (moduleId === "account_issue") return buildAccountIssueDynamicMessage({ brandName: brand.name, brandCountry: brand.country, fields, fieldMap, reporter });
+  if (moduleId === "withdraw_issue") return buildWithdrawIssueDynamicMessage({ brandName: brand.name, brandCountry: brand.country, fields, fieldMap, reporter });
   if (moduleId === "promotion_request" && promotionMessageTemplate[`${brandId}|${fieldMap.promotion}`]) {
-    return buildPromotionRequestMessage(promotionMessageTemplate[`${brandId}|${fieldMap.promotion}`], { brandName: brand.name, fieldMap, reporter });
+    return buildPromotionRequestMessage(promotionMessageTemplate[`${brandId}|${fieldMap.promotion}`], { brandName: brand.name, brandCountry: brand.country, fieldMap, reporter });
   }
   return buildMessage({ meta, brandName: brand.name, reporter, fields, moduleId, fieldMap });
 }
