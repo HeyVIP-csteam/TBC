@@ -64,3 +64,32 @@ tab，一开始误以为全表共用一套列结构，实际上：
 **改的文件**：`public/deposit-backup.html` —— `showBrandDirectory()` 里
 `data.brands` 改成先按 `window.AgentCountry.getCountry()` 过滤（`isAll`
 时不过滤），逻辑跟 `deposit-issue.html` 里的同一处代码保持一致。
+
+---
+
+## 附加：工单编辑/回复/回收等操作后 "Not found." 404（全国家通用 bug）
+
+**现象**：一张工单第一次被操作（编辑字段/回复/撤回等，任意一种）之后，
+后续对它的任何操作——包括再次打开 Edit fields 改任意字段、甚至连自动轮询
+刷新——都会 404 报 "Not found."，直到关闭这条工单、从侧边栏重新点开它才
+恢复正常。表面上看像是"某些字段能改、某些不能"，其实跟字段完全无关，是
+"哪个字段/哪个操作先触发的，就先暴露出这个 bug"而已。
+
+**根因**：`functions/api/threads/[id].js` 里，一个工单 ID 需要配合
+`country` 参数才能定位到正确的国家 KV 库。GET 接口（首次打开工单）会把
+`country` 手动塞进返回的 thread 对象：`{ ...thread, country }`。但 POST
+的 7 个操作（solve/unsolve、回复、editRoot、editDetails、recallRoot、
+editReply、recallReply）全部只返回裸的 `thread`/`updated` 记录本身——这个
+记录不存 `country` 字段（因为它本来就是靠"存在哪个国家的 KV 里"来确定
+国家的，记录内部不需要重复存）。
+
+前端 `threads.html` 每次操作完都会执行 `selectedThread = res.thread`，
+所以只要对一条工单做过**任意一次**操作，`selectedThread.country` 就会被
+悄悄清空成 `undefined`。此后这条工单的所有请求（轮询刷新 + 再次编辑）都
+会带着空的 `country=` 发出去，后端找不到对应的库，统一返回 404
+"Not found."。
+
+**改的文件**：`functions/api/threads/[id].js` —— 7 处 POST 响应全部补上
+`country`（跟 GET 保持一致的写法：`{ ...updated, country }`）。国家无关，
+INR/PKR/PHP 用的是同一份代码、同一个请求作用域内的 `country` 变量，一次
+修复三国全部生效。

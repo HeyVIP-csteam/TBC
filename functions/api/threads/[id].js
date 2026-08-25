@@ -72,6 +72,26 @@ import { logActivity } from "../../_shared/activityLog.js";
 // leak "this id exists in a country you can't see" via timing/behavior
 // differences, and silently guessing wrong could edit/delete the wrong
 // record if ids ever collided across countries).
+//
+// FIXED (2026-08-25) — every `thread` object this file hands back now
+// consistently carries `country` (`{ ...thread, country }`/
+// `{ ...updated, country }`), country-agnostic (same fix for
+// INR/PKR/PHP alike since `country` here is just whatever the request
+// resolved to). Before this, only the GET response did that spread;
+// all 7 POST actions (solve/unsolve, reply, editRoot, editDetails,
+// recallRoot, editReply, recallReply) returned the bare stored record,
+// which has no `country` field of its own (it's implicit in which
+// per-country KV the record lives in, not stored inside the record).
+// threads.html always does `selectedThread = res.thread` after any of
+// these — so the FIRST action taken on an openly-viewed thread quietly
+// wiped `selectedThread.country` to undefined client-side, and every
+// request after that (polling refreshes, and any further action —
+// editing ANY field, not something specific to particular fields)
+// silently sent `country=` (empty) and 404'd with "Not found." until
+// the thread was closed and reopened from the sidebar (which re-fetches
+// via GET, restoring it). Looked field-specific from the outside only
+// because whichever field got edited/interacted-with FIRST on a given
+// ticket "worked", and everything after that appeared broken.
 export async function onRequestGet({ request, env, params }) {
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
@@ -204,7 +224,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     // state itself is still fully preserved on the ticket/thread record,
     // so nothing is lost by not duplicating it into Activity Logs too.
     if (action === "unsolve") logThread({ action: "Reopened", detail: `"${thread.title || id}" (${thread.brand})` });
-    return json({ ok: true, thread });
+    return json({ ok: true, thread: { ...thread, country } });
   }
 
   if (action === "delete") {
@@ -339,7 +359,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     // actual purpose. The reply itself is still fully preserved in the
     // ticket thread; solve/delete/recall/edit stay logged below since
     // those are the actions worth auditing.
-    return json({ ok: true, thread: updated });
+    return json({ ok: true, thread: { ...updated, country } });
   }
 
   if (action === "editRoot") {
@@ -359,7 +379,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
 
     const updated = await updateRootText(store, id, text);
     logThread({ action: "Ticket Edited", detail: `"${thread.title || id}" (${thread.brand}): ${thread.rootText || "(no text)"} → ${text}` });
-    return json({ ok: true, thread: updated });
+    return json({ ok: true, thread: { ...updated, country } });
   }
 
   // Field-level edit — the "🔄 Sync to Sheet" flow. Regenerates the
@@ -426,7 +446,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const { title, summary } = buildTitleAndSummary({ meta, brand, fieldMap, fields });
     const updated = await updateThreadDetails(store, id, { fieldMap, rootText: text, title, summary });
     logThread({ action: "Ticket Edited", detail: `"${thread.title || id}" (${thread.brand}), field sync: ${thread.rootText || "(no text)"} → ${text}` });
-    return json({ ok: true, thread: updated, sheetHasRef: !!thread.sheetRef, sheetSynced, sheetError });
+    return json({ ok: true, thread: { ...updated, country }, sheetHasRef: !!thread.sheetRef, sheetSynced, sheetError });
   }
 
   if (action === "recallRoot") {
@@ -458,7 +478,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
       by: account.username,
     });
     logThread({ action: "Ticket Recalled", detail: `"${thread.title || id}" (${thread.brand}): ${thread.rootText || "(no text)"}` });
-    return json({ ok: true, thread: updated });
+    return json({ ok: true, thread: { ...updated, country } });
   }
 
   if (action === "editReply") {
@@ -473,7 +493,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
     const oldMsg = existingThread.messages.find((m) => m.self && m.messageId === messageId);
     const updated = await editMessageInThread(store, id, messageId, text);
     logThread({ action: "Reply Edited", detail: `"${existingThread.title || id}" (${existingThread.brand}): ${oldMsg?.text || "(no text)"} → ${text}` });
-    return json({ ok: true, thread: updated });
+    return json({ ok: true, thread: { ...updated, country } });
   }
 
   if (action === "recallReply") {
@@ -502,7 +522,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
       by: account.username,
     });
     logThread({ action: "Reply Recalled", detail: `"${thread.title || id}" (${thread.brand}): ${recalledMsg?.text || "(no text)"}` });
-    return json({ ok: true, thread: updated });
+    return json({ ok: true, thread: { ...updated, country } });
   }
 
   return json({ ok: false, error: `Unknown action "${action}".` }, 400);
