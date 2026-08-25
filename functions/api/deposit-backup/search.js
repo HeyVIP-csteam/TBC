@@ -138,7 +138,12 @@ async function handleSearch({ request, env }) {
     return json({ ok: true, results: [], notConfigured: true, brand: requestedBrand });
   }
 
-  const accessToken = await getAccessToken(env);
+  // FIXED (2026-08-25) — see googleOAuth.js's own 2026-08-25 header:
+  // Deposit Backup, same as Deposit Issue, reads another department's
+  // Sheet under a country-specific OAuth account. Always exactly one
+  // brand/country per request here (no fan-out like search.js's
+  // safety-net path), so this is just brandMeta.country directly.
+  const accessToken = await getAccessToken(env, brandMeta.country);
   const results = [];
   const tabWarnings = []; // [{ brand, month, missingTabs, actualSheetTabs, error? }]
 

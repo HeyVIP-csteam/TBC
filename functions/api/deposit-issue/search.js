@@ -159,12 +159,38 @@ async function handleSearch({ request, env }) {
     return json({ ok: true, results: [], notConfigured: true, brand: requestedBrand });
   }
 
-  const accessToken = await getAccessToken(env);
+  // PER-COUNTRY ACCESS TOKENS (2026-08-25) — see googleOAuth.js's own
+  // 2026-08-25 header for the full story: INR and PKR's Deposit Issue
+  // sheets are owned by two DIFFERENT real Google accounts, so a single
+  // token fetched once up front (the old behavior) could only ever
+  // actually authenticate as one of them. `targets` can still span both
+  // countries in the (UI-disabled, backend-only-as-a-safety-net) fan-out
+  // case, so tokens are fetched per-country, on demand, and cached here
+  // for the rest of this request — same "one bad thing shouldn't sink
+  // everything else" resilience the tab-resolution error handling just
+  // below already has: a country whose token fetch fails gets a warning
+  // and is skipped, the other country's results still come back.
+  const tokenByCountry = {};
+  async function tokenFor(country) {
+    if (tokenByCountry[country] === undefined) {
+      try {
+        tokenByCountry[country] = await getAccessToken(env, country);
+      } catch (e) {
+        tokenByCountry[country] = null;
+        tabWarnings.push({ brand: "", missingTabs: [], actualSheetTabs: [], error: `${country} Google auth failed: ${String(e.message || e)}` });
+      }
+    }
+    return tokenByCountry[country];
+  }
+
   const results = [];
   const tabWarnings = []; // [{ brand, missingTabs, actualSheetTabs }] — only for sheets with a mismatch
 
   for (const target of targets) {
     if (results.length >= MAX_RESULTS) break;
+
+    const accessToken = await tokenFor(target.country);
+    if (!accessToken) continue; // this country's auth failed — already warned above, move on to the next target
 
     const cols = getIssueColumns(target.country);
     if (!cols) continue; // shouldn't happen — DEPOSIT_BRANDS only ever contains INR/PKR — but never guess a layout

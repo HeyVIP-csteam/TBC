@@ -73,14 +73,25 @@ async function handleUpdate({ request, env }) {
   const cols = getIssueColumns(brandMeta.country);
   if (!cols) return json({ ok: false, error: `No known column layout for ${brandMeta.country}.` }, 500);
 
+  // FIXED (2026-08-25) — see updateRowByColumns()'s own 2026-08-25 note
+  // in googleSheets.js: this write goes to another department's Sheet,
+  // so it needs THIS country's OAuth account, not the service account
+  // updateRowByColumns() would otherwise reach for on its own.
+  let accessToken;
+  try {
+    accessToken = await getAccessToken(env, brandMeta.country);
+  } catch (e) {
+    return json({ ok: false, error: `Google auth failed: ${String(e.message || e)}` }, 502);
+  }
+
   try {
     if (brandMeta.country === "PKR") {
       await updateRowByColumns(env, sheetId, tabName, cols.csPIC, rowIndex, [
         csPIC || "", playerContactNo || "", statusCS || "", correctUid || "",
-      ]);
+      ], accessToken);
     } else {
       // INR — exactly one editable column (CS Remarks).
-      await updateRowByColumns(env, sheetId, tabName, cols.csRemarks, rowIndex, [csRemarks || ""]);
+      await updateRowByColumns(env, sheetId, tabName, cols.csRemarks, rowIndex, [csRemarks || ""], accessToken);
     }
   } catch (e) {
     return json({ ok: false, error: `Sheets API error: ${String(e && e.message || e)}` }, 502);

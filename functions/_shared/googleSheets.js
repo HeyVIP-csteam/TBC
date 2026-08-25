@@ -117,8 +117,22 @@ export async function appendRowByColumns(env, sheetId, tabName, startColumn, val
  * wrote to, instead of creating a duplicate. `row` is the 1-indexed
  * Sheets row number returned by appendRowByColumns() at submit time.
  */
-export async function updateRowByColumns(env, sheetId, tabName, startColumn, row, values) {
-  const token = await getAccessToken(env);
+// FIXED (2026-08-25) — `accessToken` is now an optional 6th argument.
+// Every caller until now got the SERVICE-ACCOUNT token internally (see
+// the local getAccessToken() above) — correct for [id].js's own call
+// (writing back to a ticket's OWN Sheet, which the service account is
+// genuinely an Editor on), but deposit-issue/update.js's two calls
+// write to a DIFFERENT DEPARTMENT'S Sheet — the one the OAuth flow
+// exists for in the first place (see googleOAuth.js's header) — and
+// were silently trying to authenticate with the wrong credential the
+// whole time (the service account was never granted Editor there).
+// Passing a pre-fetched OAuth token in from the caller (which now
+// knows which country's account to fetch it for — see
+// googleOAuth.js's 2026-08-25 per-country update) skips the internal
+// service-account fetch entirely; omitting it keeps every existing
+// caller's behavior exactly as it was.
+export async function updateRowByColumns(env, sheetId, tabName, startColumn, row, values, accessToken) {
+  const token = accessToken || await getAccessToken(env);
   const endColumn = columnLetter(columnIndex(startColumn) + values.length - 1);
   const range = `${tabName}!${startColumn}${row}:${endColumn}${row}`;
 
