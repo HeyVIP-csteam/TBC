@@ -529,7 +529,17 @@ html[data-theme="light"] {
     window._dep = data;
     if (!data.length) { gi('depRes').innerHTML = '<div class="dep-state">No results found.</div>'; syncEditPanelHeight(); return; }
     gi('depRes').innerHTML = data.map(function(r,i){
-      var imgBtn = r.imageLink ? '<span class="dep-img-btn" id="img-'+i+'">🖼️ Image</span>' : '';
+      // FIXED (2026-08-25) — the 🖼️ Image button only ever checked
+      // r.imageLink (PKR's field name for this). INR has the exact
+      // same kind of value — a proof-of-payment screenshot link — just
+      // under a different field name (`slip`, see depositColumns.js's
+      // INR_ISSUE_COLS). It was being shown as a plain text URL in the
+      // field list below instead of the same clickable lightbox button
+      // PKR gets. imageOrSlip picks whichever one this result actually
+      // has (a PKR row's `slip` is always empty and vice versa, so
+      // exactly one of these is ever populated).
+      var imageOrSlip = r.imageLink || r.slip;
+      var imgBtn = imageOrSlip ? '<span class="dep-img-btn" id="img-'+i+'">🖼️ Image</span>' : '';
       var pillLabel = escapeHtml(r.brandName)+' - '+escapeHtml(r.tabName);
       var tabPill = r.sheetUrl
         ? '<a class="dep-tab-pill dep-tab-pill-link" href="'+escapeHtml(r.sheetUrl)+'" target="_blank" rel="noopener" title="Open in Google Sheets">'+pillLabel+' <span class="dep-pill-arrow">↗️</span></a>'
@@ -546,8 +556,11 @@ html[data-theme="light"] {
       // status/paymentStatus/statusFinal VALUES actually are, so
       // guessing a color mapping risks being actively misleading
       // (e.g. showing something as "success green" that isn't).
+      // Slip dropped from this field list (2026-08-25) — it's now the
+      // 🖼️ Image button above instead, same as PKR's imageLink; showing
+      // it a second time as a plain-text URL here would be redundant.
       var fieldsHtml = r.country === 'INR'
-        ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)+f('Slip',r.slip)
+        ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)
           +f('PG Staff Name',r.pgStaffName)+f('Slip Amount',r.slipAmount)
           +f('Status',r.status)+f('Follow Up Times',r.followUpTimes)
           +f('Chat IDs',r.chatIds)+f('Agent UPI',r.agentUpi)
@@ -575,7 +588,8 @@ html[data-theme="light"] {
     }).join('');
     data.forEach(function(r,i){
       gi('deb-'+i).addEventListener('click', function(){ openDep(i); });
-      if (r.imageLink) gi('img-'+i).addEventListener('click', function(){ openImageLightbox(r.imageLink); });
+      var imageOrSlip = r.imageLink || r.slip;
+      if (imageOrSlip) gi('img-'+i).addEventListener('click', function(){ openImageLightbox(imageOrSlip); });
     });
     syncEditPanelHeight();
   }
@@ -681,8 +695,18 @@ html[data-theme="light"] {
       const res = await window.AgentAuth.authFetch('/api/deposit-issue/sheet-links');
       const data = await res.json();
       if (!data.ok) { gi('depRes').innerHTML = '<div class="dep-state err">'+escapeHtml(data.error||'Failed to load.')+'</div>'; syncEditPanelHeight(); return; }
-      if (!data.brands.length) { gi('depRes').innerHTML = '<div class="dep-state">No brands available.</div>'; syncEditPanelHeight(); return; }
-      gi('depRes').innerHTML = data.brands.map(function (b) {
+      // FIXED (2026-08-25) — the API returns every country's brands
+      // the account can see (INR's 5 + PKR's 9 mixed together for an
+      // Owner), same "backend gives you everything, frontend scopes to
+      // the switcher" pattern every other Integration Portal page uses
+      // (see index.html's getCountryScopedBrands()) — this page just
+      // never did that last step, so switching the country switcher up
+      // top had zero effect on this directory view.
+      var country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      var isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      var brands = (!country || isAll) ? data.brands : data.brands.filter(function (b) { return b.country === country; });
+      if (!brands.length) { gi('depRes').innerHTML = '<div class="dep-state">No brands available.</div>'; syncEditPanelHeight(); return; }
+      gi('depRes').innerHTML = brands.map(function (b) {
         var logo = '<img src="'+logoPath(b.id)+'" alt="" class="dep-dir-logo" onerror="this.style.display=\'none\'" />';
         var openBtn = b.sheetId
           ? '<a class="dep-open-sheet" href="https://docs.google.com/spreadsheets/d/'+encodeURIComponent(b.sheetId)+'/edit" target="_blank" rel="noopener">📄 Open Sheet</a>'

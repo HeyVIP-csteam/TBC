@@ -491,7 +491,13 @@ html[data-theme="light"] {
     window._dep = data;
     if (!data.length) { gi('depRes').innerHTML = '<div class="dep-state">No results found.</div>'; return; }
     gi('depRes').innerHTML = data.map(function(r,i){
-      var imgBtn = r.imageLink ? '<span class="dep-img-btn" id="img-'+i+'">🖼️ Image</span>' : '';
+      // FIXED (2026-08-25) — same fix as deposit-issue.html's showDep():
+      // the 🖼️ Image button only ever checked r.imageLink (PKR's field
+      // name); INR's equivalent proof-of-payment link is r.slip, always
+      // shown as plain text instead of the same clickable lightbox
+      // button PKR gets.
+      var imageOrSlip = r.imageLink || r.slip;
+      var imgBtn = imageOrSlip ? '<span class="dep-img-btn" id="img-'+i+'">🖼️ Image</span>' : '';
       var tabPill = r.sheetUrl
         ? '<a class="dep-tab-pill dep-tab-pill-link" href="'+escapeHtml(r.sheetUrl)+'" target="_blank" rel="noopener" title="Open in Google Sheets">'+escapeHtml(r.tabName)+' <span class="dep-pill-arrow">↗️</span></a>'
         : '<span class="dep-tab-pill">'+escapeHtml(r.tabName)+'</span>';
@@ -500,8 +506,10 @@ html[data-theme="light"] {
       // has its own field set (see depositColumns.js's BACKUP_COLUMNS —
       // note it's NOT identical to INR's own Deposit Issue layout either,
       // e.g. it has Remark PIC/Memo/Condition that Issue doesn't).
+      // Slip dropped from this field list (2026-08-25) — now the 🖼️
+      // Image button above instead, same as deposit-issue.html.
       var fieldsHtml = r.country === 'INR'
-        ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)+f('Slip',r.slip)
+        ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)
           +f('PG Staff Name',r.pgStaffName)+f('Slip Amount',r.slipAmount)
           +f('Status',r.status)+f('Follow Up Times',r.followUpTimes)
           +f('Chat IDs',r.chatIds)+f('Agent UPI',r.agentUpi)
@@ -527,7 +535,8 @@ html[data-theme="light"] {
         +'</div></div></div>';
     }).join('');
     data.forEach(function(r,i){
-      if (r.imageLink) gi('img-'+i).addEventListener('click', function(){ openImageLightbox(r.imageLink); });
+      var imageOrSlip = r.imageLink || r.slip;
+      if (imageOrSlip) gi('img-'+i).addEventListener('click', function(){ openImageLightbox(imageOrSlip); });
     });
   }
 
