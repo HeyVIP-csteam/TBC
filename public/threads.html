@@ -153,9 +153,13 @@ html[data-theme="light"] {
       loadList();
       if (isAdmin) loadRecallLog();
       polishEmoji();
+      // Bumped 6s -> 10s (2026-08-25) to cut KV read volume as agent
+      // headcount grew (see the Cloudflare cost estimate this session) —
+      // ~40% fewer refreshOpenThread calls per shift with a barely
+      // noticeable difference in how "live" an open ticket feels.
       pollTimer = setInterval(() => {
         refreshOpenThread();
-      }, 6000);
+      }, 10000);
       listPollTimer = setInterval(() => {
         loadList(document.getElementById("threadSearch").value);
         if (isAdmin) loadRecallLog();
