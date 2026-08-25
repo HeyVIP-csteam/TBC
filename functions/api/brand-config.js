@@ -13,8 +13,24 @@
  *                             other Integration Portal item (tgRoutes/depositSheets/
  *                             bettingLinks).
  *
- * Config is a small JSON blob stored in the R2 bucket (env.SCREENSHOTS_BUCKET)
- * at key "brand-config.json": { [brandId]: { logoUrl, link } }.
+ * Config is a small JSON blob stored in an R2 bucket at key
+ * "brand-config.json": { [brandId]: { logoUrl, link } }.
+ *
+ * FIXED (2026-08-25) — this used to read/write `env.SCREENSHOTS_BUCKET`,
+ * a binding that stopped existing the moment the 3-country merge split
+ * R2 into one bucket PER country (SCREENSHOTS_BUCKET_INR/PKR/PHP — see
+ * wrangler.toml). Every save through the Web Link panel has been
+ * failing with "Server is missing the SCREENSHOTS_BUCKET R2 binding"
+ * since then — there was never a plain SCREENSHOTS_BUCKET to bind.
+ * brand-config.json is genuinely GLOBAL, shared-across-all-brands data
+ * (a brand's Web Link/logo isn't a different thing per country the way
+ * a Deposit Sheet or TG route is) — same shape of problem ACCOUNTS_KV
+ * already had post-merge, and this borrows that exact same fix:
+ * SCREENSHOTS_BUCKET_INR, same as ACCOUNTS_KV temporarily borrows
+ * THREADS_KV_INR (see wrangler.toml's own comment on that binding for
+ * the full reasoning — confirmed-safe key namespace, "brand-config.json"
+ * doesn't collide with anything real screenshots ever get stored under
+ * in that same bucket).
  *
  * Logo image UPLOADING was removed in an earlier session — the file-upload
  * path never actually worked in production, so it was taken out rather than
@@ -91,8 +107,8 @@ export async function onRequestPost(context) {
 }
 
 async function handlePost({ request, env, waitUntil }) {
-  const bucket = env.SCREENSHOTS_BUCKET;
-  if (!bucket) return json({ ok: false, error: "Server is missing the SCREENSHOTS_BUCKET R2 binding." }, 500);
+  const bucket = env.SCREENSHOTS_BUCKET_INR;
+  if (!bucket) return json({ ok: false, error: "Server is missing the SCREENSHOTS_BUCKET_INR R2 binding." }, 500);
 
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
@@ -125,7 +141,7 @@ async function handlePost({ request, env, waitUntil }) {
 }
 
 async function readConfig(env) {
-  const bucket = env.SCREENSHOTS_BUCKET;
+  const bucket = env.SCREENSHOTS_BUCKET_INR;
   let config = {};
   if (bucket) {
     try {
