@@ -559,15 +559,23 @@ html[data-theme="light"] {
       // Slip dropped from this field list (2026-08-25) — it's now the
       // 🖼️ Image button above instead, same as PKR's imageLink; showing
       // it a second time as a plain-text URL here would be redundant.
-      var fieldsHtml = r.country === 'INR'
+      // INR field list REPLACED (2026-08-25) with PER-TAB field sets
+      // (r.issueLayout — see depositColumns.js's 2026-08-25 note on
+      // INR_MAIN_COLS/INR_PENDING_COLS): "Main sheet" rows ('main') and
+      // "Pending case"/"Wait Information" rows ('pending') are
+      // genuinely different data, not just a relabeling — showing one
+      // shared field list for both was the original bug.
+      var fieldsHtml = r.country === 'INR' && r.issueLayout === 'pending'
         ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)
-          +f('PG Staff Name',r.pgStaffName)+f('Slip Amount',r.slipAmount)
-          +f('Status',r.status)+f('Follow Up Times',r.followUpTimes)
-          +f('Chat IDs',r.chatIds)+f('Agent UPI',r.agentUpi)
+          +f('PG Staff Name',r.pgStaffName)+f('PG TID',r.pgTid)+f('Slip Amount',r.slipAmount)
+          +f('Status',r.status)+f('Agent UPI',r.agentUpi)
           +f('PG Remarks',r.pgRemarks)+f('CS Remarks',r.csRemarks)
           +f('Payment Status',r.paymentStatus)+f('Order ID',r.orderId)
-          +f('PIC Name',r.picName)+f('Cart ID',r.cartId)
-          +f('Amount',r.amount)+f('Final Status',r.statusFinal)+f('UPI',r.upi)
+        : r.country === 'INR'
+        ? f('Username',r.username)+f('PG',r.pg)+f('UTR',r.utr)
+          +f('PG Status',r.pgStatus)+f('PG TID',r.pgTid)+f('Slip UTR',r.slipUtr)
+          +f('PG Amount',r.pgAmount)+f('PG Remark',r.pgRemark)+f('TID',r.tid)
+          +f('Slip Amount',r.slipAmount)+f('UPI',r.upi)+f('Payment Status',r.paymentStatus)
         : f('Channel',r.channel)+f('Agent Number',r.agentNumber)
           +f('Username',r.username)+f('Reference',r.reference)
           +f('Cash Out Number',r.cashOutNumber)+f('Amount',r.amount)
@@ -576,6 +584,13 @@ html[data-theme="light"] {
           +f('CS PIC',r.csPIC)+f('Player Contact No',r.playerContactNo)
           +fp('Status CS',r.statusCS)+f('Correct UID',r.correctUid)
           +f('Player\'s Cart ID',r.playersCartId)+fPay('Payment Status',r.paymentStatus);
+      // Edit availability REPLACED (2026-08-25) to depend on r.issueLayout
+      // for INR, not just country — 'main' tab rows have no CS-editable
+      // column (Edit stays off); 'pending' tab rows (Pending case/Wait
+      // Information) have a real CS Remarks column (Edit re-enabled).
+      // PKR unaffected.
+      var editableINR = r.country === 'INR' && r.issueLayout === 'pending';
+      var editBtn = (r.country === 'INR' && !editableINR) ? '' : '<button class="dep-btn-ed" id="deb-'+i+'">Edit</button>';
       return '<div class="dep-rcard"><div class="dep-rcard-h">'
         +tabPill
         +'<span class="dep-rcard-id">'+escapeHtml(r.transaction)+'</span>'
@@ -584,10 +599,11 @@ html[data-theme="light"] {
         +'<div class="dep-rcard-b"><div class="dep-fg">'
         +fieldsHtml
         +'</div></div>'
-        +'<div class="dep-rcard-f"><button class="dep-btn-ed" id="deb-'+i+'">Edit</button></div></div>';
+        +'<div class="dep-rcard-f">'+editBtn+'</div></div>';
     }).join('');
     data.forEach(function(r,i){
-      gi('deb-'+i).addEventListener('click', function(){ openDep(i); });
+      var editableINR = r.country === 'INR' && r.issueLayout === 'pending';
+      if (r.country !== 'INR' || editableINR) gi('deb-'+i).addEventListener('click', function(){ openDep(i); });
       var imageOrSlip = r.imageLink || r.slip;
       if (imageOrSlip) gi('img-'+i).addEventListener('click', function(){ openImageLightbox(imageOrSlip); });
     });
