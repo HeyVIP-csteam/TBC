@@ -47,6 +47,7 @@
 import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, requestIP } from "../../_shared/accounts.js";
 import { getAllIssueSheetOverrides, saveIssueSheetOverride, deleteIssueSheetOverride, promotionModuleId } from "../../_shared/issueSubmissionSheets.js";
 import { BRANDS, MODULE_META, SHEET_LAYOUT, PROMOTION_SHEET_CONFIG } from "../../_shared/routing.js";
+import { MODULES_BY_COUNTRY } from "../../_shared/countryModules.js";
 import { logActivity } from "../../_shared/activityLog.js";
 
 // Every "<brandId>|<promotion>" key in PROMOTION_SHEET_CONFIG, grouped
@@ -88,7 +89,22 @@ async function handleGet({ request, env }) {
   // by the country switcher's current selection, same as every other
   // Integration Portal sub-page (see index.html's getCountryScopedBrands()).
   const brands = brandIds.map((id) => ({ id, name: BRANDS[id].name, country: BRANDS[id].country }));
-  const modules = moduleIds.map((id) => ({ id, name: MODULE_META[id].name, emoji: MODULE_META[id].emoji }));
+  // countries added (2026-08-25) — SHEET_LAYOUT is a flat, global object
+  // (module id -> layout), with no country dimension of its own. That
+  // was fine while every entry in it (qa/genie_issue/account_issue/
+  // risk_issue/daily_report/withdraw_issue) applied to all 3 countries
+  // equally — but deposit_request/bank_issue (added 2026-08-24, PHP-only
+  // per MODULES_BY_COUNTRY) got added to that SAME flat object, and
+  // this response never had a per-module country tag for the frontend
+  // to filter by — so those two PHP-only modules started showing up as
+  // editable rows under every INR/PKR brand too. Same fix, same
+  // reasoning, as moduleCountries() in admin/routes.js (TG Group/
+  // Channel's equivalent bug, fixed one day earlier) — just applied
+  // here as well, since this file never got the same treatment then.
+  const modules = moduleIds.map((id) => ({
+    id, name: MODULE_META[id].name, emoji: MODULE_META[id].emoji,
+    countries: Object.keys(MODULES_BY_COUNTRY).filter((c) => MODULES_BY_COUNTRY[c].includes(id)),
+  }));
 
   const sheets = {};
   for (const brandId of brandIds) {
