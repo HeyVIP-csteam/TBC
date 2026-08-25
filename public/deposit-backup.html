@@ -608,9 +608,19 @@ html[data-theme="light"] {
     try {
       const res = await window.AgentAuth.authFetch('/api/deposit-backup/sheet-links');
       const data = await res.json();
-      if (!data.ok) { gi('depRes').innerHTML = '<div class="dep-state err">'+escapeHtml(data.error||'Failed to load.')+'</div>'; return; }
-      if (!data.brands.length) { gi('depRes').innerHTML = '<div class="dep-state">No brands available.</div>'; return; }
-      gi('depRes').innerHTML = data.brands.map(function (b) {
+      if (!data.ok) { gi('depRes').innerHTML = '<div class="dep-state err">'+escapeHtml(data.error||'Failed to load.')+'</div>'; syncEditPanelHeight(); return; }
+      // FIXED (2026-08-25) — same fix deposit-issue.html's own
+      // showBrandDirectory() already got: the API returns every
+      // country's brands the account can see mixed together, and this
+      // page just never scoped that down to the top country switcher
+      // (see index.html's getCountryScopedBrands() for the pattern
+      // every other Integration Portal page already uses). Selecting
+      // "India (INR)" up top had zero effect on this directory before.
+      var country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+      var isAll = window.AgentCountry && window.AgentCountry.isAll(country);
+      var brands = (!country || isAll) ? data.brands : data.brands.filter(function (b) { return b.country === country; });
+      if (!brands.length) { gi('depRes').innerHTML = '<div class="dep-state">No brands available.</div>'; syncEditPanelHeight(); return; }
+      gi('depRes').innerHTML = brands.map(function (b) {
         var logo = '<img src="'+logoPath(b.id)+'" alt="" class="dep-dir-logo" onerror="this.style.display=\'none\'" />';
         function openLink(label, sheetId) {
           return sheetId
