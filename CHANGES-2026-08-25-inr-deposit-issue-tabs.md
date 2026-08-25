@@ -51,3 +51,16 @@ tab，一开始误以为全表共用一套列结构，实际上：
   Staff Name/PG TID/Slip Amount/Status/Agent UPI/PG Remarks/CS
   Remarks/Payment Status/Order ID），且 Edit 可用、能成功把 CS Remarks
   写回 P 列。
+
+---
+
+## 附加：Deposit Backup "All Brands" 目录未按国家过滤
+
+**背景**：Deposit Issue 的 "All Brands" 目录页早前已经修过按顶部国家切换
+器过滤，但 `deposit-backup.html` 的 `showBrandDirectory()` 从来没同步这
+个修复 —— `/api/deposit-backup/sheet-links` 接口本来就返回账号能看到的
+所有国家的品牌，前端直接全量渲染，选 INR 还是会看到 PKR 的品牌混在一起。
+
+**改的文件**：`public/deposit-backup.html` —— `showBrandDirectory()` 里
+`data.brands` 改成先按 `window.AgentCountry.getCountry()` 过滤（`isAll`
+时不过滤），逻辑跟 `deposit-issue.html` 里的同一处代码保持一致。
