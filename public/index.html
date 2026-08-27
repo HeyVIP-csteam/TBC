@@ -2074,6 +2074,22 @@ html[data-theme="light"] {
       renderBotTokenPanel();
     }
 
+    // Status-only hint under each field — last4 + who/when, NEVER the
+    // real value (the GET /api/admin/bot-token response this reads from
+    // never contains it either — see botTokenOverride.js's write-only
+    // design). Safe to show: a 4-char tail can't be used to reconstruct
+    // the real token/secret, it just answers "is something configured
+    // here right now, and did I just touch it or was it someone else /
+    // a while ago" without requiring a blind re-paste to find out.
+    function botTokenStatusLineHtml(status) {
+      if (!status || !status.configured) {
+        return `<p class="edit-modal-note" style="opacity:0.6; margin-top:6px; font-size:11.5px;">Not set here — using the Cloudflare secret default.</p>`;
+      }
+      const when = status.updatedAt ? new Date(status.updatedAt).toLocaleString() : "unknown time";
+      const who = status.updatedBy ? acctEsc(status.updatedBy) : "unknown";
+      return `<p class="edit-modal-note" style="opacity:0.75; margin-top:6px; font-size:11.5px;">Configured, ending in <code>••${acctEsc(status.last4 || "????")}</code> — set ${acctEsc(when)} by ${who}</p>`;
+    }
+
     function renderBotTokenPanel() {
       const canEdit = canEditAdminSection("botToken");
       // Deliberately NOT groupedBrandListHtml() — that helper groups
@@ -2114,12 +2130,14 @@ html[data-theme="light"] {
                 <div class="tgroute-fields">
                   <input type="password" id="botTokenInput" placeholder="Paste a new Bot Token" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%;" />
                 </div>
+                ${botTokenStatusLineHtml(s)}
               </div>
               <div>
                 <div class="tgroute-mod-name" style="font-size:13px;">Webhook Secret</div>
                 <div class="tgroute-fields">
                   <input type="password" id="webhookSecretInput" placeholder="Paste the webhook secret" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%;" />
                 </div>
+                ${botTokenStatusLineHtml(ws)}
               </div>
             </div>
 
