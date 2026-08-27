@@ -48,6 +48,7 @@
 import { findThreadIdByMessage, appendMessage, editIncomingMessageInThread } from "../../_shared/threads.js";
 import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
 import { resolveWebhookSecretWithOverride } from "../../_shared/botTokenOverride.js";
+import { resolveBotToken } from "../../_shared/routing.js";
 
 export async function onRequestPost({ request, env, params }) {
   const country = (params.country || "").toUpperCase();
@@ -85,19 +86,50 @@ export async function onRequestPost({ request, env, params }) {
     return new Response("ok"); // Always 200 quickly — Telegram retries on non-2xx.
   }
 
+  // FIXED — this used to be resolved implicitly by blanket-skipping every
+  // `msg.from.is_bot` message (see handleUpdate() below for the full
+  // story). Now needed here too so handleUpdate() can tell "our own bot
+  // echoing its own send" apart from "a different bot replying in the
+  // group" — only the former should ever be skipped. A country with no
+  // bot token configured yet (or a bad override) just gets `null` here;
+  // handleUpdate() treats that as "can't identify self, don't guess" and
+  // keeps every message, same as before this fix for that edge case.
+  let ownBotId = null;
   try {
-    await handleUpdate(store, update);
+    const token = await resolveBotToken(env, country);
+    ownBotId = token.split(":")[0] || null;
   } catch {
-    // Swallow errors — a broken reply-sync should never make Telegram think
-    // the webhook is unhealthy and start retrying/backing off.
+    // No token configured for this country — nothing to compare against.
+  }
+
+  try {
+    await handleUpdate(store, update, ownBotId);
+  } catch (e) {
+    // Swallow errors so a broken reply-sync never makes Telegram think the
+    // webhook is unhealthy and start retrying/backing off — but DO log so
+    // this doesn't fail completely silently (e.g. a D1 write failing
+    // because d1-schema.sql was never run against this country's D1
+    // database — see that file's own header). Check the Cloudflare Pages
+    // Functions real-time log (or `wrangler pages deployment tail`) for
+    // this line if replies are going missing with no other symptom.
+    console.error(`[telegram-webhook/${country}] handleUpdate failed:`, e && e.message || e);
   }
   return new Response("ok");
 }
 
-async function handleUpdate(store, update) {
-  if (update.edited_message) return handleEditedMessage(store, update.edited_message);
+async function handleUpdate(store, update, ownBotId) {
+  if (update.edited_message) return handleEditedMessage(store, update.edited_message, ownBotId);
   const msg = update.message;
-  if (!msg || msg.from?.is_bot) return;
+  if (!msg) return;
+  // Only skip a message if it's OUR OWN bot's — i.e. Telegram echoing back
+  // a message this same bot just sent (can happen depending on group/
+  // privacy settings). Every OTHER bot's message (another automation
+  // posting into the same thread, e.g. a "SAVED! TID: ..." confirmation
+  // from a different bot account) is a genuine reply worth recording,
+  // exactly like a human's. FIXED — this used to be
+  // `if (!msg || msg.from?.is_bot) return;`, which dropped ALL bot
+  // authored messages unconditionally, ours and everyone else's alike.
+  if (msg.from?.is_bot && ownBotId && String(msg.from.id) === ownBotId) return;
   const hasContent = msg.text || msg.caption || msg.photo || msg.document || msg.video || msg.voice || msg.sticker;
   if (!hasContent) return; // Nothing worth recording (join/leave/pin service messages, etc.)
 
@@ -144,8 +176,10 @@ async function handleUpdate(store, update) {
   });
 }
 
-async function handleEditedMessage(store, msg) {
-  if (!msg || msg.from?.is_bot) return;
+async function handleEditedMessage(store, msg, ownBotId) {
+  if (!msg) return;
+  // Same self-echo-only skip as handleUpdate() above — see its comment.
+  if (msg.from?.is_bot && ownBotId && String(msg.from.id) === ownBotId) return;
 
   let attachmentFileId = null;
   let attachmentName = null;
