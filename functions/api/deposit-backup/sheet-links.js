@@ -37,6 +37,13 @@ async function handleGet({ request, env }) {
         id: b.id,
         name: b.name,
         thisMonthSheetId: backup.thisMonth ? backup.thisMonth.sheetId : null,
+        // country added (2026-08-27) — same bug/fix as deposit-issue's
+        // sheet-links.js got on 2026-08-25: this response had no country
+        // dimension at all, so deposit-backup.html's showBrandDirectory()
+        // country filter (b.country === country) always failed to match
+        // and any single-country selection showed "No brands available";
+        // only "All Countries" worked because that branch skips the filter.
+        country: b.country,
       };
     })
   );
