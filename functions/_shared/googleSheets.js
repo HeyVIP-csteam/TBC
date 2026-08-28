@@ -248,11 +248,38 @@ function columnLetter(index) {
 }
 
 /**
- * Reads the last non-empty value in a column (e.g. TID) and increments its
- * trailing number, keeping the same prefix and zero-padding width.
+ * Reads a column (e.g. TID) and increments the trailing number of the
+ * relevant existing value, keeping the same prefix and zero-padding width.
  * "BVXXXBB1019" -> "BVXXXBB1020". Used for the TID "generate next" button.
+ *
+ * `expectedPrefix` (optional) — used when several promotions share the
+ * same tab/column (e.g. PHP's Betjili: Birthday Bonus / Free Bet 75 /
+ * ₱100 App Download all write into the same "BJ" tab's column A).
+ *
+ * MERGED (2026-08-28) — this is a SHARED running sequence by design (the
+ * business's own original TID scheme, confirmed against real sheet data:
+ * BJLPHPA330, BJLPHPF331, BJLPHPF332, BJLPHPB333, BJLPHPA334... — one
+ * single counter climbing 330→331→332→333→334 straight through, with only
+ * the LETTER changing to match whichever promotion that particular
+ * submission was). So the number is the tab's global max across ALL rows
+ * regardless of prefix; `expectedPrefix` only decides which LETTER gets
+ * attached to that next number — it does NOT filter rows down to "only
+ * this promotion's own numbers" (an earlier version of this function did
+ * that, which was wrong: it made each promotion keep its own separate
+ * counter instead of sharing the one real sequence, and would have
+ * skipped straight from e.g. BJLPHPB333 to BJLPHPB334 while ignoring that
+ * 353 was already the highest number in use tab-wide).
+ *
+ * When `expectedPrefix` is omitted (INR/PKR — every promotion has its own
+ * DEDICATED tab, one prefix per tab, nothing to switch between): groups
+ * rows by their own detected prefix, picks the prefix with the most rows
+ * (the tab's real, dominant TID format), and returns the highest trailing
+ * number within that group — robust against a stray malformed row or the
+ * physically-last row not actually being the highest-numbered one (e.g.
+ * after a manual sort/paste), without needing any prefix guessed or
+ * hardcoded up front.
  */
-export async function getNextSequenceValue(env, sheetId, tab, column) {
+export async function getNextSequenceValue(env, sheetId, tab, column, expectedPrefix) {
   const token = await getAccessToken(env);
   const range = `${tab}!${column}2:${column}100000`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}`;
@@ -263,14 +290,75 @@ export async function getNextSequenceValue(env, sheetId, tab, column) {
 
   let lastValue = null;
   let lastRowNumber = 1; // header row
-  rows.forEach((row, i) => {
-    if (row[0]) {
-      lastValue = row[0];
-      lastRowNumber = i + 2; // range starts at row 2
-    }
-  });
 
-  if (!lastValue) return { next: null, lastRowNumber, error: "No existing rows found to base the next value on." };
+  if (expectedPrefix) {
+    // Shared-sequence mode: look at EVERY row's trailing number, no
+    // matter which promotion's letter it carries — this tab's whole point
+    // is one running count across all of them. Track the row with the
+    // highest number (and its digit width, for zero-padding), then swap
+    // in `expectedPrefix` (this generation's own promotion) as the letter
+    // on the new value — the historical row's own letter is only used to
+    // report `previous` in the response, never as part of the new TID.
+    let bestNum = -1;
+    let digitWidth = 0;
+    rows.forEach((row, i) => {
+      const val = row[0];
+      if (!val) return;
+      const m = val.match(/(\d+)$/);
+      if (!m) return; // no trailing number on this row at all — ignore, don't let it win
+      const num = parseInt(m[1], 10);
+      if (num > bestNum) {
+        bestNum = num;
+        digitWidth = m[1].length;
+        lastValue = val;
+        lastRowNumber = i + 2; // range starts at row 2
+      }
+    });
+    if (bestNum < 0) {
+      return {
+        next: null,
+        lastRowNumber,
+        error: "No existing rows with a trailing number found in this tab to base the next value on.",
+      };
+    }
+    const nextNum = (bestNum + 1).toString().padStart(digitWidth, "0");
+    return { next: `${expectedPrefix}${nextNum}`, lastRowNumber, previous: lastValue };
+  } else {
+    // Dedicated-tab mode (INR/PKR): derive the tab's own dominant prefix
+    // from its actual data instead of assuming row order == number order.
+    const groups = new Map(); // prefix -> [{ num, numStr, rowNumber, raw }]
+    rows.forEach((row, i) => {
+      const val = row[0];
+      if (!val) return;
+      const m = val.match(/^(.*?)(\d+)$/);
+      if (!m) return; // e.g. a stray text note with no trailing number — ignore, don't let it win
+      const [, prefix, numStr] = m;
+      if (!groups.has(prefix)) groups.set(prefix, []);
+      groups.get(prefix).push({ num: parseInt(numStr, 10), numStr, rowNumber: i + 2, raw: val });
+    });
+
+    if (groups.size === 0) {
+      return { next: null, lastRowNumber, error: "No existing rows found to base the next value on." };
+    }
+
+    // Pick the prefix with the most rows — the tab's real format. Ties
+    // broken by whichever group contains the highest single row number
+    // (most recently active format).
+    let bestGroup = null;
+    for (const list of groups.values()) {
+      if (
+        !bestGroup ||
+        list.length > bestGroup.length ||
+        (list.length === bestGroup.length && Math.max(...list.map((e) => e.num)) > Math.max(...bestGroup.map((e) => e.num)))
+      ) {
+        bestGroup = list;
+      }
+    }
+
+    const best = bestGroup.reduce((a, b) => (b.num > a.num ? b : a));
+    lastValue = best.raw;
+    lastRowNumber = best.rowNumber;
+  }
 
   const match = lastValue.match(/^(.*?)(\d+)$/);
   if (!match) return { next: null, lastRowNumber, error: `Could not find a trailing number in "${lastValue}".` };

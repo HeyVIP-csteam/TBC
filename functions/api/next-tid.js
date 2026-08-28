@@ -33,7 +33,13 @@ async function handleNextTid({ request, env }) {
   }
 
   try {
-    const result = await getNextSequenceValue(env, config.sheetId, config.tab, config.tidColumn || config.startColumn);
+    const result = await getNextSequenceValue(
+      env,
+      config.sheetId,
+      config.tab,
+      config.tidColumn || config.startColumn,
+      config.prefix, // undefined for configs where each promotion has its own dedicated tab — see googleSheets.js
+    );
     if (!result.next) {
       return json({ ok: false, error: result.error || "Could not determine the next value." }, 500);
     }

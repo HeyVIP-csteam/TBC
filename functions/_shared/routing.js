@@ -638,11 +638,27 @@ export const PROMOTION_SHEET_CONFIG = {
   // split by promotion type like the INR sheets are. The "Remarks"
   // column holds the promotion name (see the "promotion" entry in
   // `columns` below) so rows stay distinguishable within that one tab.
+  //
+  // FIXED (2026-08-28) — `prefix` added below. Because these 3
+  // promotions share one tab/column, "generate next TID" used to just
+  // grab the sheet's PHYSICALLY LAST row regardless of which promotion
+  // was selected — so if the last row anyone had entered happened to be
+  // a "₱100 Free Cash On App Download" (BJLPHPA...) row, clicking
+  // Generate for Birthday Bonus or Free Bet 75 still produced a
+  // BJLPHPA... TID. Confirmed in the live sheet: several
+  // "Free Bet Upon Registration 75" rows already have a wrongly-
+  // generated BJLPHPA prefix instead of BJLPHPF. `getNextSequenceValue()`
+  // (functions/_shared/googleSheets.js) now takes this `prefix` and,
+  // when present, finds the highest existing number among rows that
+  // START WITH that specific prefix — ignoring rows belonging to the
+  // other 2 promotions in the same tab — instead of trusting "last row
+  // in the sheet = last row of my promotion".
   "betjili_php|Birthday Bonus": {
     sheetId: "1QCdIPCAxOUDJEyde1qUa0cJgL_ztcDXet8OWKVzU5l0",
     tab: "BJ",
     startColumn: "A",
     tidColumn: "A",
+    prefix: "BJLPHPB",
     columns: ["tid", "dateLongLower", "username", "amount", "screenshotLink", "nid", "promotion", "pic", "brand"],
   },
   "betjili_php|Free Bet Upon Registration 75": {
@@ -650,6 +666,7 @@ export const PROMOTION_SHEET_CONFIG = {
     tab: "BJ",
     startColumn: "A",
     tidColumn: "A",
+    prefix: "BJLPHPF",
     columns: ["tid", "dateLongLower", "username", "amount", "screenshotLink", "nid", "promotion", "pic", "brand"],
   },
   "betjili_php|₱100 Free Cash On App Download": {
@@ -657,6 +674,7 @@ export const PROMOTION_SHEET_CONFIG = {
     tab: "BJ",
     startColumn: "A",
     tidColumn: "A",
+    prefix: "BJLPHPA",
     columns: ["tid", "dateLongLower", "username", "amount", "screenshotLink", "nid", "promotion", "pic", "brand"],
   },
   "betvisa_php|Birthday Bonus": {
@@ -664,6 +682,7 @@ export const PROMOTION_SHEET_CONFIG = {
     tab: "BV",
     startColumn: "A",
     tidColumn: "A",
+    prefix: "BVPHPBB",
     columns: ["tid", "dateLongLower", "username", "amount", "screenshotLink", "nid", "promotion", "pic", "brand"],
   },
 };
