@@ -634,10 +634,23 @@
         sheetPart = `posted to Telegram, but sheet logging failed: ${data.sheetError || "unknown error"}`;
       }
 
+      // 2026-08-29 — createThread() failing used to be completely
+      // invisible here: submit.js swallowed the error and always sent
+      // back ok:true, so the agent saw a plain green "Submitted" no
+      // matter what. The ticket DID reach Telegram in that case, but it
+      // never got a dashboard record (see threads.js/submit.js's own
+      // comments on this) — so it just silently never shows up in TG
+      // Reply Threads / Active / search. Same visible-warning treatment
+      // as the attachment/sheet cases above, so the agent at least knows
+      // to flag it instead of assuming it's fully tracked.
       if (attachmentFailed) {
         status.textContent = `Submitted, but your screenshot(s) did NOT reach Telegram (sent as text-only instead) — ${data.attachmentErrors.join("; ")}. The ticket itself was ${sheetPart} Please re-attach and resend the screenshot(s) separately, or notify the team.`;
         status.className = "status-msg err";
         window.showToast?.("Screenshots failed to send to Telegram — see the note below.", "err");
+      } else if (data.threadTrackingFailed) {
+        status.textContent = `Submitted to Telegram (${sheetPart} — TID/message sent fine), but it could NOT be saved as a trackable thread in the dashboard, so it will NOT show up under TG Reply Threads / Active or in search. Please notify an admin with this ticket's TID so it can be tracked manually.`;
+        status.className = "status-msg err";
+        window.showToast?.("Ticket sent, but not trackable in the dashboard — see the note below.", "err");
       } else {
         status.textContent = `Submitted — ${sheetPart}`;
         status.className = data.sheetAttempted && !data.sheetLogged ? "status-msg err" : "status-msg ok";
