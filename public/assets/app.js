@@ -646,14 +646,46 @@
       if (attachmentFailed) {
         status.textContent = `Submitted, but your screenshot(s) did NOT reach Telegram (sent as text-only instead) — ${data.attachmentErrors.join("; ")}. The ticket itself was ${sheetPart} Please re-attach and resend the screenshot(s) separately, or notify the team.`;
         status.className = "status-msg err";
-        window.showToast?.("Screenshots failed to send to Telegram — see the note below.", "err");
+        // 2026-08-29 (round 2) — this used to just say "see the note
+        // below", same generic-pointer pattern as threadTrackingFailed's
+        // toast right below. Every OTHER showToast("err") call in this
+        // app (accounts-admin.html, announcements.html, index.html — see
+        // their `data.error || "..."` calls) puts the actual server-
+        // reported reason directly in the popup itself, since the popup
+        // is what actually grabs attention — the inline status text is
+        // easy to miss entirely if the agent isn't looking right at the
+        // button. Matching that convention here instead of being the one
+        // inconsistent spot that makes the agent go hunting for the real
+        // reason.
+        window.showToast?.(`Screenshot(s) failed to send to Telegram: ${data.attachmentErrors.join("; ")}`, "err");
       } else if (data.threadTrackingFailed) {
         status.textContent = `Submitted to Telegram (${sheetPart} — TID/message sent fine), but it could NOT be saved as a trackable thread in the dashboard, so it will NOT show up under TG Reply Threads / Active or in search. Please notify an admin with this ticket's TID so it can be tracked manually.`;
         status.className = "status-msg err";
-        window.showToast?.("Ticket sent, but not trackable in the dashboard — see the note below.", "err");
-      } else {
+        // Same reasoning as attachmentFailed's toast just above — show
+        // the real threadTrackingError from submit.js right in the
+        // popup, not a generic pointer to text the agent has to go find.
+        window.showToast?.(`Ticket sent to Telegram, but FAILED to save as a trackable thread — it will NOT show up in TG Reply Threads: ${data.threadTrackingError || "unknown error"}. Notify an admin with this TID.`, "err");
+      } else if (data.sheetAttempted && !data.sheetLogged) {
+        // Sheet write failed (e.g. a transient Google Sheets 503) but the
+        // Telegram message AND the thread record both went through fine.
+        // Used to be inline-text-only — no popup at all — which is why
+        // this specific failure could sail by completely unnoticed unless
+        // the agent happened to be looking at the text under the button.
+        // Same popup treatment as every other failure branch above now.
         status.textContent = `Submitted — ${sheetPart}`;
-        status.className = data.sheetAttempted && !data.sheetLogged ? "status-msg err" : "status-msg ok";
+        status.className = "status-msg err";
+        window.showToast?.(`Posted to Telegram, but sheet logging failed: ${data.sheetError || "unknown error"}`, "err");
+      } else {
+        // Full success — Telegram, sheet (if applicable), and thread
+        // tracking all went through. Every other "Save"-style action in
+        // this app (accounts-admin.html, announcements.html, index.html)
+        // pops a "Save success." / "Delete success." toast on the happy
+        // path too, not just on failure — matching that here instead of
+        // this being the one action in the app where success is silent
+        // unless you're staring at the tiny text under the button.
+        status.textContent = `Submitted — ${sheetPart}`;
+        status.className = "status-msg ok";
+        window.showToast?.("Submitted successfully.", "ok");
       }
       form.reset();
       brandSelect.selectedIndex = 0;
@@ -663,6 +695,13 @@
     } catch (err) {
       status.textContent = err.message || "Something went wrong. Try again.";
       status.className = "status-msg err";
+      // Hard failure — request itself failed or the server returned
+      // ok:false (bad module/brand, Telegram send failed outright, etc).
+      // This is the most important case of all to pop up loudly, since
+      // it means NOTHING went through at all, not even a partial
+      // success — but it was inline-text-only before, same gap as the
+      // other branches above.
+      window.showToast?.(err.message || "Submission failed. Please try again or notify the team.", "err");
     } finally {
       // Don't blindly re-enable — if the TID check above is still
       // flagging a duplicate (the catch just above fired specifically
