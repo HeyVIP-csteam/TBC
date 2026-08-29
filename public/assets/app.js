@@ -1,4 +1,54 @@
 (function () {
+  // FANCY-NAME NORMALIZATION (2026-08-29) — some agents type their
+  // "Reported by" name using stylized Unicode fonts (bold/script/
+  // double-struck letters, fullwidth letters, or letters borrowed from
+  // another script like Cherokee/Cyrillic/Greek purely for their visual
+  // resemblance to Latin letters — the output of any "fancy text
+  // generator"). Confirmed root cause of a real incident: Telegram
+  // Desktop doesn't have glyphs for some of these (Cherokee syllabics in
+  // particular) and renders a blank box, while phones/the web dashboard
+  // display the exact same string fine — so the name looked "missing"
+  // in Telegram specifically, even though the underlying text was never
+  // lost. Two-step fix, applied to the reporter field right before
+  // submit:
+  //   1) Unicode NFKD normalization + strip combining marks. This is
+  //      NOT a guess — Unicode itself defines Mathematical Alphanumeric
+  //      Symbols (bold/italic/script/fraktur/double-struck/sans-serif/
+  //      monospace) and fullwidth letters as compatibility-equivalent
+  //      to plain Latin, so NFKD unwinds them exactly.
+  //   2) A small hand-verified table for the handful of scripts NFKD
+  //      can't touch because they're genuinely different scripts, not
+  //      "the same letter in a fancy font" (Cherokee/Cyrillic/Greek
+  //      look-alikes). Deliberately only covers pairs that are either
+  //      extremely well-established 1:1 visual confusables, or reverse-
+  //      engineered from an actual submitted name (the Cherokee row) —
+  //      we never guess at the rest of an alphabet, since a wrong guess
+  //      would silently turn someone's real name into different letters
+  //      with no obvious sign anything went wrong.
+  const FANCY_CONFUSABLES = {
+    // Cherokee syllabics used as Latin look-alikes — verified against a
+    // real submitted name ("ᎪᏇᎪᏆᏚ" -> "Awais").
+    "\u13AA": "A", "\u13C7": "W", "\u13C6": "I", "\u13DA": "S",
+    // Cyrillic letters visually identical to Latin ones.
+    "\u0410": "A", "\u0412": "B", "\u0415": "E", "\u041A": "K", "\u041C": "M",
+    "\u041D": "H", "\u041E": "O", "\u0420": "P", "\u0421": "C", "\u0422": "T",
+    "\u0425": "X", "\u0430": "a", "\u0435": "e", "\u043E": "o", "\u0440": "p",
+    "\u0441": "c", "\u0443": "y", "\u0445": "x",
+    // Greek letters visually identical to Latin ones.
+    "\u0391": "A", "\u0392": "B", "\u0395": "E", "\u0396": "Z", "\u0397": "H",
+    "\u0399": "I", "\u039A": "K", "\u039C": "M", "\u039D": "N", "\u039F": "O",
+    "\u03A1": "P", "\u03A4": "T", "\u03A5": "Y", "\u03A7": "X",
+  };
+  // Anything left over after both steps (emoji/basic punctuation aside)
+  // is a script we deliberately didn't try to guess-convert.
+  const LEFTOVER_FANCY_RE = /[^\x00-\x7F\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\s]/u;
+  function normalizeFancyName(input) {
+    if (!input) return { value: input, changed: false, hasLeftoverFancy: false };
+    let out = input.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+    out = out.replace(/[\s\S]/g, (ch) => FANCY_CONFUSABLES[ch] || ch);
+    return { value: out, changed: out !== input, hasLeftoverFancy: LEFTOVER_FANCY_RE.test(out) };
+  }
+
   // HARDENED (2026-08-22b) — this entire IIFE builds the form top-to-
   // bottom in one pass (brand dropdown, then dynamic fields like Issue
   // Type, then submit wiring). Under the SPA shell this whole file is
@@ -363,6 +413,27 @@
   const attachFieldWrap = document.getElementById("attachLabel").closest(".field");
   const reporterFieldWrap = document.querySelector('input[name="reporter"]').closest(".field");
   const reporterControl = reporterFieldWrap.querySelector("input,select,textarea");
+
+  // Live preview of the fancy-name normalization described above — shows
+  // the agent what will actually be sent, instead of silently changing
+  // it out from under them at submit time with no explanation.
+  const reporterFancyNote = document.getElementById("reporterFancyNote");
+  if (reporterFancyNote) {
+    reporterControl.addEventListener("input", () => {
+      const { value, changed, hasLeftoverFancy } = normalizeFancyName(reporterControl.value);
+      if (changed) {
+        reporterFancyNote.textContent = `Will be sent as: "${value}" (some clients can't display the special characters you typed)`;
+        reporterFancyNote.className = "field-note ok";
+        reporterFancyNote.style.display = "";
+      } else if (hasLeftoverFancy) {
+        reporterFancyNote.textContent = "This contains special characters that may not display on some devices — consider using plain letters.";
+        reporterFancyNote.className = "field-note err";
+        reporterFancyNote.style.display = "";
+      } else {
+        reporterFancyNote.style.display = "none";
+      }
+    });
+  }
   function refreshConditionals() {
     fields.forEach((f) => {
       if (!f.showIf && (!gateField || f.key === gateField.key)) return; // never gated
@@ -590,7 +661,10 @@
       const payload = {
         module: module.id,
         brand: formData.get("brand"),
-        reporter: formData.get("reporter"),
+        // Normalized here (not just previewed) so a stylized name never
+        // makes it into the Telegram message / stored thread in the
+        // first place — see normalizeFancyName() at the top of this file.
+        reporter: normalizeFancyName(formData.get("reporter")).value,
         fields: submittedFields,
         attachments,
         // A fresh random ID per submit ATTEMPT (not per form/ticket) — lets
