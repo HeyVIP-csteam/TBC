@@ -8,6 +8,7 @@ import { getIssueSheetOverride, resolveWriteTab, promotionModuleId } from "../_s
 import { resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY, buildTicketMessage, buildTitleAndSummary } from "../_shared/messageBuilders.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
 import { resolveThreadsStore } from "../_shared/countries.js";
+import { normalizeFancyName } from "../_shared/textNormalize.js";
 
 // MERGED (2026-08-20) — excludes DEPOSIT_CHANNEL_PSEUDO_MODULES from
 // what a submission can claim as its moduleId. Those ids exist in
@@ -49,7 +50,13 @@ async function handleSubmit({ request, env, waitUntil }) {
     return json({ ok: false, error: "Invalid JSON body." }, 400);
   }
 
-  const { module: moduleId, brand: brandId, reporter, fields, attachments, idempotencyKey } = body || {};
+  const { module: moduleId, brand: brandId, fields, attachments, idempotencyKey } = body || {};
+  // Safety net — the browser form already normalizes this (see app.js),
+  // this just makes sure a stylized name can never reach Telegram/the
+  // stored thread even from a client that skips that step. See
+  // _shared/textNormalize.js for why this doesn't try to convert EVERY
+  // possible fancy-font script, only well-verified ones.
+  const reporter = normalizeFancyName((body || {}).reporter);
 
   if (!VALID_MODULES.includes(moduleId)) {
     return json({ ok: false, error: `Unknown module "${moduleId}".` }, 400);
