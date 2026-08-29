@@ -317,6 +317,8 @@ async function handleSubmit({ request, env, waitUntil }) {
   //     skipped silently until this brand's country's THREADS_KV_<CODE>
   //     is bound (see wrangler.toml).
   let threadId = null;
+  let threadTrackingFailed = false;
+  let threadTrackingError = null;
   if (kv) {
     try {
       const { title, summary } = buildTitleAndSummary({ meta, brand, fieldMap, fields });
@@ -342,9 +344,26 @@ async function handleSubmit({ request, env, waitUntil }) {
         sheetRef,
       });
       threadId = thread.id;
-    } catch {
-      // Non-fatal — the Telegram message and sheet row are already the
-      // source of truth; the reply-tracking record is a nice-to-have.
+    } catch (e) {
+      // 2026-08-29 — this used to be a bare `catch {}`: the Telegram
+      // message and sheet row ARE already the source of truth, so a
+      // failure here was treated as fully non-fatal and thrown away —
+      // including the error itself, with no console.error anywhere.
+      // That's exactly why a TID like this could reach Telegram fine but
+      // never appear in the dashboard, AND the agent submitting it saw a
+      // plain green "Submitted" success with no indication anything had
+      // gone wrong (createThread's error handling in threads.js has its
+      // own logging fix — see that file — this is the other half: the
+      // agent-facing side). Still non-fatal — we do NOT fail the
+      // request, since the ticket genuinely did go out — but now (a) the
+      // real error lands in the Functions log so it's actually
+      // diagnosable, and (b) the response carries enough for the
+      // frontend (see app.js) to show a visible warning instead of
+      // silence, so the agent knows to flag it instead of assuming
+      // everything's fine.
+      threadTrackingFailed = true;
+      threadTrackingError = String(e && e.message || e);
+      console.error(`[submit.js] createThread failed for module=${moduleId} brand=${brandId} tgMessageId=${tgResult.messageId}: ${threadTrackingError}`);
     }
   }
 
@@ -364,6 +383,8 @@ async function handleSubmit({ request, env, waitUntil }) {
     sheetAttempted,
     sheetLogged,
     sheetError,
+    threadTrackingFailed: threadTrackingFailed || undefined,
+    threadTrackingError: threadTrackingFailed ? threadTrackingError : undefined,
     attachmentErrors: attachmentErrors.length ? attachmentErrors : undefined,
     r2Errors: r2Errors.length ? r2Errors : undefined,
   };

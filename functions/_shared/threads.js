@@ -131,7 +131,7 @@ function sleep(ms) {
 // row, 404ing the instant an agent opened it — see saveThread()'s own
 // comment on why the two writes are now sequenced, not parallel, to
 // prevent exactly that).
-async function d1UpsertWithRetry(db, id, json, attempts = 3) {
+async function d1UpsertWithRetry(db, id, json, attempts = 4) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
@@ -142,9 +142,22 @@ async function d1UpsertWithRetry(db, id, json, attempts = 3) {
       return;
     } catch (e) {
       lastErr = e;
-      if (i < attempts - 1) await sleep(150 * (i + 1) + Math.floor(Math.random() * 100));
+      // 2026-08-29 — this used to fail silently: 3 short retries (max
+      // ~600ms total) then throw with NOTHING logged anywhere. Under a
+      // burst of concurrent submissions D1 can return SQLITE_BUSY /
+      // "database is locked" for longer than that window, so the thread
+      // record — and therefore the ticket's visibility in the dashboard
+      // — was being lost with zero trace in the Cloudflare logs. This
+      // console.error is what makes that failure mode show up in
+      // `wrangler pages deployment tail` / the dashboard's Functions log
+      // instead of vanishing. attempts raised 3→4 and backoff extended
+      // (see the sleep() call below) to actually ride out a short D1
+      // contention spike instead of just logging its existence.
+      console.error(`[threads.js] d1UpsertWithRetry FAILED (attempt ${i + 1}/${attempts}) for thread ${id}: ${String(e && e.message || e)}`);
+      if (i < attempts - 1) await sleep(300 * (i + 1) + Math.floor(Math.random() * 200));
     }
   }
+  console.error(`[threads.js] d1UpsertWithRetry gave up after ${attempts} attempts for thread ${id} — this thread will NOT be visible in the dashboard.`);
   throw lastErr;
 }
 
@@ -359,23 +372,47 @@ export async function createThread(store, { module: moduleId, moduleName, icon, 
     forwardedFrom: forwardedFrom || null,
     forwardedTo: [],
   };
-  await Promise.all([
-    saveThread(store, thread),
-    // Every Telegram message_id belonging to the original submission gets
-    // its own reverse-lookup pointer, so a reply to ANY of them (not just
-    // the first/captioned one in a multi-photo album) still resolves back
-    // to this thread. D1-backed country: message_index rows (INSERT OR
-    // IGNORE — createThread only ever inserts brand-new ids, never
-    // updates an existing pointer). KV-only country: msgid: keys, exactly
-    // as before this pass.
-    ...(db
+  // 2026-08-29 — saveThread() (the actual record — what makes this
+  // thread show up in the dashboard at all) is now awaited on its OWN,
+  // separately from the msgid:/message_index reverse-lookup writes
+  // below. It used to be bundled into the same Promise.all as those —
+  // which meant if EITHER side failed, Promise.all rejected as a whole,
+  // createThread() threw, and submit.js's caller-side catch (see
+  // submit.js's createThread() call) discarded the whole thing... even
+  // on runs where saveThread() itself actually succeeded and the thread
+  // WAS written to D1/KV. That's the "Telegram message exists, dashboard
+  // search finds nothing" bug: a transient failure on a message_index
+  // insert (unrelated to whether the thread record itself saved fine)
+  // was enough to make the whole ticket vanish from view. saveThread()
+  // failing is still fatal (thrown below, same as before — no thread
+  // record means nothing to show, full stop); a msgid:/message_index
+  // write failing now only logs and moves on — worst case a reply to
+  // that exact Telegram message doesn't auto-match this thread later,
+  // which is a much smaller problem than the ticket disappearing
+  // entirely.
+  await saveThread(store, thread);
+
+  // Every Telegram message_id belonging to the original submission gets
+  // its own reverse-lookup pointer, so a reply to ANY of them (not just
+  // the first/captioned one in a multi-photo album) still resolves back
+  // to this thread. D1-backed country: message_index rows (INSERT OR
+  // IGNORE — createThread only ever inserts brand-new ids, never
+  // updates an existing pointer). KV-only country: msgid: keys, exactly
+  // as before this pass. allSettled (not all) — see comment above.
+  const indexWrites = await Promise.allSettled(
+    db
       ? allRootIds.map((mid) =>
           db.prepare(`INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`)
             .bind(thread.chatId, mid, thread.id).run()
         )
       : allRootIds.map((mid) => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id))
-    ),
-  ]);
+  );
+  for (const r of indexWrites) {
+    if (r.status === "rejected") {
+      console.error(`[threads.js] createThread: message_index/msgid write failed for thread ${thread.id} (chat ${thread.chatId}): ${String(r.reason && r.reason.message || r.reason)}`);
+    }
+  }
+
   await patchListCache(kv, thread); // instant sidebar visibility — see that function's comment for why
   return thread;
 }
