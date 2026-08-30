@@ -2090,6 +2090,44 @@ html[data-theme="light"] {
       return `<p class="edit-modal-note" style="opacity:0.75; margin-top:6px; font-size:11.5px;">Configured, ending in <code>••${acctEsc(status.last4 || "????")}</code> — set ${acctEsc(when)} by ${who}</p>`;
     }
 
+    // Live webhook health banner (2026-08-30) — this is the piece that
+    // was missing when comparing INR (which "just worked") against
+    // PKR/PHP: a token can be saved successfully while the actual
+    // Telegram-side webhook registration is stale, wrong, or erroring,
+    // and there was previously no way to see that without leaving this
+    // page and running getWebhookInfo by hand. `info` is either the
+    // `webhookInfo` field from the GET response (checked on every page
+    // load, using whichever token is already active) or the `webhook.info`
+    // field returned right after a save — both come from the same
+    // fetchWebhookInfo() shape server-side, so one renderer covers both.
+    function botTokenWebhookInfoHtml(info, expectedUrl) {
+      if (!info) {
+        return `<p class="edit-modal-note" style="opacity:0.6; margin-top:2px; font-size:11.5px;">No bot token configured for this country yet — nothing to check.</p>`;
+      }
+      if (!info.ok) {
+        return `<p class="edit-modal-note err" style="margin-top:2px; font-size:11.5px;">Couldn't read webhook status from Telegram: ${acctEsc(info.error || "unknown error")}</p>`;
+      }
+      const registeredUrl = info.url || "";
+      const urlMatches = registeredUrl === expectedUrl;
+      const urlLine = registeredUrl
+        ? `<code style="font-size:11px; word-break:break-all;">${acctEsc(registeredUrl)}</code>${urlMatches ? "" : ` <span style="color:#f87171;">— does not match the expected ${acctEsc(expectedUrl)}, re-save to fix</span>`}`
+        : `<span style="color:#f87171;">not registered — no webhook URL on file with Telegram at all</span>`;
+      const pending = info.pendingUpdateCount || 0;
+      const pendingLine = pending > 0
+        ? `<span style="color:#fbbf24;">${pending} update${pending === 1 ? "" : "s"} waiting to be delivered</span>`
+        : `<span style="color:#34d399;">0 pending</span>`;
+      const errorLine = info.lastErrorMessage
+        ? `<p class="edit-modal-note" style="opacity:0.85; margin-top:4px; font-size:11.5px; color:#f87171;">Last delivery error (${info.lastErrorDate ? new Date(info.lastErrorDate).toLocaleString() : "unknown time"}): ${acctEsc(info.lastErrorMessage)}</p>`
+        : "";
+      return `
+        <div style="margin-top:2px; margin-bottom:12px; padding:10px 12px; border:1px solid var(--panel-border); border-radius:8px; background:rgba(255,255,255,0.03);">
+          <div class="edit-modal-note" style="font-size:11.5px; margin-bottom:4px;"><strong>Webhook status (live from Telegram):</strong></div>
+          <p class="edit-modal-note" style="opacity:0.85; margin:2px 0; font-size:11.5px;">Registered URL: ${urlLine}</p>
+          <p class="edit-modal-note" style="opacity:0.85; margin:2px 0; font-size:11.5px;">${pendingLine}</p>
+          ${errorLine}
+        </div>`;
+    }
+
     function renderBotTokenPanel() {
       const canEdit = canEditAdminSection("botToken");
       // Deliberately NOT groupedBrandListHtml() — that helper groups
@@ -2121,9 +2159,11 @@ html[data-theme="light"] {
         const canEditThis = canEdit;
         const canClear = canEditThis && (s.configured || ws.configured);
 
+        const expectedWebhookUrl = `${location.origin}/api/telegram-webhook/${country.toLowerCase()}`;
         rightPanelHtml = `
           <div class="tgroute-row" data-country="${acctEsc(country)}">
             <div class="tgroute-mod-name" style="margin-bottom:14px;">🔐 ${acctEsc(countryName)} (${acctEsc(country)})</div>
+            ${botTokenWebhookInfoHtml(d.webhookInfo, expectedWebhookUrl)}
             <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px;">
               <div>
                 <div class="tgroute-mod-name" style="font-size:13px;">Bot Token</div>
@@ -2190,9 +2230,20 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
-      acctBotTokenData = data;
+      // webhook.info (from the same fetchWebhookInfo() call server-side
+      // that renders the live status banner) tells us whether the
+      // registration that JUST happened is actually clean — not just
+      // that setWebhook itself didn't error. Surface a pending-error
+      // straight away instead of making the person re-open the panel to
+      // notice the banner turned red.
+      acctBotTokenData = data.webhook && data.webhook.info ? { ...data, webhookInfo: data.webhook.info } : data;
       if (data.webhook && data.webhook.ok) {
-        setAcctNote("Saved — webhook re-registered automatically.", "ok");
+        const info = data.webhook.info;
+        if (info && info.ok && info.lastErrorMessage) {
+          setAcctNote(`Saved and webhook re-registered, but Telegram reports a delivery error: ${info.lastErrorMessage} — see the status banner below.`, "err");
+        } else {
+          setAcctNote("Saved — webhook re-registered automatically and confirmed healthy.", "ok");
+        }
       } else {
         setAcctNote(`Saved, but webhook registration failed: ${(data.webhook && data.webhook.error) || "unknown error"} — register it manually (see telegram-webhook/[country].js).`, "err");
       }
@@ -2209,9 +2260,14 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Failed.", "err");
-      acctBotTokenData = data;
+      acctBotTokenData = data.webhook && data.webhook.info ? { ...data, webhookInfo: data.webhook.info } : data;
       if (data.webhook && data.webhook.ok) {
-        setAcctNote("Reverted to the Cloudflare secret defaults — webhook re-registered automatically.", "ok");
+        const info = data.webhook.info;
+        if (info && info.ok && info.lastErrorMessage) {
+          setAcctNote(`Reverted and webhook re-registered, but Telegram reports a delivery error: ${info.lastErrorMessage} — see the status banner below.`, "err");
+        } else {
+          setAcctNote("Reverted to the Cloudflare secret defaults — webhook re-registered automatically and confirmed healthy.", "ok");
+        }
       } else {
         setAcctNote(`Reverted, but webhook registration failed: ${(data.webhook && data.webhook.error) || "unknown error"} — register it manually.`, "err");
       }
