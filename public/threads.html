@@ -1877,12 +1877,37 @@ html[data-theme="light"] {
     }
 
 
+    // 2026-08-30 — self-healing against "double-escaped" stored text
+    // (e.g. a ticket's title showing literally as "Forget Username
+    // &amp; Gmail" instead of "Forget Username & Gmail" — confirmed via
+    // the actual Telegram message for that same ticket being clean, so
+    // the extra escaping happened somewhere between storage and this
+    // render, not in the data everyone else sees). A real player/agent-
+    // typed field value should NEVER legitimately contain literal HTML-
+    // entity text like "&amp;", "&lt;", "&gt;", "&quot;", or "&#39;" —
+    // that exact substring only shows up when something already ran
+    // escapeHtml() on it once before it got here. Stripping that back to
+    // the plain character BEFORE the one escapeHtml() pass below means
+    // clean data is untouched (nothing to decode → no-op), and anything
+    // that picked up one extra layer of escaping anywhere upstream —
+    // this specific historical ticket, or any other module/Topic, past
+    // or future — displays correctly here without needing to hunt down
+    // and patch every possible write path individually.
+    function decodeKnownHtmlEntities(str) {
+      return String(str == null ? "" : str)
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#0*39;/g, "'");
+    }
+
     function escapeAttr(str) {
       return escapeHtml(str).replace(/"/g, "&quot;");
     }
 
     function escapeHtml(str) {
-      return String(str == null ? "" : str)
+      return decodeKnownHtmlEntities(str)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
