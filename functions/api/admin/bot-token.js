@@ -17,7 +17,7 @@
  * canSeeAdminSection/canEditAdminSection is what actually enforces the
  * real Owner-only-until-delegated restriction on top of that.
  *
- *   GET  ?country=INR -> { ok: true, country, configured, last4, updatedAt, updatedBy }
+ *   GET  ?country=INR -> { ok: true, country, configured, last4, updatedAt, updatedBy, webhookInfo: {...} }
  *   POST { action: "save", country, token } -> { ok: true, country, configured, last4, updatedAt, updatedBy, webhook: {...} }
  *   POST { action: "clear", country } -> { ok: true, country, configured: false, webhook: {...} }
  *
@@ -38,6 +38,28 @@
  * registration does NOT fail the whole request (the token itself is
  * still saved either way) — it's reported back in the `webhook` field
  * so the UI can tell the person to register it by hand instead.
+ *
+ * MERGED (2026-08-30) — real incident this fixes: `setWebhook` itself
+ * can report `{ ok: true }` while the registration still isn't in the
+ * state you'd expect (wrong URL left over from an old deploy, an
+ * unrelated `last_error_message` from Telegram's last delivery
+ * attempt, etc.) — "the save call succeeded" and "the webhook is
+ * actually healthy right now" are two different facts, and this panel
+ * used to only ever show the first one. This is exactly what made it
+ * hard to tell, across INR vs PKR vs PHP, which of the three bots
+ * actually has a live webhook — INR's had been registered a long time
+ * ago (outside this panel, back when it was still a manual curl
+ * command per the README), so INR "just worked" while PKR/PHP's
+ * tokens were added later without anyone confirming the registration
+ * step actually completed. `fetchWebhookInfo()` below calls Telegram's
+ * own `getWebhookInfo` (read-only, does not change anything) right
+ * after every `setWebhook` call, and its result now rides along as
+ * `webhook.info` in the POST response AND as top-level `webhookInfo`
+ * in the GET response (using whichever token is currently active,
+ * without ever exposing that token itself) — so the panel can show,
+ * per country, the actual registered URL plus Telegram's own
+ * `pending_update_count`/`last_error_message`/`last_error_date`
+ * instead of just "saved successfully."
  */
 import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, canSeeCountry, requestIP } from "../../_shared/accounts.js";
 import { getBotTokenStatus, saveBotTokenOverride, clearBotTokenOverride, getWebhookSecretStatus, saveWebhookSecretOverride, clearWebhookSecretOverride, resolveWebhookSecretWithOverride } from "../../_shared/botTokenOverride.js";
@@ -78,7 +100,45 @@ async function autoRegisterWebhook(env, request, country, token) {
     if (!data || !data.ok) {
       return { ok: false, error: (data && data.description) || "Telegram rejected the webhook registration." };
     }
-    return { ok: true, url: webhookUrl };
+    // setWebhook returning ok:true only means Telegram accepted the call —
+    // it does NOT guarantee delivery is actually healthy (e.g. Telegram
+    // can still be sitting on a stale last_error_message from a moment
+    // ago). Immediately read it back with the read-only getWebhookInfo
+    // call so the caller gets the real, current state instead of just
+    // "the request didn't error." Never lets a getWebhookInfo hiccup turn
+    // a genuinely successful setWebhook into a reported failure — this
+    // extra check is purely additive information.
+    const info = await fetchWebhookInfo(token);
+    return { ok: true, url: webhookUrl, info };
+  } catch (e) {
+    return { ok: false, error: `Network error reaching Telegram: ${String((e && e.message) || e)}` };
+  }
+}
+
+// Read-only — never changes what Telegram has registered, just reports
+// it. Used both right after autoRegisterWebhook()'s own setWebhook call
+// (to confirm it actually stuck) and from handleGet() (so the panel can
+// show a country's live webhook health any time the page loads, not
+// only right after a save). Returns `{ ok: false, error }` on any
+// failure instead of throwing, so a Telegram/network hiccup here never
+// breaks the surrounding save/status flow that called it.
+async function fetchWebhookInfo(token) {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    const data = await res.json().catch(() => null);
+    if (!data || !data.ok || !data.result) {
+      return { ok: false, error: (data && data.description) || "Telegram didn't return webhook info." };
+    }
+    const r = data.result;
+    return {
+      ok: true,
+      url: r.url || null,
+      hasCustomCertificate: !!r.has_custom_certificate,
+      pendingUpdateCount: r.pending_update_count || 0,
+      lastErrorDate: r.last_error_date ? new Date(r.last_error_date * 1000).toISOString() : null,
+      lastErrorMessage: r.last_error_message || null,
+      maxConnections: r.max_connections ?? null,
+    };
   } catch (e) {
     return { ok: false, error: `Network error reaching Telegram: ${String((e && e.message) || e)}` };
   }
@@ -105,7 +165,25 @@ async function handleGet({ request, env }) {
 
   const status = await getBotTokenStatus(env, country);
   const webhookSecretStatus = await getWebhookSecretStatus(env, country);
-  return json({ ok: true, country, ...status, webhookSecret: webhookSecretStatus });
+
+  // Live health check (2026-08-30) — uses whichever token is currently
+  // ACTIVE for this country (the KV override if one's set, else the
+  // Cloudflare env secret) purely server-side to call Telegram's
+  // read-only getWebhookInfo; the token value itself never leaves this
+  // function, only the derived status below does. If there's no token
+  // configured anywhere for this country yet, resolveBotToken() throws
+  // and webhookInfo is just omitted (nothing to check) rather than
+  // showing a confusing error for a country that was never set up.
+  let webhookInfo = null;
+  try {
+    const activeToken = await resolveBotToken(env, country);
+    webhookInfo = await fetchWebhookInfo(activeToken);
+  } catch {
+    // No token configured for this country at all — leave webhookInfo
+    // null, the UI already has a "Not set here" state for that case.
+  }
+
+  return json({ ok: true, country, ...status, webhookSecret: webhookSecretStatus, webhookInfo });
 }
 
 export async function onRequestPost(context) {
