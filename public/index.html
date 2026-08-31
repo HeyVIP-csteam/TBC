@@ -1249,25 +1249,22 @@ html[data-theme="light"] {
       };
 
       if (isSecuritySelected) {
-        // AS OF 2026-08-31: one row per scope — "Default" (the shared
-        // fallback, used for accounts with no single country) plus one
-        // row per country (used by that country's own accounts, and
-        // sent via that SAME country's own Telegram bot — see
-        // login.js's resolveSecurityAlertTargets() for the full
-        // routing rule). A country row that's never been saved shows
-        // whatever Default currently resolves to (tagged "default",
-        // not "custom") so it's obvious it's just inheriting for now.
-        const scopes = [{ id: "default", label: "Default (fallback)" }]
-          .concat((typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []).map((code) => ({
-            id: code,
-            label: (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? `${COUNTRIES[code].name} (${code})` : code,
-          })));
+        // AS OF 2026-08-31: one row per country, no shared "Default"
+        // fallback anymore — each row is fully independent (used by
+        // that country's own accounts, sent via that SAME country's
+        // own Telegram bot — see login.js's resolveSecurityAlertTargets()
+        // for the full routing rule). A row that's never been saved
+        // shows genuinely empty, not an inherited value.
+        const scopes = (typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []).map((code) => ({
+          id: code,
+          label: (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? `${COUNTRIES[code].name} (${code})` : code,
+        }));
         const rowsHtml = scopes.map((s) => {
           const r = (securityAlerts && securityAlerts[s.id]) || { chatId: "", topicId: null, isOverride: false };
           return `
             <div class="tgroute-row" data-module="${SECURITY_MODULE_ID}" data-scope="${acctEsc(s.id)}">
               <div class="tgroute-mod-name">🔒 ${acctEsc(s.label)}
-                <span class="route-tag${r.isOverride ? " custom" : ""}">${r.isOverride ? "custom" : "default"}</span>
+                <span class="route-tag${r.isOverride ? " custom" : ""}">${r.isOverride ? "custom" : "not set"}</span>
               </div>
               <div class="tgroute-fields">
                 <input type="text" class="tgroute-chatid" placeholder="Chat ID e.g. -1001234567890" value="${acctEsc(r.chatId)}" ${roAttr} autocomplete="off" />
@@ -1286,7 +1283,7 @@ html[data-theme="light"] {
           </div>
           <hr class="tgroute-divider" />
           ${canEditRoutes ? "" : '<p class="edit-modal-note">View only.</p>'}
-          <p class="edit-modal-note tgroute-footnote">Where login sends a Telegram alert when a correct password is used from an IP that isn't office-whitelisted, or when an account gets auto-locked (5 failed attempts in an hour). Login stays blocked exactly the same either way; this only controls where the heads-up message goes. A logging-in account uses ITS OWN country's row below (sent via that country's own Telegram bot); an account spanning multiple countries gets a message in every one of those rows; an account with no country assigned, or a country row that's never been configured, falls back to "Default". "Default" itself falls back to the SECURITY_ALERTS_CHAT_ID Cloudflare secret if never saved here (empty = no alerts sent yet for that scope).</p>`;
+          <p class="edit-modal-note tgroute-footnote">Where login sends a Telegram alert when a correct password is used from an IP that isn't office-whitelisted, or when an account gets auto-locked (5 failed attempts in an hour). Login stays blocked exactly the same either way; this only controls where the heads-up message goes. A logging-in account uses ITS OWN country's row below (sent via that country's own Telegram bot); an account spanning multiple countries gets a message in every one of those rows. Every account is bound to at least one country, so every row below needs its own chatId configured — a row left blank simply sends no alert for that country until it's set.</p>`;
         restoreScroll();
         acctBody.querySelectorAll(".tgroute-brand").forEach((el) => {
           el.addEventListener("click", () => {
@@ -1371,7 +1368,7 @@ html[data-theme="light"] {
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
       if (acctRoutesSelectedBrand === SECURITY_ROW_ID) {
         if (!acctRoutesData.securityAlerts) acctRoutesData.securityAlerts = {};
-        acctRoutesData.securityAlerts[scope || "default"] = data.route;
+        acctRoutesData.securityAlerts[scope] = data.route;
       } else {
         acctRoutesData.routes[`${acctRoutesSelectedBrand}|${moduleId}`] = data.route;
       }
@@ -1391,16 +1388,7 @@ html[data-theme="light"] {
       if (!data.ok) return setAcctNote(data.error || "Reset failed.", "err");
       if (acctRoutesSelectedBrand === SECURITY_ROW_ID) {
         if (!acctRoutesData.securityAlerts) acctRoutesData.securityAlerts = {};
-        acctRoutesData.securityAlerts[scope || "default"] = data.route;
-        // A reset country row (not "default" itself) now inherits from
-        // Default again — refresh every other un-overridden country row
-        // too so they visibly reflect the (possibly changed) fallback
-        // without needing a manual reload.
-        if (scope === "default") {
-          const fresh = await window.AgentAuth.authFetch("/api/admin/routes");
-          const freshData = await fresh.json();
-          if (freshData.ok) acctRoutesData.securityAlerts = freshData.securityAlerts;
-        }
+        acctRoutesData.securityAlerts[scope] = data.route; // no shared fallback to cascade-refresh anymore — each row is independent
       } else {
         acctRoutesData.routes[`${acctRoutesSelectedBrand}|${moduleId}`] = data.route;
       }
