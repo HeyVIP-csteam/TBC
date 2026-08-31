@@ -28,24 +28,29 @@
  * auto-lock notices) go, live from the browser, instead of needing a
  * Cloudflare secret + redeploy.
  *
- * AS OF 2026-08-31 there isn't just one Security Alerts row — there's a
- * "Default" row (scope "default", the original single global row, kept
- * at its original un-suffixed KV key so any deployment that already
- * configured it needs zero migration) PLUS one row per country in
- * COUNTRY_CODES (scope "INR"/"PKR"/"PHP"). Which row an actual login
- * alert uses is decided per-account at send time by login.js's
- * resolveSecurityAlertTargets() — this admin page only edits WHERE
- * each scope's messages go, not the routing decision itself. Each
- * country's row falls back to the shared Default row if that country's
- * own row has never been saved (same "override, then default underneath"
- * layering as every other row on this page), and the Default row itself
- * falls back to the SECURITY_ALERTS_CHAT_ID / SECURITY_ALERTS_TOPIC_ID
- * env vars when nothing's ever been saved for it either.
+ * AS OF 2026-08-31 there's one Security Alerts row PER COUNTRY in
+ * COUNTRY_CODES (scope "INR"/"PKR"/"PHP") — no more shared "Default"
+ * row. Every real account is bound to at least one country, and which
+ * country/countries' row(s) an actual login alert uses is decided
+ * per-account at send time by login.js's resolveSecurityAlertTargets()
+ * — this admin page only edits WHERE each country's messages go, not
+ * the routing decision itself. A country whose row has never been
+ * saved reads back empty (no inherited value from anywhere) — it's a
+ * genuinely independent row, not a fallback chain.
  *
- * `securityAlerts` in the GET response is therefore a map keyed by
- * scope — `{ default: {...}, INR: {...}, PKR: {...}, PHP: {...} }` —
- * each value shaped exactly like a normal route ({chatId, topicId,
- * isOverride}). POST takes an extra `scope` field alongside the usual
+ * REMOVED (2026-08-31, direct business-owner request): the original
+ * shared "Default (fallback)" row. On first GET after this shipped,
+ * handleGet() below calls migrateLegacySecurityAlertsRoute() once,
+ * which seeds any country that doesn't yet have its own row with
+ * whatever that old shared row used to hold — pure one-time migration,
+ * not an ongoing fallback (see _shared/routes.js for the detail); a
+ * country configured (or reset) since then is never touched by it
+ * again.
+ *
+ * `securityAlerts` in the GET response is a map keyed by country code
+ * — `{ INR: {...}, PKR: {...}, PHP: {...} }` — each value shaped
+ * exactly like a normal route ({chatId, topicId, isOverride}). POST
+ * takes an extra `scope` field (a country code) alongside the usual
  * brandId="_security"/moduleId="alerts" pair to say which row it's
  * editing.
  *
@@ -61,7 +66,7 @@
  * at submission time.
  */
 import { authenticateStaff, ROLE_RANK, canSeeAdminSection, canEditAdminSection, requestIP } from "../../_shared/accounts.js";
-import { getAllRouteOverrides, saveRouteOverride, deleteRouteOverride, getAllSecurityAlertsRoutes, getSecurityAlertsRoute, saveSecurityAlertsRoute, deleteSecurityAlertsRoute } from "../../_shared/routes.js";
+import { getAllRouteOverrides, saveRouteOverride, deleteRouteOverride, getAllSecurityAlertsRoutes, saveSecurityAlertsRoute, deleteSecurityAlertsRoute, migrateLegacySecurityAlertsRoute } from "../../_shared/routes.js";
 import { BRANDS, MODULE_META, DEPOSIT_CHANNEL_PSEUDO_MODULES } from "../../_shared/routing.js";
 import { MODULES_BY_COUNTRY } from "../../_shared/countryModules.js";
 import { COUNTRY_CODES } from "../../_shared/countries.js";
@@ -144,22 +149,19 @@ async function handleGet({ request, env }) {
     }
   }
 
-  // One row per scope: "default" (the original global fallback) plus
-  // one per country — see this file's header for why a country row
-  // that's never been saved reads back through to Default rather than
-  // straight to the env vars (Default is the shared fallback for BOTH
-  // "no country" accounts AND any country whose own row is unset).
+  // One row per country — no shared "Default" fallback anymore (see
+  // this file's header). migrateLegacySecurityAlertsRoute() is a fast,
+  // idempotent no-op once every country has its own row (or there was
+  // never a legacy row to migrate from), so it's cheap to call on
+  // every GET rather than needing a separate one-time script.
+  await migrateLegacySecurityAlertsRoute(env, COUNTRY_CODES);
   const securityOverrides = await getAllSecurityAlertsRoutes(env, COUNTRY_CODES);
-  const defaultRoute = securityOverrides.default
-    ? { chatId: securityOverrides.default.chatId, topicId: securityOverrides.default.topicId, isOverride: true }
-    : { chatId: env.SECURITY_ALERTS_CHAT_ID || "", topicId: env.SECURITY_ALERTS_TOPIC_ID || null, isOverride: false };
-
-  const securityAlerts = { default: defaultRoute };
+  const securityAlerts = {};
   for (const code of COUNTRY_CODES) {
     const override = securityOverrides[code];
     securityAlerts[code] = override
       ? { chatId: override.chatId, topicId: override.topicId, isOverride: true }
-      : { ...defaultRoute, isOverride: false }; // falls through to Default until this country's own row is saved
+      : { chatId: "", topicId: null, isOverride: false };
   }
 
   return json({ ok: true, brands, modules, routes, securityAlerts });
@@ -199,14 +201,13 @@ async function handlePost({ request, env, waitUntil }) {
     if (!BRANDS[brandId]) return json({ ok: false, error: `Unknown brand "${brandId}".` }, 400);
     if (!MODULE_META[moduleId]) return json({ ok: false, error: `Unknown module "${moduleId}".` }, 400);
   }
-  // Security row edits must name which scope they're touching —
-  // "default" or one of COUNTRY_CODES — everything else on this page
-  // has no such concept (a real brand/module pair is never scoped by
-  // country beyond what the brand itself already implies).
-  const securityScope = scope || "default";
-  if (isSecurityRow && securityScope !== "default" && !COUNTRY_CODES.includes(securityScope)) {
-    return json({ ok: false, error: `Unknown security-alerts scope "${securityScope}".` }, 400);
+  // Security row edits must name which country row they're touching —
+  // there's no more "default" scope. A real brand/module pair is never
+  // scoped by country beyond what the brand itself already implies.
+  if (isSecurityRow && !COUNTRY_CODES.includes(scope)) {
+    return json({ ok: false, error: `Unknown security-alerts scope "${scope}".` }, 400);
   }
+  const securityScope = scope;
 
   if (body.action === "save") {
     try {
@@ -214,7 +215,7 @@ async function handlePost({ request, env, waitUntil }) {
         ? await saveSecurityAlertsRoute(env, securityScope, { chatId: body.chatId, topicId: body.topicId })
         : await saveRouteOverride(env, brandId, moduleId, { chatId: body.chatId, topicId: body.topicId });
       const label = isSecurityRow
-        ? `Security Alerts — ${securityScope === "default" ? "Default" : securityScope}`
+        ? `Security Alerts — ${securityScope}`
         : `${BRANDS[brandId]?.name || brandId} / ${MODULE_META[moduleId]?.name || moduleId}`;
       log({ action: "TG Route Changed", detail: `${label} → chat ${body.chatId}${body.topicId ? `, topic ${body.topicId}` : ""}` });
       return json({ ok: true, route: { ...saved, isOverride: true } });
@@ -227,22 +228,13 @@ async function handlePost({ request, env, waitUntil }) {
     if (isSecurityRow) await deleteSecurityAlertsRoute(env, securityScope);
     else await deleteRouteOverride(env, brandId, moduleId);
     const label = isSecurityRow
-      ? `Security Alerts — ${securityScope === "default" ? "Default" : securityScope}`
+      ? `Security Alerts — ${securityScope}`
       : `${BRANDS[brandId]?.name || brandId} / ${MODULE_META[moduleId]?.name || moduleId}`;
     log({ action: "TG Route Reset", detail: `${label} reverted to default` });
     if (isSecurityRow) {
-      if (securityScope === "default") {
-        return json({ ok: true, route: { chatId: env.SECURITY_ALERTS_CHAT_ID || "", topicId: env.SECURITY_ALERTS_TOPIC_ID || null, isOverride: false } });
-      }
-      // A country row resets back through to the shared Default row,
-      // not straight to the env vars — see this file's header.
-      const fallback = await getSecurityAlertsRoute(env, "default");
-      return json({
-        ok: true,
-        route: fallback
-          ? { chatId: fallback.chatId, topicId: fallback.topicId, isOverride: false }
-          : { chatId: env.SECURITY_ALERTS_CHAT_ID || "", topicId: env.SECURITY_ALERTS_TOPIC_ID || null, isOverride: false },
-      });
+      // No fallback chain anymore — a reset country row goes back to
+      // genuinely empty, not to any shared default.
+      return json({ ok: true, route: { chatId: "", topicId: null, isOverride: false } });
     }
     const fallback = BRANDS[brandId].telegram[moduleId] || BRANDS[brandId].telegram.default || {};
     return json({ ok: true, route: { chatId: fallback.chatId || "", topicId: fallback.topicId ?? null, isOverride: false } });

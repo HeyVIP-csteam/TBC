@@ -122,47 +122,53 @@ export async function deleteRouteOverride(env, brandId, moduleId) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Security Alerts row(s) (admin/routes.js's "_security"/"alerts"*
-// pseudo brand+module family) — NOT tied to any one brand, but AS OF
-// 2026-08-31 CAN be scoped per-country: a login-security alert
-// (unrecognized IP, account auto-lock) is routed to the group(s) for
-// whichever country/countries the logging-in account is scoped to (see
-// login.js's resolveSecurityAlertTargets()), falling back to one
-// shared "default" row for accounts with no single country (multi-
-// country / "all" accounts fan out to every one of their countries'
-// rows instead — see that same function). Still lives in the shared
-// ACCOUNTS_KV (not a per-country THREADS_KV) because the thing being
-// scoped here is "which account is logging in," not "which country's
-// ticket/thread data this is" — see the architecture note in
-// countries.js for that distinction.
+// Security Alerts rows (admin/routes.js's "_security"/"alerts" pseudo
+// brand+module family) — NOT tied to any one brand. A login-security
+// alert (unrecognized IP, account auto-lock) is routed to the group(s)
+// for whichever country/countries the logging-in account is scoped to
+// (see login.js's resolveSecurityAlertTargets()) — every real account
+// is always bound to at least one country, so there is no "no country"
+// case to fall back from. Still lives in the shared ACCOUNTS_KV (not a
+// per-country THREADS_KV) because the thing being scoped here is
+// "which account is logging in," not "which country's ticket/thread
+// data this is" — see the architecture note in countries.js for that
+// distinction.
 //
-// `scope` is "default" (the original global fallback row — kept at
-// its original un-suffixed key so every pre-existing deployment's
-// already-saved chatId/topicId keeps working with zero migration) or
-// a country code like "PKR" (its own suffixed key, only ever written
-// once someone actually configures that country's row from the admin
-// UI — reads back null/unconfigured until then, same as any other
-// override).
+// REMOVED (2026-08-31, direct business-owner request): the original
+// shared "Default (fallback)" row that every unconfigured country
+// silently inherited from. Each country's row is now a genuinely
+// independent, explicitly-saved override with NO inheritance chain —
+// a country whose row has never been (re-)saved simply sends nothing
+// (see sendTelegramMessage()'s own "no chatId -> skip" guard) until an
+// admin configures it, rather than quietly reusing another country's
+// group. `scope` is always a real country code now (e.g. "PKR"); the
+// legacy un-suffixed key ("route:_security:alerts", what the old
+// single "Default" row used to read/write) is ONLY ever touched by
+// migrateLegacySecurityAlertsRoute() below, as a one-time seed so
+// countries that were previously working via that shared row don't
+// suddenly go silent the moment this shipped — it is never read at
+// send time by login.js.
 // ══════════════════════════════════════════════════════════════════
+const LEGACY_SECURITY_ALERTS_KEY = "route:_security:alerts";
+
 function securityAlertsKey(scope) {
-  return scope && scope !== "default" ? `route:_security:alerts:${scope}` : "route:_security:alerts";
+  return `route:_security:alerts:${scope}`;
 }
 
-export async function getSecurityAlertsRoute(env, scope = "default") {
+export async function getSecurityAlertsRoute(env, scope) {
   if (!env.ACCOUNTS_KV) return null;
   const raw = await env.ACCOUNTS_KV.get(securityAlertsKey(scope));
   return parseRoute(raw);
 }
 
-// Batch read of every scope (default + each given country code) in one
-// parallel round-trip — used by the admin GET endpoint to render all
-// rows at once instead of one request per row.
+// Batch read of every country's row in one parallel round-trip — used
+// by the admin GET endpoint to render all rows at once instead of one
+// request per row.
 export async function getAllSecurityAlertsRoutes(env, countryCodes) {
   if (!env.ACCOUNTS_KV) return {};
-  const scopes = ["default", ...countryCodes];
-  const raws = await Promise.all(scopes.map((s) => env.ACCOUNTS_KV.get(securityAlertsKey(s))));
+  const raws = await Promise.all(countryCodes.map((c) => env.ACCOUNTS_KV.get(securityAlertsKey(c))));
   const result = {};
-  scopes.forEach((s, i) => { result[s] = parseRoute(raws[i]); });
+  countryCodes.forEach((c, i) => { result[c] = parseRoute(raws[i]); });
   return result;
 }
 
@@ -174,6 +180,27 @@ export async function saveSecurityAlertsRoute(env, scope, { chatId, topicId }) {
   const value = { chatId: trimmedChatId, topicId: Number.isFinite(trimmedTopic) ? trimmedTopic : null };
   await env.ACCOUNTS_KV.put(securityAlertsKey(scope), JSON.stringify(value));
   return value;
+}
+
+// One-time, idempotent seed: for any country in `countryCodes` that
+// doesn't have its OWN row saved yet, copies the old shared "Default"
+// row's value into it (as a real, standalone, explicitly-saved
+// per-country override — not a live fallback link) so nothing that
+// was already working goes silent the moment the shared-fallback
+// concept was removed. Safe to call on every admin GET — countries
+// that already have their own row (whether migrated before, or
+// deliberately configured/reset since) are left untouched; once every
+// country has its own row (or the legacy key is gone/empty), this
+// becomes a fast no-op forever.
+export async function migrateLegacySecurityAlertsRoute(env, countryCodes) {
+  if (!env.ACCOUNTS_KV) return;
+  const legacyRaw = await env.ACCOUNTS_KV.get(LEGACY_SECURITY_ALERTS_KEY);
+  const legacy = parseRoute(legacyRaw);
+  if (!legacy) return; // nothing to migrate from
+  const existing = await Promise.all(countryCodes.map((c) => env.ACCOUNTS_KV.get(securityAlertsKey(c))));
+  await Promise.all(
+    countryCodes.map((c, i) => (existing[i] ? null : env.ACCOUNTS_KV.put(securityAlertsKey(c), JSON.stringify(legacy))))
+  );
 }
 
 export async function deleteSecurityAlertsRoute(env, scope) {
