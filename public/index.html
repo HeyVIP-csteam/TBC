@@ -1249,29 +1249,44 @@ html[data-theme="light"] {
       };
 
       if (isSecuritySelected) {
-        const r = securityAlerts || { chatId: "", topicId: null, isOverride: false };
+        // AS OF 2026-08-31: one row per scope — "Default" (the shared
+        // fallback, used for accounts with no single country) plus one
+        // row per country (used by that country's own accounts, and
+        // sent via that SAME country's own Telegram bot — see
+        // login.js's resolveSecurityAlertTargets() for the full
+        // routing rule). A country row that's never been saved shows
+        // whatever Default currently resolves to (tagged "default",
+        // not "custom") so it's obvious it's just inheriting for now.
+        const scopes = [{ id: "default", label: "Default (fallback)" }]
+          .concat((typeof COUNTRY_CODES !== "undefined" ? COUNTRY_CODES : []).map((code) => ({
+            id: code,
+            label: (typeof COUNTRIES !== "undefined" && COUNTRIES[code]) ? `${COUNTRIES[code].name} (${code})` : code,
+          })));
+        const rowsHtml = scopes.map((s) => {
+          const r = (securityAlerts && securityAlerts[s.id]) || { chatId: "", topicId: null, isOverride: false };
+          return `
+            <div class="tgroute-row" data-module="${SECURITY_MODULE_ID}" data-scope="${acctEsc(s.id)}">
+              <div class="tgroute-mod-name">🔒 ${acctEsc(s.label)}
+                <span class="route-tag${r.isOverride ? " custom" : ""}">${r.isOverride ? "custom" : "default"}</span>
+              </div>
+              <div class="tgroute-fields">
+                <input type="text" class="tgroute-chatid" placeholder="Chat ID e.g. -1001234567890" value="${acctEsc(r.chatId)}" ${roAttr} autocomplete="off" />
+                <input type="text" class="tgroute-topicid" placeholder="Topic ID (optional)" value="${r.topicId ?? ""}" ${roAttr} autocomplete="off" />
+                ${canEditRoutes ? `<div class="tgroute-row-actions">
+                  <button type="button" class="tgroute-action-btn tgroute-save">Save</button>
+                  ${r.isOverride ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary tgroute-reset">Reset</button>' : ""}
+                </div>` : ""}
+              </div>
+            </div>`;
+        }).join("");
         acctBody.innerHTML = `
           <div class="tgroute-layout">
             <div class="tgroute-brands">${brandListHtml}</div>
-            <div class="tgroute-modules">
-              <div class="tgroute-row" data-module="${SECURITY_MODULE_ID}">
-                <div class="tgroute-mod-name">🔒 Unrecognized-IP / Account-Lock Alerts
-                  <span class="route-tag${r.isOverride ? " custom" : ""}">${r.isOverride ? "custom" : "default"}</span>
-                </div>
-                <div class="tgroute-fields">
-                  <input type="text" class="tgroute-chatid" placeholder="Chat ID e.g. -1001234567890" value="${acctEsc(r.chatId)}" ${roAttr} autocomplete="off" />
-                  <input type="text" class="tgroute-topicid" placeholder="Topic ID (optional)" value="${r.topicId ?? ""}" ${roAttr} autocomplete="off" />
-                  ${canEditRoutes ? `<div class="tgroute-row-actions">
-                    <button type="button" class="tgroute-action-btn tgroute-save">Save</button>
-                    ${r.isOverride ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary tgroute-reset">Reset</button>' : ""}
-                  </div>` : ""}
-                </div>
-              </div>
-            </div>
+            <div class="tgroute-modules">${rowsHtml}</div>
           </div>
           <hr class="tgroute-divider" />
           ${canEditRoutes ? "" : '<p class="edit-modal-note">View only.</p>'}
-          <p class="edit-modal-note tgroute-footnote">This isn't a brand — it's where login sends a Telegram alert when a correct password is used from an IP that isn't office-whitelisted, or when an account gets auto-locked (5 wrong passwords, or 5 different unrecognized IPs in an hour). Login stays blocked exactly the same either way; this only controls where the heads-up message goes. "default" is whatever's set in the SECURITY_ALERTS_CHAT_ID Cloudflare secret (empty = no alerts sent yet).</p>`;
+          <p class="edit-modal-note tgroute-footnote">Where login sends a Telegram alert when a correct password is used from an IP that isn't office-whitelisted, or when an account gets auto-locked (5 failed attempts in an hour). Login stays blocked exactly the same either way; this only controls where the heads-up message goes. A logging-in account uses ITS OWN country's row below (sent via that country's own Telegram bot); an account spanning multiple countries gets a message in every one of those rows; an account with no country assigned, or a country row that's never been configured, falls back to "Default". "Default" itself falls back to the SECURITY_ALERTS_CHAT_ID Cloudflare secret if never saved here (empty = no alerts sent yet for that scope).</p>`;
         restoreScroll();
         acctBody.querySelectorAll(".tgroute-brand").forEach((el) => {
           el.addEventListener("click", () => {
@@ -1343,18 +1358,20 @@ html[data-theme="light"] {
 
     async function saveTgRouteRow(row) {
       const moduleId = row.dataset.module;
+      const scope = row.dataset.scope; // only set on Security Alerts rows
       const chatId = row.querySelector(".tgroute-chatid").value.trim();
       const topicId = row.querySelector(".tgroute-topicid").value.trim();
       if (!chatId) return setAcctNote("Chat ID is required.", "err");
       setAcctNote("Saving…");
       const res = await window.AgentAuth.authFetch("/api/admin/routes", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save", brandId: acctRoutesSelectedBrand, moduleId, chatId, topicId: topicId === "" ? null : topicId }),
+        body: JSON.stringify({ action: "save", brandId: acctRoutesSelectedBrand, moduleId, scope, chatId, topicId: topicId === "" ? null : topicId }),
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Save failed.", "err");
       if (acctRoutesSelectedBrand === SECURITY_ROW_ID) {
-        acctRoutesData.securityAlerts = data.route;
+        if (!acctRoutesData.securityAlerts) acctRoutesData.securityAlerts = {};
+        acctRoutesData.securityAlerts[scope || "default"] = data.route;
       } else {
         acctRoutesData.routes[`${acctRoutesSelectedBrand}|${moduleId}`] = data.route;
       }
@@ -1364,15 +1381,26 @@ html[data-theme="light"] {
 
     async function resetTgRouteRow(row) {
       const moduleId = row.dataset.module;
+      const scope = row.dataset.scope; // only set on Security Alerts rows
       setAcctNote("Resetting…");
       const res = await window.AgentAuth.authFetch("/api/admin/routes", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "reset", brandId: acctRoutesSelectedBrand, moduleId }),
+        body: JSON.stringify({ action: "reset", brandId: acctRoutesSelectedBrand, moduleId, scope }),
       });
       const data = await res.json();
       if (!data.ok) return setAcctNote(data.error || "Reset failed.", "err");
       if (acctRoutesSelectedBrand === SECURITY_ROW_ID) {
-        acctRoutesData.securityAlerts = data.route;
+        if (!acctRoutesData.securityAlerts) acctRoutesData.securityAlerts = {};
+        acctRoutesData.securityAlerts[scope || "default"] = data.route;
+        // A reset country row (not "default" itself) now inherits from
+        // Default again — refresh every other un-overridden country row
+        // too so they visibly reflect the (possibly changed) fallback
+        // without needing a manual reload.
+        if (scope === "default") {
+          const fresh = await window.AgentAuth.authFetch("/api/admin/routes");
+          const freshData = await fresh.json();
+          if (freshData.ok) acctRoutesData.securityAlerts = freshData.securityAlerts;
+        }
       } else {
         acctRoutesData.routes[`${acctRoutesSelectedBrand}|${moduleId}`] = data.route;
       }
