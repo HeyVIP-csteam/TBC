@@ -74,31 +74,46 @@
  * account gets auto-locked, distinct from the per-attempt IP-warning
  * message above.
  *
- * NOT YET CONFIGURED (as Cloudflare secrets): set SECURITY_ALERTS_CHAT_ID
- * (and optionally SECURITY_ALERTS_TOPIC_ID), PLUS SECURITY_ALERTS_BOT_TOKEN
- * (2026-08-21 — this feature's OWN bot token, separate from the 3
- * per-country TELEGRAM_BOT_TOKEN_<CODE> secrets: a login security alert
- * isn't tied to any one country, it can fire for staff logging in from
- * any country against the shared ACCOUNTS_KV, so there's no single
- * correct country's bot to reuse here — needs its own bot added to
- * whichever Telegram group SECURITY_ALERTS_CHAT_ID points at) as
- * Cloudflare environment variables as a fallback default — until then
- * this silently no-ops (sendTelegramMessage() skips cleanly with no
- * chat ID or no token). SECURITY_ALERTS_CHAT_ID/_TOPIC_ID CAN also be
- * set live from the browser instead — see the "Security Alerts" row
- * on the TG Group / Channel admin page (functions/api/admin/routes.js),
- * which resolveSecurityAlertsRoute() below checks first and takes
- * priority over these env vars the moment it's been saved once.
- * SECURITY_ALERTS_BOT_TOKEN itself is NOT live-editable from the
- * browser (it's a genuine bot credential, not routing metadata — see
- * the Bot Token Settings admin page's own header for why credentials
- * get different treatment than chat IDs).
+ * WHERE THE ALERT GOES / WHICH BOT SENDS IT (2026-08-31 — per-country
+ * fan-out, see resolveSecurityAlertTargets() below for the full rule):
+ * an alert for a logging-in account is routed by THAT ACCOUNT'S OWN
+ * allowedCountries, not by one single global destination anymore —
+ *   - Scoped to exactly one country (e.g. PKR-only)  -> that country's
+ *     own Security Alerts row (configurable per-country on the TG
+ *     Group / Channel admin page) using that SAME country's existing
+ *     TELEGRAM_BOT_TOKEN_<CODE> bot — the one already sitting in that
+ *     country's own group, no new bot needed.
+ *   - Multiple countries, or "all"                    -> fans out to
+ *     EVERY one of those countries' rows/bots (deduped).
+ *   - No country at all                                -> falls back to
+ *     the single shared "default" row (this feature's original
+ *     behavior, unchanged) — still needs SECURITY_ALERTS_CHAT_ID /
+ *     SECURITY_ALERTS_TOPIC_ID / SECURITY_ALERTS_BOT_TOKEN as
+ *     Cloudflare secrets (or the "Security Alerts — Default" row on the
+ *     TG Group / Channel admin page, which takes priority the moment
+ *     it's been saved once) for accounts that fall into this bucket.
+ *     Also used as the fallback for a country whose OWN row hasn't
+ *     been configured yet, and SECURITY_ALERTS_BOT_TOKEN is also the
+ *     fallback bot if a country's own TELEGRAM_BOT_TOKEN_<CODE> isn't
+ *     configured — a missing piece for one target never blocks the
+ *     others. Until at least one of these is configured, this silently
+ *     no-ops (sendTelegramMessage() skips cleanly with no chat ID or no
+ *     token). SECURITY_ALERTS_BOT_TOKEN is NOT live-editable from the
+ *     browser (it's a genuine bot credential, not routing metadata —
+ *     see the Bot Token Settings admin page's own header for why
+ *     credentials get different treatment than chat IDs); the
+ *     per-country TELEGRAM_BOT_TOKEN_<CODE> secrets ARE live-editable
+ *     there per-country, same as they are for every other country
+ *     Telegram feature.
  */
 import { getAccount, verifyPassword, officeIpCheckPasses, getOffice, requestIP, setAccountLocked, issueToken } from "../../_shared/accounts.js";
 import { sendTelegramMessage } from "../../_shared/telegram.js";
-import { getRouteOverride } from "../../_shared/routes.js";
+import { getSecurityAlertsRoute } from "../../_shared/routes.js";
 import { isIpBlocked, recordPendingIpRequest } from "../../_shared/ipAccess.js";
 import { logActivity } from "../../_shared/activityLog.js";
+import { resolveAllowedCountries } from "../../_shared/countryAccess.js";
+import { COUNTRY_CODES } from "../../_shared/countries.js";
+import { resolveBotToken } from "../../_shared/routing.js";
 
 // Reserved pseudo brand/module id pair — NOT a real brand — used so the
 // "TG Group / Channel" admin page (functions/api/admin/routes.js) can
@@ -107,10 +122,69 @@ import { logActivity } from "../../_shared/activityLog.js";
 // route uses. Falls back to the SECURITY_ALERTS_CHAT_ID/
 // SECURITY_ALERTS_TOPIC_ID Cloudflare secrets when nothing's been saved
 // through that page yet.
-async function resolveSecurityAlertsRoute(env) {
-  const override = await getRouteOverride(env, "_security", "alerts");
-  if (override) return override;
-  return { chatId: env.SECURITY_ALERTS_CHAT_ID, topicId: env.SECURITY_ALERTS_TOPIC_ID };
+// ── Per-country security alert fan-out (2026-08-31) ──────────────────
+//
+// Business owner wants PKR (etc) login alerts to go to PKR's own group,
+// not one shared global group. Resolves WHERE an alert for this
+// specific logging-in `account` should go, and WHICH bot sends it:
+//
+//   - Account scoped to exactly one country (allowedCountries === one
+//     code, resolved via resolveAllowedCountries so "all"/owner expand
+//     correctly) -> that country's row (functions/_shared/routes.js
+//     getSecurityAlertsRoute(env, "<CODE>"), configurable per-country
+//     from the TG Group/Channel admin page) using THAT country's own
+//     Telegram bot (routing.js resolveBotToken — the same bot already
+//     used for that country's deposit/thread messages, so no new bot
+//     needs to be created or added to any group). Falls back to the
+//     shared "default" row (same key pre-existing deployments already
+//     have configured) if that specific country's row hasn't been set
+//     up yet, and falls back to SECURITY_ALERTS_BOT_TOKEN if that
+//     country's own bot isn't configured either — never silently drops
+//     the alert just because one piece is missing.
+//   - Account spans MULTIPLE countries (an explicit allowedCountries
+//     array with 2+ entries, or "all") -> fans out to EVERY one of
+//     those countries' rows/bots (deduped so the same chat+bot never
+//     gets the same message twice), per explicit business-owner
+//     request — a multi-country agent's failed login is relevant to
+//     every team whose data they can touch.
+//   - Account with NO country at all (empty allowedCountries — e.g. a
+//     role that predates this field, or was deliberately narrowed to
+//     nothing) -> falls back to the single shared "default" row, same
+//     as this feature's original single-group behavior.
+//
+// Never throws — a bad/missing piece for one target just drops that
+// one target (see the try/catch around resolveBotToken below), it
+// never blocks the others or the caller's own fire-and-forget waitUntil.
+async function resolveSecurityAlertTargets(env, account) {
+  const countries = resolveAllowedCountries(account, COUNTRY_CODES);
+  const scopes = countries.length ? countries : ["default"];
+
+  const targets = [];
+  const seen = new Set();
+  for (const scope of scopes) {
+    const isCountry = scope !== "default";
+
+    let route = isCountry ? await getSecurityAlertsRoute(env, scope) : null;
+    if (!route) route = await getSecurityAlertsRoute(env, "default");
+    if (!route) route = { chatId: env.SECURITY_ALERTS_CHAT_ID, topicId: env.SECURITY_ALERTS_TOPIC_ID };
+    if (!route.chatId) continue; // nothing configured anywhere for this scope — nothing to send
+
+    let botToken = env.SECURITY_ALERTS_BOT_TOKEN;
+    if (isCountry) {
+      try {
+        botToken = await resolveBotToken(env, scope);
+      } catch {
+        botToken = env.SECURITY_ALERTS_BOT_TOKEN; // that country's own bot isn't configured — fall back to the shared security bot
+      }
+    }
+    if (!botToken) continue;
+
+    const dedupeKey = `${botToken}|${route.chatId}|${route.topicId ?? ""}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    targets.push({ scope, botToken, chatId: route.chatId, topicId: route.topicId });
+  }
+  return targets;
 }
 
 const LOGIN_FAIL_LOCK_THRESHOLD = 5;
@@ -295,12 +369,12 @@ async function notifyAccountLocked(env, { account, reason }) {
       ``,
       `🔑 This account can no longer log in (or use any already-open session) until a SuperAdmin unlocks it under Account Management → Agent Profile, or accounts-admin.html.`,
     ];
-    const route = await resolveSecurityAlertsRoute(env);
-    await sendTelegramMessage(env.SECURITY_ALERTS_BOT_TOKEN, {
-      chatId: route.chatId,
-      topicId: route.topicId,
-      text: lines.join("\n"),
-    });
+    const targets = await resolveSecurityAlertTargets(env, account);
+    await Promise.all(
+      targets.map((t) =>
+        sendTelegramMessage(t.botToken, { chatId: t.chatId, topicId: t.topicId, text: lines.join("\n") })
+      )
+    );
   } catch {
     // Never let a notification hiccup affect anything else.
   }
@@ -343,12 +417,12 @@ async function notifyLoginFailure(env, { account, ip, request, reasonTitle }) {
       ``,
       `🚫 Login was blocked as usual — this is just a heads-up.`,
     ];
-    const route = await resolveSecurityAlertsRoute(env);
-    await sendTelegramMessage(env.SECURITY_ALERTS_BOT_TOKEN, {
-      chatId: route.chatId,
-      topicId: route.topicId,
-      text: lines.join("\n"),
-    });
+    const targets = await resolveSecurityAlertTargets(env, account);
+    await Promise.all(
+      targets.map((t) =>
+        sendTelegramMessage(t.botToken, { chatId: t.chatId, topicId: t.topicId, text: lines.join("\n") })
+      )
+    );
   } catch {
     // Never let a notification hiccup affect anything else — this
     // function's caller is a fire-and-forget waitUntil() anyway.

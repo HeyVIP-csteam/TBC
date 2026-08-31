@@ -122,38 +122,61 @@ export async function deleteRouteOverride(env, brandId, moduleId) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Security Alerts row (admin/routes.js's "_security"/"alerts" pseudo
-// brand+module) — NOT tied to any one brand/country. A login-security
-// alert (unrecognized IP, account auto-lock) can fire for ANY account
-// regardless of which country's data they're scoped to, so unlike a
-// real brand+module route this doesn't belong in a per-country
-// THREADS_KV — it goes in the shared ACCOUNTS_KV instead, same bucket
-// as accounts/offices/sessions (see the architecture note in
-// countries.js: "not inherently country-scoped" data lives there).
-// Kept as separate named functions rather than overloading
-// get/save/deleteRouteOverride with a "is this the security row?"
-// branch, so the per-brand functions above stay simple and this one
-// special case is easy to find.
+// Security Alerts row(s) (admin/routes.js's "_security"/"alerts"*
+// pseudo brand+module family) — NOT tied to any one brand, but AS OF
+// 2026-08-31 CAN be scoped per-country: a login-security alert
+// (unrecognized IP, account auto-lock) is routed to the group(s) for
+// whichever country/countries the logging-in account is scoped to (see
+// login.js's resolveSecurityAlertTargets()), falling back to one
+// shared "default" row for accounts with no single country (multi-
+// country / "all" accounts fan out to every one of their countries'
+// rows instead — see that same function). Still lives in the shared
+// ACCOUNTS_KV (not a per-country THREADS_KV) because the thing being
+// scoped here is "which account is logging in," not "which country's
+// ticket/thread data this is" — see the architecture note in
+// countries.js for that distinction.
+//
+// `scope` is "default" (the original global fallback row — kept at
+// its original un-suffixed key so every pre-existing deployment's
+// already-saved chatId/topicId keeps working with zero migration) or
+// a country code like "PKR" (its own suffixed key, only ever written
+// once someone actually configures that country's row from the admin
+// UI — reads back null/unconfigured until then, same as any other
+// override).
 // ══════════════════════════════════════════════════════════════════
-const SECURITY_ALERTS_KEY = "route:_security:alerts";
+function securityAlertsKey(scope) {
+  return scope && scope !== "default" ? `route:_security:alerts:${scope}` : "route:_security:alerts";
+}
 
-export async function getSecurityAlertsRoute(env) {
+export async function getSecurityAlertsRoute(env, scope = "default") {
   if (!env.ACCOUNTS_KV) return null;
-  const raw = await env.ACCOUNTS_KV.get(SECURITY_ALERTS_KEY);
+  const raw = await env.ACCOUNTS_KV.get(securityAlertsKey(scope));
   return parseRoute(raw);
 }
 
-export async function saveSecurityAlertsRoute(env, { chatId, topicId }) {
+// Batch read of every scope (default + each given country code) in one
+// parallel round-trip — used by the admin GET endpoint to render all
+// rows at once instead of one request per row.
+export async function getAllSecurityAlertsRoutes(env, countryCodes) {
+  if (!env.ACCOUNTS_KV) return {};
+  const scopes = ["default", ...countryCodes];
+  const raws = await Promise.all(scopes.map((s) => env.ACCOUNTS_KV.get(securityAlertsKey(s))));
+  const result = {};
+  scopes.forEach((s, i) => { result[s] = parseRoute(raws[i]); });
+  return result;
+}
+
+export async function saveSecurityAlertsRoute(env, scope, { chatId, topicId }) {
   if (!env.ACCOUNTS_KV) throw new Error("ACCOUNTS_KV is not bound yet.");
   const trimmedChatId = String(chatId || "").trim();
   if (!trimmedChatId) throw new Error("Chat ID is required.");
   const trimmedTopic = topicId === "" || topicId === null || topicId === undefined ? null : Number(topicId);
   const value = { chatId: trimmedChatId, topicId: Number.isFinite(trimmedTopic) ? trimmedTopic : null };
-  await env.ACCOUNTS_KV.put(SECURITY_ALERTS_KEY, JSON.stringify(value));
+  await env.ACCOUNTS_KV.put(securityAlertsKey(scope), JSON.stringify(value));
   return value;
 }
 
-export async function deleteSecurityAlertsRoute(env) {
+export async function deleteSecurityAlertsRoute(env, scope) {
   if (!env.ACCOUNTS_KV) return;
-  await env.ACCOUNTS_KV.delete(SECURITY_ALERTS_KEY);
+  await env.ACCOUNTS_KV.delete(securityAlertsKey(scope));
 }
