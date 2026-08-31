@@ -11,7 +11,52 @@
  * And one thing you must do manually per brand sheet: open the sheet →
  * Share → add the service account's email as an Editor. Without that
  * share, the API calls below will fail with a 403.
+ *
+ * RETRY (added 2026-08-31) — Google Sheets occasionally returns a
+ * transient error that has nothing to do with our request being wrong
+ * (503 "service currently unavailable", 429 rate-limited, or a 524 —
+ * Cloudflare's own "timed out waiting for the origin" — when the round
+ * trip to Google just ran long). Retrying the exact same request a
+ * moment later succeeds the vast majority of the time. Every fetch to
+ * Google's APIs in this file now goes through fetchWithRetry() below
+ * instead of the raw fetch(), so a single blip doesn't surface all the
+ * way up to the agent as "sheet logging failed" (see submit.js, which
+ * still catches and reports failures — this just means genuine,
+ * persistent failures are what's left to report, not one-off hiccups).
  */
+
+// Status codes worth retrying: rate-limited, or the server/edge having a
+// bad moment. NOT included: 400/401/403/404 — those mean the request
+// itself is wrong (bad range, missing share, wrong sheet ID, etc.) and
+// will fail exactly the same way every time, so retrying just wastes
+// time before showing the agent the real problem.
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504, 524]);
+const MAX_ATTEMPTS = 3; // 1 initial try + 2 retries
+const RETRY_BASE_DELAY_MS = 400; // 400ms, then 800ms (exponential backoff)
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Drop-in replacement for fetch() that retries a handful of times on
+ * transient HTTP failures, with a short exponential backoff between
+ * attempts. Never retries on network-level throws (DNS failure, etc.)
+ * beyond what fetch() itself does — only on a response that came back
+ * with a retryable status code — since a thrown exception here usually
+ * means something more fundamentally broken than "try again in a sec".
+ */
+async function fetchWithRetry(url, options) {
+  let lastRes;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    lastRes = await fetch(url, options);
+    if (lastRes.ok || !RETRYABLE_STATUSES.has(lastRes.status) || attempt === MAX_ATTEMPTS) {
+      return lastRes;
+    }
+    await sleep(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  }
+  return lastRes;
+}
 
 // Reused across requests within the same Worker isolate so we don't
 // re-mint an OAuth token on every single submission.
@@ -54,7 +99,7 @@ async function getAccessToken(env) {
   );
   const jwt = `${unsigned}.${base64urlFromBuffer(signature)}`;
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetchWithRetry("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -161,7 +206,7 @@ export async function writeRowForDate(env, sheetId, tab, { leftBlock, rightBlock
   const scanEndColumn = columnLetter(columnIndex(rightBlock.startColumn) + rightBlock.width - 1);
   const scanRange = `${tab}!${leftBlock.startColumn}2:${scanEndColumn}1000`;
   const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(scanRange)}`;
-  const getRes = await fetch(getUrl, { headers: { Authorization: `Bearer ${token}` } });
+  const getRes = await fetchWithRetry(getUrl, { headers: { Authorization: `Bearer ${token}` } });
   if (!getRes.ok) throw new Error(`Sheets read failed (${getRes.status}): ${await getRes.text()}`);
   const data = await getRes.json();
   const rows = data.values || [];
@@ -189,7 +234,7 @@ export async function writeRowForDate(env, sheetId, tab, { leftBlock, rightBlock
   const writeRange = `${tab}!${activeBlock.startColumn}${targetRow}:${endColumn}${targetRow}`;
 
   const putUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(writeRange)}?valueInputOption=RAW`;
-  const putRes = await fetch(putUrl, {
+  const putRes = await fetchWithRetry(putUrl, {
     method: "PUT",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ values: [values] }),
@@ -208,7 +253,7 @@ export async function writeRowForDate(env, sheetId, tab, { leftBlock, rightBlock
 export async function getSheetTabTitles(env, sheetId) {
   const token = await getAccessToken(env);
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties.title`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetchWithRetry(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`Sheets metadata read failed (${res.status}): ${await res.text()}`);
   const data = await res.json();
   return (data.sheets || []).map((s) => s.properties.title);
@@ -225,7 +270,7 @@ export async function batchGetValues(env, sheetId, ranges) {
   const token = await getAccessToken(env);
   const params = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join("&");
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchGet?${params}&valueRenderOption=FORMATTED_VALUE`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetchWithRetry(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`Sheets batchGet failed (${res.status}): ${await res.text()}`);
   const data = await res.json();
   return data.valueRanges || [];
@@ -283,7 +328,7 @@ export async function getNextSequenceValue(env, sheetId, tab, column, expectedPr
   const token = await getAccessToken(env);
   const range = `${tab}!${column}2:${column}100000`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetchWithRetry(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`Sheets read failed (${res.status}): ${await res.text()}`);
   const data = await res.json();
   const rows = data.values || [];
@@ -396,13 +441,13 @@ export async function appendRowToSheet(env, sheetId, tabName, row) {
 }
 
 async function ensureTabWithHeaders(token, sheetId, tabName, headers) {
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`, {
+  await fetchWithRetry(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tabName } } }] }),
   }).catch(() => {}); // ignore — a parallel request may have already created it
 
-  await fetch(
+  await fetchWithRetry(
     `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(tabName)}!A1?valueInputOption=RAW`,
     {
       method: "PUT",
@@ -413,7 +458,7 @@ async function ensureTabWithHeaders(token, sheetId, tabName, headers) {
 }
 
 function sheetsFetch(url, token, body, method = "POST") {
-  return fetch(url, {
+  return fetchWithRetry(url, {
     method,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
