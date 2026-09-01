@@ -838,7 +838,7 @@ export async function verifyRequest(request, env) {
 // alone can't, since it only ever receives one string with no country
 // attached. Callers introducing a NEW brand-gated endpoint should follow
 // that same pairing, not rely on this function alone.
-export function canSeeBrand(account, brandIdentifier) {
+export function canSeeBrand(account, brandIdentifier, country) {
   if (rankOf(account.role) >= ROLE_RANK.admin) return true; // admin & superadmin see everything
   if (account.allowedBrands === "all") return true;
   const allowed = Array.isArray(account.allowedBrands) ? account.allowedBrands : [];
@@ -847,14 +847,38 @@ export function canSeeBrand(account, brandIdentifier) {
   if (byId && allowed.includes(byId.name)) return true;
   // Only resolve name->id when the name is UNAMBIGUOUS (exactly one
   // brand across all countries has this name) — if two+ brands share
-  // brandIdentifier as their name (e.g. "Crickex" in both INR and PKR),
-  // there's no way to know which one's id to check from a bare name
-  // alone, so this deliberately does NOT guess; it falls through to
-  // `false` for that half of the check, relying on the caller's
-  // accompanying canSeeCountry() (see the comment above) to have
-  // already scoped things correctly by then.
+  // brandIdentifier as their name (e.g. "Crickex" in both INR and
+  // PKR), there's no way to know which one's id to check from a bare
+  // name alone.
   const matchingIds = Object.keys(ROUTING_BRANDS).filter((id) => ROUTING_BRANDS[id].name === brandIdentifier);
   if (matchingIds.length === 1 && allowed.includes(matchingIds[0])) return true;
+  // BUGFIX (2026-09-01) — the comment here used to say an ambiguous
+  // name "falls through to false, relying on the caller's accompanying
+  // canSeeCountry() to have already scoped things correctly by then".
+  // That was only half true: canSeeCountry() DOES confirm the record's
+  // country before this ever runs (threads.js, threads/[id].js both
+  // check it first) — but this function never actually USED that
+  // country to break the name tie, it just gave up. Real-world result:
+  // an agent whose allowedBrands got re-saved in ID form
+  // (accounts-admin.html has stored ids like "crickex_inr" since
+  // 2026-08-20 — see this function's header comment) could no longer
+  // see a pre-existing INR "Crickex" ticket whose OWN brand field is
+  // still the bare, country-ambiguous name "Crickex" (any thread that
+  // predates today's brandId field on the THREAD side — see
+  // threads.js's summarize()) — canSeeCountry(account, "INR") had
+  // already passed, but canSeeBrand() couldn't tell INR's "Crickex"
+  // apart from PKR's and refused everyone. An admin/owner account
+  // never hit this (rank/role bypass above), which is exactly why it
+  // looked like a role-specific bug instead of what it actually is: a
+  // name-collision gap that affects every non-admin account with an
+  // id-form grant. Now that the caller already knows which country the
+  // record belongs to, use it: narrow the ambiguous candidates down to
+  // the one whose own `country` matches, which is unambiguous by
+  // definition (BRANDS has exactly one brand per name per country).
+  if (matchingIds.length > 1 && country) {
+    const scoped = matchingIds.filter((id) => ROUTING_BRANDS[id].country === country);
+    if (scoped.length === 1 && allowed.includes(scoped[0])) return true;
+  }
   return false;
 }
 

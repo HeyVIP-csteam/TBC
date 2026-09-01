@@ -115,7 +115,7 @@ export async function onRequestGet({ request, env, params }) {
   // the Recall log at all — an agent passing this query param by hand
   // still gets the normal 404.
   const includeDeleted = url.searchParams.get("includeDeleted") === "1" && rankOf(account.role) >= ROLE_RANK.admin;
-  if (thread && (!thread.deleted || includeDeleted) && canSeeBrand(account, thread.brandId || thread.brand)) {
+  if (thread && (!thread.deleted || includeDeleted) && canSeeBrand(account, thread.brandId || thread.brand, country)) {
     return json({ ok: true, thread: { ...thread, country } });
   }
   // thread === null means genuinely no record anywhere (not just a
@@ -199,7 +199,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   // Every action operates on an existing thread the account must be
   // allowed to see — check once up front instead of in every branch.
   const existingThread = await getThread(store, id);
-  if (!existingThread || existingThread.deleted || !canSeeBrand(account, existingThread.brandId || existingThread.brand)) {
+  if (!existingThread || existingThread.deleted || !canSeeBrand(account, existingThread.brandId || existingThread.brand, country)) {
     // Same orphan cleanup as the GET handler above — only fires when
     // existingThread is genuinely null (no record anywhere), never for a
     // thread that's merely soft-deleted or outside this account's brands.

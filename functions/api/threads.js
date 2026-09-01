@@ -85,7 +85,7 @@ async function handleGet({ request, env }) {
     // can't be matched reliably by name alone. Threads old enough to
     // predate the brandId field fall back to the name check, same as
     // before (2026-09-01).
-    .filter((t) => canSeeCountry(account, t.country) && canSeeBrand(account, t.brandId || t.brand));
+    .filter((t) => canSeeCountry(account, t.country) && canSeeBrand(account, t.brandId || t.brand, t.country));
 
   return json({
     ok: true,
