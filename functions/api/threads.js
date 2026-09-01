@@ -85,7 +85,21 @@ async function handleGet({ request, env }) {
     // can't be matched reliably by name alone. Threads old enough to
     // predate the brandId field fall back to the name check, same as
     // before (2026-09-01).
-    .filter((t) => canSeeCountry(account, t.country) && canSeeBrand(account, t.brandId || t.brand, t.country));
+    // BUGFIX (2026-09-01) — was `canSeeBrand(account, t.brandId ||
+    // t.brand, t.country)`: `||` means the moment `brandId` is truthy AT
+    // ALL, `brand` (the name) never even gets tried — including when
+    // `brandId` is a stale/garbage value that doesn't match anything in
+    // ROUTING_BRANDS (e.g. a pre-merge legacy id like bare "crickex"
+    // with no country suffix, found on a real ticket via direct D1
+    // inspection). A non-admin account then fails outright even though
+    // the SAME thread's `brand` name ("Crickex") would have resolved
+    // just fine via the country-scoped fallback above. Try brandId
+    // first (the fast, unambiguous path for clean modern threads), and
+    // if that specific check fails, fall back to trying the name too —
+    // covers "no brandId", "unresolvable brandId", and "flat-out wrong
+    // brandId" all the same way, without ever trusting a corrupt id to
+    // veto a name that's actually fine.
+    .filter((t) => canSeeCountry(account, t.country) && (canSeeBrand(account, t.brandId, t.country) || canSeeBrand(account, t.brand, t.country)));
 
   return json({
     ok: true,

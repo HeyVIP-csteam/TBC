@@ -115,7 +115,15 @@ export async function onRequestGet({ request, env, params }) {
   // the Recall log at all — an agent passing this query param by hand
   // still gets the normal 404.
   const includeDeleted = url.searchParams.get("includeDeleted") === "1" && rankOf(account.role) >= ROLE_RANK.admin;
-  if (thread && (!thread.deleted || includeDeleted) && canSeeBrand(account, thread.brandId || thread.brand, country)) {
+  // BUGFIX (2026-09-01) — see functions/api/threads.js's matching fix
+  // for the full story: `thread.brandId || thread.brand` meant a
+  // present-but-garbage brandId (found in production — a legacy
+  // pre-merge id like bare "crickex", no country suffix, resolves to
+  // nothing in ROUTING_BRANDS) permanently vetoed the brand-NAME check
+  // ever running at all, even though `thread.brand` ("Crickex") is
+  // perfectly valid and would resolve fine via the country-scoped
+  // fallback. Try both independently; either one succeeding is enough.
+  if (thread && (!thread.deleted || includeDeleted) && (canSeeBrand(account, thread.brandId, country) || canSeeBrand(account, thread.brand, country))) {
     return json({ ok: true, thread: { ...thread, country } });
   }
   // thread === null means genuinely no record anywhere (not just a
@@ -199,7 +207,9 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   // Every action operates on an existing thread the account must be
   // allowed to see — check once up front instead of in every branch.
   const existingThread = await getThread(store, id);
-  if (!existingThread || existingThread.deleted || !canSeeBrand(account, existingThread.brandId || existingThread.brand, country)) {
+  // Same brandId-vs-brand fix as onRequestGet above — a garbage/
+  // unresolvable brandId must not veto a perfectly good brand name.
+  if (!existingThread || existingThread.deleted || !(canSeeBrand(account, existingThread.brandId, country) || canSeeBrand(account, existingThread.brand, country))) {
     // Same orphan cleanup as the GET handler above — only fires when
     // existingThread is genuinely null (no record anywhere), never for a
     // thread that's merely soft-deleted or outside this account's brands.
