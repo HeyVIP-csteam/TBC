@@ -79,7 +79,13 @@ async function handleGet({ request, env }) {
     // queried allowed countries above — cheap, and guards against a
     // future refactor accidentally widening the query set without
     // updating this filter too.
-    .filter((t) => canSeeCountry(account, t.country) && canSeeBrand(account, t.brand));
+    // Prefer brandId (unambiguous BRANDS key) when the thread has one —
+    // a bare brand NAME like "Crickex" exists in both INR and PKR, so an
+    // account scoped to a specific id (e.g. allowedBrands: ["crickex_pkr"])
+    // can't be matched reliably by name alone. Threads old enough to
+    // predate the brandId field fall back to the name check, same as
+    // before (2026-09-01).
+    .filter((t) => canSeeCountry(account, t.country) && canSeeBrand(account, t.brandId || t.brand));
 
   return json({
     ok: true,

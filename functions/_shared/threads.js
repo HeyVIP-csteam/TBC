@@ -192,6 +192,13 @@ function summarize(thread) {
     icon: thread.icon,
     accent: thread.accent,
     brand: thread.brand,
+    // Added alongside brand (2026-09-01) so canSeeBrand() can be checked
+    // against the unambiguous BRANDS id instead of the display name,
+    // which is what actually disambiguates a cross-country name clash
+    // like "Crickex" (exists in both INR and PKR) — see threads.js and
+    // threads/[id].js, which now check brandId first, falling back to
+    // brand (name) only for threads old enough to predate this field.
+    brandId: thread.brandId || null,
     title: clip(thread.title, 200),
     submitter: clip(thread.submitter, 100),
     submittedAt: thread.submittedAt,
