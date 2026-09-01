@@ -263,8 +263,55 @@ html[data-theme="light"] {
       });
     }
     threadsSidebarEl.addEventListener("scroll", scheduleVirtualWindowRender, { passive: true });
+    // FLOATING ITEM MENU FIX (2026-09-01) — the ⋮ menu is now a
+    // fixed-position overlay attached to <body> (see openItemMenuEl /
+    // positionFloatingMenu below), not a child of the row anymore — so a
+    // sidebar scroll would leave it visually stuck at a stale screen
+    // position instead of following its row. Simplest correct behavior:
+    // just close it on scroll, same as it already closes on any outside
+    // click (see the document click listener further down).
+    threadsSidebarEl.addEventListener("scroll", () => {
+      if (openItemMenuId !== null) { openItemMenuId = null; renderLists(); }
+    }, { passive: true });
 
     let openItemMenuId = null;
+    // The floating ⋮ menu's actual DOM node, once open — lives on <body>,
+    // not inside any .thread-item row (see the 2026-09-01 comment above
+    // patchItemViewState's menu handling for why: rows are absolutely
+    // positioned + `overflow:hidden` for virtualization, which used to
+    // clip the dropdown to a sliver instead of letting it float above/
+    // below the row like a normal menu).
+    let openItemMenuEl = null;
+
+    // Positions the floating menu relative to its ⋮ button using real
+    // screen coordinates (getBoundingClientRect), since it's no longer
+    // nested inside the row and can't rely on CSS `position:absolute`
+    // against a row ancestor anymore. Prefers ABOVE the button (per
+    // agent feedback — a menu that drops downward covers the ticket
+    // below it, which reads as "the menu is inside that other ticket").
+    // Falls back to below only when there isn't enough room above (e.g.
+    // the very first row in the list) so the menu never gets pushed
+    // off-screen.
+    function positionFloatingMenu(menuEl, btnEl) {
+      const r = btnEl.getBoundingClientRect();
+      const menuWidth = menuEl.offsetWidth || 172;
+      const menuHeight = menuEl.offsetHeight || 120;
+      let left = r.right - menuWidth;
+      left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8));
+      let top = r.top - menuHeight - 6;
+      if (top < 8) top = r.bottom + 6;
+      menuEl.style.left = left + "px";
+      menuEl.style.top = top + "px";
+    }
+
+    // Removes the floating menu from <body> (if present) and clears its
+    // tracked reference — called whenever openItemMenuId goes back to
+    // null (outside click, scroll, tab switch, an action was taken,
+    // search, etc.) so a stale menu node never lingers detached from any
+    // row's lifecycle.
+    function closeFloatingItemMenu() {
+      if (openItemMenuEl) { openItemMenuEl.remove(); openItemMenuEl = null; }
+    }
     let selectMode = false;
     let selectedIds = new Set();
 
@@ -627,8 +674,13 @@ html[data-theme="light"] {
       if (selectMode) {
         if (existingIcon) existingIcon.remove();
         if (existingMenuBtn) existingMenuBtn.remove();
-        const openMenu = el.querySelector(":scope > .item-menu");
-        if (openMenu) openMenu.remove();
+        // The ⋮ menu now lives on <body> (see the 2026-09-01 fix below),
+        // not as a child of `el` anymore, so there's nothing left to
+        // find via el.querySelector here — closeFloatingItemMenu() is
+        // the one that actually tears it down now. Entering select mode
+        // should never leave it open regardless.
+        if (openItemMenuId !== null) openItemMenuId = null;
+        closeFloatingItemMenu();
         let check = existingCheck;
         if (!check) {
           check = document.createElement("input");
@@ -670,12 +722,26 @@ html[data-theme="light"] {
           if (t.id !== selectedId) { pendingAttachments = []; replyTarget = null; }
           openThread(t.id, t.country);
         };
+        // FLOATING ITEM MENU FIX (2026-09-01) — this used to
+        // `el.appendChild(buildItemMenu(...))`, nesting the dropdown
+        // INSIDE the row. Rows are absolutely positioned with a fixed
+        // 58px height + `overflow:hidden` for virtualization (see
+        // renderVirtualWindow() — needed so recycled/variable-length
+        // row content never bleeds into neighboring rows), which also
+        // clipped this menu down to a sliver of its first option the
+        // instant it tried to open (agent-reported: "Select" showing
+        // stuck inside the ticket row instead of as a real dropdown).
+        // Now it's built once, appended to <body>, and positioned with
+        // real screen coordinates (positionFloatingMenu, above) —
+        // completely outside any row's `overflow:hidden`, so it always
+        // renders in full regardless of row height/clipping.
         const unread = Math.max(0, (t.replyCount || 0) - getSeenCount(t.id));
-        const existingMenuEl = el.querySelector(":scope > .item-menu");
-        if (openItemMenuId === t.id && !existingMenuEl) {
-          el.appendChild(buildItemMenu(t, unread));
-        } else if (openItemMenuId !== t.id && existingMenuEl) {
-          existingMenuEl.remove();
+        if (openItemMenuId === t.id) {
+          if (!openItemMenuEl) {
+            openItemMenuEl = buildItemMenu(t, unread);
+            document.body.appendChild(openItemMenuEl);
+          }
+          positionFloatingMenu(openItemMenuEl, menuBtn);
         }
       }
     }
@@ -870,6 +936,14 @@ html[data-theme="light"] {
     }
 
     function renderLists() {
+      // The floating menu lives on <body>, outside any row's own DOM
+      // lifecycle — so closing it can't just rely on a row no longer
+      // rendering it (virtualization may not even re-render the row that
+      // owned it, e.g. after a tab switch). Every renderLists() call is
+      // the single choke point for "did the open menu's id change", so
+      // it's the right place to tear the floating node down once
+      // `openItemMenuId` has gone back to null.
+      if (openItemMenuId === null) closeFloatingItemMenu();
       const filteredActive = filterByCountry(activeThreads);
       const filteredSolved = filterByCountry(solvedThreads);
 
@@ -932,7 +1006,30 @@ html[data-theme="light"] {
     }
 
     async function refreshOpenThread() {
-      if (!selectedId) return;
+      // BUGFIX (2026-09-01) — openThread() sets `selectedId` BEFORE it
+      // knows whether the load will succeed, and never clears it again on
+      // failure (see openThread()'s own three failure branches — all of
+      // them just render an error into `main` and return, leaving
+      // `selectedId` set and `selectedThread` still null). Before this
+      // fix, that meant the 10s pollTimer -> refreshOpenThread() kept
+      // firing forever for a thread that failed to open: with
+      // `selectedThread` null, `(selectedThread && selectedThread.country)
+      // || ""` collapses to an EMPTY country param, which is guaranteed
+      // to 404 (isValidCountry("") is always false) — so a single failed
+      // "Couldn't load this thread." turned into an infinite loop of
+      // identical failing requests every 10 seconds, spamming the
+      // console/network and burning KV/D1 read quota, until the agent
+      // happened to click a different thread (which resets `selectedId`).
+      // Requiring `selectedThread` to already be populated (i.e. the
+      // thread has been successfully loaded at least once) is a correct
+      // guard on its own merits, not just a patch: there is nothing
+      // useful to refresh until that first successful load has happened,
+      // and if it never succeeds, retrying with the same broken/blank
+      // params every 10s forever was never going to fix itself anyway —
+      // the agent has to re-open the thread (or hard-refresh) once the
+      // underlying issue (stale sidebar cache, deleted thread, etc.) is
+      // resolved.
+      if (!selectedId || !selectedThread) return;
       try {
         const res = await authFetch(`/api/threads/${selectedId}?country=${encodeURIComponent((selectedThread && selectedThread.country) || "")}`, { cache: "no-store" });
         const data = await res.json();

@@ -2193,8 +2193,17 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
   background: none; color: var(--ink-soft); font-size: 15px; cursor: pointer; line-height: 1;
 }
 .item-menu-btn:hover { background: var(--sidebar-item-hover); color: var(--ink); }
+/* FLOATING ITEM MENU FIX (2026-09-01) — was `position: absolute; top:
+   34px; right: 8px` against its row (`.thread-item`), which clipped it
+   down to a sliver because virtualized rows are a fixed 58px tall with
+   `overflow: hidden` (see renderVirtualWindow()'s comment in
+   threads.html). Now appended to <body> and positioned in JS via real
+   screen coordinates (threads.html's positionFloatingMenu()) — `top`/
+   `left` are set inline per-open, not here. z-index bumped well above
+   the sidebar's own stacking (20 -> 1000) since this is now a top-level
+   overlay, not a row-scoped child anymore. */
 .item-menu {
-  position: absolute; top: 34px; right: 8px; z-index: 20; min-width: 172px;
+  position: fixed; z-index: 1000; min-width: 172px;
   background: var(--card-bg); border: 1px solid var(--panel-border); border-radius: 10px;
   padding: 4px; box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.45);
 }
