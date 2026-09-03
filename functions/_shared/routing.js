@@ -1052,6 +1052,15 @@ export const SCREENSHOT_R2_ENABLED = {
   // MERGED (2026-08-20) — ported from PHP's original routing.js, same
   // story as RECORD_TO_SHEET/MODULE_META above.
   bank_issue: true,
+  // FIXED (2026-09-03) — promotion_request used to be in this list (the
+  // Sheet's Screenshot Link column has real /api/screenshot/... links from
+  // before 2026-08-20, see CHANGES-2026-09-03-r2-bucket-per-country-fix.md
+  // for how that was found), but it got dropped somewhere during the
+  // 3-country merge. Without this, submit.js's R2 upload block is skipped
+  // for the whole module regardless of whether SCREENSHOTS_BUCKET_INR/PKR/
+  // PHP are bound correctly — the moduleId gate short-circuits before the
+  // bucket is ever even looked at. Re-added.
+  promotion_request: true,
 };
 
 // ══════════════════════════════════════════════════════════════════

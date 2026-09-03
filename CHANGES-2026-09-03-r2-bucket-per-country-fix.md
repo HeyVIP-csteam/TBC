@@ -45,3 +45,15 @@ PHP / PKR（其实 INR 也一样）R2 bucket 里只有当初迁移进去的旧�
 - 顺手在 Dashboard → Settings → Bindings 里确认 `SCREENSHOTS_BUCKET_INR/PKR/PHP`
   三个绑定在 Production 和 Preview 环境都存在、bucket 名字没打错——`wrangler.toml`
   声明了不等于线上一定生效，值得肉眼确认一次。
+
+## 追加（同日）：bucket 绑定修好后，promotion_request 还是不走 R2
+
+修完上面那批之后，promotion_request 模块实测仍然掉回 TG 链接——原因是另一个独立
+的开关：`functions/_shared/routing.js` 里的 `SCREENSHOT_R2_ENABLED` 白名单，
+`submit.js`（及 `forward.js`）上传前都会先检查 `SCREENSHOT_R2_ENABLED[moduleId]`，
+不在名单里的模块直接跳过整段 R2 逻辑，连 bucket 都不会去碰。
+
+merge 前的名单里应该是包含 `promotion_request` 的（早期工单 Sheet 里能看到真实
+`/api/screenshot/...` 链接就是证据），三国合并时被漏掉了，跟 bucket 绑定名字那个
+bug是两个独立问题、只是表现一样（都退回 TG 链接）。已把 `promotion_request: true`
+加回 `SCREENSHOT_R2_ENABLED`。
