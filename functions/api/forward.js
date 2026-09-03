@@ -53,7 +53,7 @@ import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry } from "../_sha
 import { buildTicketMessage, buildTitleAndSummary, resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY } from "../_shared/messageBuilders.js";
 import { getRouteOverride } from "../_shared/routes.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
-import { isValidCountry, resolveThreadsStore } from "../_shared/countries.js";
+import { isValidCountry, resolveThreadsStore, resolveScreenshotsBucket } from "../_shared/countries.js";
 
 export async function onRequestPost(context) {
   try {
@@ -147,13 +147,19 @@ async function handlePost({ request, env }) {
   //      two-step getFile + download dance functions/api/attachment/
   //      [fileId].js already does for viewing them) before they can be
   //      re-uploaded to R2.
+  // FIXED (2026-09-03) — same bug as submit.js's own R2 block: this used
+  // to check `env.SCREENSHOTS_BUCKET`, a binding that stopped existing for
+  // ANY country the moment the merge split R2 into one bucket per country.
+  // See _shared/r2.js's file header / _shared/countries.js's
+  // resolveScreenshotsBucket() for the full story.
+  const screenshotsBucket = resolveScreenshotsBucket(env, brand.country);
   const r2Links = [];
   const r2Errors = [];
-  if (env.SCREENSHOTS_BUCKET && SCREENSHOT_R2_ENABLED[moduleId]) {
+  if (screenshotsBucket && SCREENSHOT_R2_ENABLED[moduleId]) {
     const origin = new URL(request.url).origin;
     for (const att of newAttachments || []) {
       try {
-        const key = await uploadAttachmentToR2(env, { moduleId, brandId, attachment: att });
+        const key = await uploadAttachmentToR2(env, { moduleId, brandId, attachment: att, bucket: screenshotsBucket });
         r2Links.push(screenshotUrl(origin, key));
       } catch (e) {
         r2Errors.push(`${att.name || "new attachment"}: ${String((e && e.message) || e)}`);
@@ -162,7 +168,7 @@ async function handlePost({ request, env }) {
     for (const fid of fileIds) {
       try {
         const { bytes, contentType, filePath } = await downloadTelegramFile(botToken, fid);
-        const key = await uploadBytesToR2(env, { moduleId, brandId, name: filePath.split("/").pop(), type: contentType, bytes });
+        const key = await uploadBytesToR2(env, { bucket: screenshotsBucket, moduleId, brandId, name: filePath.split("/").pop(), type: contentType, bytes });
         r2Links.push(screenshotUrl(origin, key));
       } catch (e) {
         r2Errors.push(`carried-over attachment: ${String((e && e.message) || e)}`);
@@ -473,9 +479,11 @@ async function downloadTelegramFile(botToken, fileId) {
 // has raw bytes in hand (freshly downloaded from Telegram, see
 // downloadTelegramFile above) and skipping the dataUrl-string round trip
 // avoids btoa()/atob() choking on very large files.
-async function uploadBytesToR2(env, { moduleId, brandId, name, type, bytes }) {
-  const bucket = env.SCREENSHOTS_BUCKET;
-  if (!bucket) throw new Error("Missing SCREENSHOTS_BUCKET R2 binding");
+async function uploadBytesToR2(env, { bucket, moduleId, brandId, name, type, bytes }) {
+  // 2026-09-03 — bucket is now resolved by the caller (per-country, see
+  // resolveScreenshotsBucket() in _shared/countries.js) and passed in,
+  // same fix/reasoning as _shared/r2.js's uploadAttachmentToR2().
+  if (!bucket) throw new Error("Missing R2 bucket for this ticket's country (SCREENSHOTS_BUCKET_INR/PKR/PHP not bound, or an unrecognized brand/country was passed in)");
   const safeName = (name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
   const key = `${moduleId}/${brandId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
   await bucket.put(key, bytes, { httpMetadata: { contentType: type || "application/octet-stream" } });

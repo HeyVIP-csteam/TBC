@@ -132,6 +132,29 @@ export function resolveThreadsDb(env, code) {
   return env[threadsDbBinding] || null;
 }
 
+// 2026-09-03 — added alongside the same fix for the ticket-attachment R2
+// path (functions/_shared/r2.js, functions/api/submit.js,
+// functions/api/forward.js, functions/api/screenshot/[[path]].js). Those
+// files were still reading a bare `env.SCREENSHOTS_BUCKET` — a binding
+// name that stopped existing the moment the 3-country merge split R2 into
+// one bucket PER country (SCREENSHOTS_BUCKET_INR/PKR/PHP, see
+// wrangler.toml). It's the exact same class of bug functions/api/
+// brand-config.js already found and fixed for brand-config.json on
+// 2026-08-25 (see that file's own header comment) — just never applied to
+// the actual ticket-screenshot upload/serve path, which is why NEW
+// screenshots silently never made it into ANY country's R2 bucket
+// (submit.js's `if (env.SCREENSHOTS_BUCKET && ...)` guard was always
+// false, so it quietly skipped the upload instead of erroring) — the only
+// objects sitting in pkr-issuescreenshot/php-issuescreenshot today are the
+// one-time Cloudflare Data Migration Tool imports mentioned in
+// wrangler.toml, not anything the app itself ever wrote. Same
+// null-if-not-bound-yet contract as resolveThreadsKv/resolveThreadsDb
+// above — callers decide what "not configured for this country" means.
+export function resolveScreenshotsBucket(env, code) {
+  const { screenshotsBucketBinding } = getCountryConfig(code);
+  return env[screenshotsBucketBinding] || null;
+}
+
 // Bundles both storage handles for a country into the one object
 // threads.js's functions now take as their first argument — see that
 // file's header for the full design. `db` is null for any country

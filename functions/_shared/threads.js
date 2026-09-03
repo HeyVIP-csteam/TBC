@@ -161,6 +161,36 @@ async function d1UpsertWithRetry(db, id, json, attempts = 4) {
   throw lastErr;
 }
 
+// 2026-09-03 — same "essential write must survive transient contention,
+// reverse-lookup write is nice-to-have and must never take the essential
+// write down with it" split createThread() already got on 2026-08-29 (see
+// that date's comment above and
+// CHANGES-2026-08-29-thread-visibility-silent-failure.md), now reused by
+// appendMessage() below for its own message_index/msgid writes — see that
+// function's comments for why it needed the exact same treatment. Retries
+// a single index-write op (a D1 `INSERT OR IGNORE ... .run()`, or a KV
+// `.put()`) with the same backoff shape as d1UpsertWithRetry. Deliberately
+// swallows the error after giving up (never rethrows) — the caller loops
+// over many of these and none of them should be able to take down the
+// reply that was actually being recorded; every attempt (and the final
+// give-up) is logged so a silently-dropped reply-match shows up in the
+// Cloudflare Functions log instead of just... not matching, with zero
+// trace anywhere, which is exactly how this went unnoticed before.
+async function writeIndexEntryWithRetry(writeFn, label, attempts = 4) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await writeFn();
+      return;
+    } catch (e) {
+      lastErr = e;
+      console.error(`[threads.js] index write FAILED (attempt ${i + 1}/${attempts}) for ${label}: ${String(e && e.message || e)}`);
+      if (i < attempts - 1) await sleep(300 * (i + 1) + Math.floor(Math.random() * 200));
+    }
+  }
+  console.error(`[threads.js] index write gave up after ${attempts} attempts for ${label} — a LATER reply that quotes this message will NOT auto-match its thread. (This message itself was still saved.)`);
+}
+
 // Cloudflare KV metadata is capped at 1024 bytes (serialized) per key —
 // well clear of what a sidebar row needs, but title/submitter are free-
 // text and `extraSearchText` folds in every custom form-field value, so
@@ -910,7 +940,32 @@ export async function appendMessage(store, threadId, message) {
     const existing = await getThread(store, threadId);
     if (!existing) return null;
 
-    const stmts = [
+    // 2026-09-03 — the message-append UPDATE below (the write that
+    // actually records this incoming reply — without it, the reply is
+    // just gone) used to be batched together with the message_index
+    // INSERTs in ONE db.batch() call. db.batch() runs as a single
+    // transaction: if ANY statement in it hits a transient D1 error
+    // (SQLITE_BUSY under concurrent writes being the realistic one), the
+    // WHOLE batch rolls back — so a hiccup writing a reverse-lookup row
+    // was enough to silently lose the reply itself, with nothing thrown
+    // past telegram-webhook.js's own catch-and-log wrapper and a 200
+    // still going back to Telegram (so Telegram never retries either).
+    // This is the exact same bundling bug createThread() was fixed for
+    // on 2026-08-29 (see that date's comment a few lines up and
+    // CHANGES-2026-08-29-thread-visibility-silent-failure.md) — it was
+    // just never applied HERE, which is why another bot's reply (e.g.
+    // PYT_BOT ACC's "SAVED! TID: ..." confirmation) "sometimes doesn't
+    // get read" kept happening even after that fix and after
+    // 2026-08-30's webhook-registration fix — both real fixes, just not
+    // this bug. Split the same way now: the append UPDATE(s) are their
+    // own batch, awaited and allowed to throw (losing the reply really
+    // is fatal, same judgment call as saveThread() below); the
+    // message_index INSERTs run separately, with their own retry (see
+    // writeIndexEntryWithRetry above) and never able to take the append
+    // down with them. Worst case is now "this reply saved fine, but
+    // won't let a LATER reply that quotes IT auto-match" — not "this
+    // reply vanished".
+    const appendStmts = [
       db.prepare(
         `UPDATE threads
          SET data = json_set(json_insert(data, '$.messages[#]', json(?1)), '$.lastActivity', ?2)
@@ -922,7 +977,7 @@ export async function appendMessage(store, threadId, message) {
     // already-solved ticket, that's a deliberate "actually, still need
     // to talk about this" signal, safe to reopen.
     if (!message.self) {
-      stmts.push(
+      appendStmts.push(
         db.prepare(
           `UPDATE threads
            SET data = json_set(data, '$.solved', json('false'), '$.solvedAt', NULL)
@@ -930,14 +985,19 @@ export async function appendMessage(store, threadId, message) {
         ).bind(threadId)
       );
     }
-    for (const mid of allIds) {
-      stmts.push(
-        db.prepare(
-          `INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`
-        ).bind(String(existing.chatId ?? ""), mid, threadId)
-      );
-    }
-    await db.batch(stmts);
+    await db.batch(appendStmts);
+
+    await Promise.all(
+      allIds.map((mid) =>
+        writeIndexEntryWithRetry(
+          () =>
+            db.prepare(
+              `INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`
+            ).bind(String(existing.chatId ?? ""), mid, threadId).run(),
+          `thread ${threadId} message ${mid}`
+        )
+      )
+    );
   }
 
   // Read back the now-current thread — a single consistent D1 read for
@@ -958,14 +1018,32 @@ export async function appendMessage(store, threadId, message) {
     if (allIds.length) {
       thread.msgIds = [...(thread.msgIds || [thread.rootMessageId]), ...allIds];
     }
-    const writes = [saveThread(store, thread)];
-    for (const mid of allIds) {
-      writes.push(kv.put(`msgid:${thread.chatId}:${mid}`, thread.id));
-    }
+    // 2026-09-03 — same split as the D1 branch above: saveThread() (the
+    // write that actually records this reply) used to sit in the SAME
+    // Promise.all as the msgid: reverse-lookup puts and the
+    // mention-candidate write. Promise.all rejects the moment ANY of
+    // them fails — so a transient failure on an unrelated msgid: put (or
+    // the mention-candidate write) could make the whole appendMessage()
+    // throw and lose a reply that was otherwise perfectly fine to save.
+    // PKR/PHP are pure-KV — this file's ONLY path for them — which is
+    // why the "bot reply sometimes doesn't show up" instability was
+    // never actually INR- or D1-specific, even though it looked that way
+    // from the outside. saveThread() is now awaited on its own and
+    // allowed to throw (losing the reply really is fatal); the
+    // msgid:/mention-candidate writes run after, via retry + log-only
+    // failure (writeIndexEntryWithRetry above), matching the D1 branch.
+    await saveThread(store, thread);
+    const indexWrites = allIds.map((mid) =>
+      writeIndexEntryWithRetry(() => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id), `thread ${thread.id} message ${mid}`)
+    );
     if (!message.self && message.handle) {
-      writes.push(rememberMentionCandidate(store, thread.brandId, thread.module, message.handle, message.from));
+      indexWrites.push(
+        rememberMentionCandidate(store, thread.brandId, thread.module, message.handle, message.from).catch((e) => {
+          console.error(`[threads.js] rememberMentionCandidate failed for thread ${thread.id}: ${String(e && e.message || e)}`);
+        })
+      );
     }
-    await Promise.all(writes);
+    await Promise.all(indexWrites);
   }
 
   await patchListCache(kv, thread); // instant sidebar update — reply count / reopened status

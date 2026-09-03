@@ -7,7 +7,7 @@ import { getRouteOverride } from "../_shared/routes.js";
 import { getIssueSheetOverride, resolveWriteTab, promotionModuleId } from "../_shared/issueSubmissionSheets.js";
 import { resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY, buildTicketMessage, buildTitleAndSummary } from "../_shared/messageBuilders.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
-import { resolveThreadsStore } from "../_shared/countries.js";
+import { resolveThreadsStore, resolveScreenshotsBucket } from "../_shared/countries.js";
 
 // MERGED (2026-08-20) — excludes DEPOSIT_CHANNEL_PSEUDO_MODULES from
 // what a submission can claim as its moduleId. Those ids exist in
@@ -174,13 +174,23 @@ async function handleSubmit({ request, env, waitUntil }) {
 
   // 1. Upload attachments to R2 first (if configured) so the message text
   //    can include a real, directly-openable screenshot link.
+  // FIXED (2026-09-03) — this used to check `env.SCREENSHOTS_BUCKET`, a
+  // binding that stopped existing for ANY country the moment the merge
+  // split R2 into one bucket per country (SCREENSHOTS_BUCKET_INR/PKR/PHP —
+  // see wrangler.toml and _shared/countries.js's resolveScreenshotsBucket).
+  // The guard below was therefore always false and this whole block was a
+  // silent no-op — no error surfaced anywhere, tickets just went out with
+  // no screenshot link, for every country. See _shared/r2.js's file header
+  // for the fuller story (same class of bug functions/api/brand-config.js
+  // already found and fixed for brand-config.json on 2026-08-25).
+  const screenshotsBucket = resolveScreenshotsBucket(env, brand.country);
   const r2Links = [];
   const r2Errors = [];
-  if (env.SCREENSHOTS_BUCKET && SCREENSHOT_R2_ENABLED[moduleId] && Array.isArray(attachments) && attachments.length) {
+  if (screenshotsBucket && SCREENSHOT_R2_ENABLED[moduleId] && Array.isArray(attachments) && attachments.length) {
     const origin = new URL(request.url).origin;
     for (const att of attachments) {
       try {
-        const key = await uploadAttachmentToR2(env, { moduleId, brandId, attachment: att });
+        const key = await uploadAttachmentToR2(env, { moduleId, brandId, attachment: att, bucket: screenshotsBucket });
         r2Links.push(screenshotUrl(origin, key));
       } catch (e) {
         r2Errors.push(`${att.name}: ${e.message || e}`);
