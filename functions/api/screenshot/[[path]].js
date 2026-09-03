@@ -54,3 +54,28 @@ async function handleScreenshot({ params, env }) {
 
   return new Response(object.body, { headers });
 }
+
+// Tries the brand's own country's bucket first (the fast, correct path
+// for every link generated after this fix), then falls back to every
+// OTHER country's bucket in turn — only relevant for a brandId that's
+// since been removed from routing.js, or a key from before this fix, so
+// an old link doesn't hard-404 just because the brand lookup came up
+// empty. `bucketFound` is tracked separately from `object` so the caller
+// can tell "no bucket is bound anywhere" (a real config problem, 500)
+// apart from "buckets are fine, this key just isn't in any of them"
+// (404).
+async function findObjectAcrossCountries(env, key, preferredCountry) {
+  const order = preferredCountry
+    ? [preferredCountry, ...COUNTRY_CODES.filter((c) => c !== preferredCountry)]
+    : COUNTRY_CODES;
+
+  let bucketFound = false;
+  for (const country of order) {
+    const bucket = resolveScreenshotsBucket(env, country);
+    if (!bucket) continue;
+    bucketFound = true;
+    const object = await bucket.get(key);
+    if (object) return { object, bucketFound: true };
+  }
+  return { object: null, bucketFound };
+}

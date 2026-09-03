@@ -57,3 +57,17 @@ merge 前的名单里应该是包含 `promotion_request` 的（早期工单 Shee
 `/api/screenshot/...` 链接就是证据），三国合并时被漏掉了，跟 bucket 绑定名字那个
 bug是两个独立问题、只是表现一样（都退回 TG 链接）。已把 `promotion_request: true`
 加回 `SCREENSHOT_R2_ENABLED`。
+
+## 追加（同日）：修复本身漏写了一个函数，导致点开链接直接 500
+
+上面 `screenshot/[[path]].js` 那次改动里，`handleScreenshot()` 调用了
+`findObjectAcrossCountries()`，但当时只写了调用、忘了写这个函数本身的实现——
+所以点开任何 `/api/screenshot/...` 链接都会直接报
+`Unexpected server error: findObjectAcrossCountries is not defined`。
+这是这次改动自己的失误，跟 R2 绑定/白名单那两个 bug 无关。
+
+已补上 `findObjectAcrossCountries(env, key, preferredCountry)` 的实现：优先试
+key 对应品牌所在国家的 bucket，找不到再依次试其余国家的 bucket（兼容改动之前
+生成的旧链接、或品牌后来从 routing.js 里删掉的情况）；用 `bucketFound` 单独
+标记"是不是压根没有任何国家绑了 bucket"（500，配置问题），跟"bucket 都在、
+只是这个 key 找不到"（404，正常的"文件不存在/已过期"）区分开。

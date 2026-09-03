@@ -649,11 +649,11 @@ async function sendTelegramReplyAttachments(botToken, thread, text, attachments,
   };
 }
 
-async function sendReplySingleWithCaption(botToken, thread, text, attachment, replyId) {
+async function sendReplySingleWithCaption(botToken, thread, text, attachment, replyId, forceDocument = false) {
   let { name, type, dataUrl } = attachment;
   let bytes = dataUrlToBytes(dataUrl);
 
-  const kind = attachmentKind(type, name);
+  const kind = forceDocument ? "document" : attachmentKind(type, name);
   // Same "compress before Telegram can reject it" fix as submit.js — see
   // telegram-photo-limit-fix.md. Only photos hit Telegram's 10MB
   // sendPhoto limit; sendVideo/sendDocument have their own separate
@@ -679,6 +679,20 @@ async function sendReplySingleWithCaption(botToken, thread, text, attachment, re
   const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, { method: "POST", body: form });
   const data = await res.json();
   if (!data.ok) {
+    // 2026-09-03 — same fallback as submit.js's sendSingleWithCaption():
+    // Telegram's sendPhoto rejects extreme-aspect-ratio or oversized-
+    // dimension images with "PHOTO_INVALID_DIMENSIONS" regardless of
+    // file size (a few-KB sliver-shaped screenshot triggers it just as
+    // easily as a huge one), which the existing size-based
+    // compressImageForTelegram() never even runs for and can't fix
+    // anyway. Retry once as sendDocument on this specific error instead
+    // of reimplementing Telegram's exact dimension rules — same bytes,
+    // no dimension constraint, just shown as a file instead of an inline
+    // photo. Guarded to fire at most once (forceDocument) so a
+    // genuinely corrupt file can't loop.
+    if (kind === "photo" && !forceDocument && /PHOTO_INVALID_DIMENSIONS/.test(data.description || "")) {
+      return sendReplySingleWithCaption(botToken, thread, text, attachment, replyId, true);
+    }
     console.error(`[threads/[id].js] Reply attachment send failed (${method}): ${data.description || "unknown error"}`);
     throw new Error(data.description || "Telegram send failed.");
   }

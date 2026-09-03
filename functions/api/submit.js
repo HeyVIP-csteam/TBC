@@ -488,11 +488,11 @@ async function sendTelegramWithAttachments({ botToken, route, text, attachments 
   };
 }
 
-async function sendSingleWithCaption({ botToken, route, text, attachment }) {
+async function sendSingleWithCaption({ botToken, route, text, attachment, forceDocument = false }) {
   let { name, type, dataUrl } = attachment;
   let bytes = base64ToBytes(dataUrlToBase64(dataUrl));
 
-  const isImage = looksLikeImage(type, name);
+  const isImage = !forceDocument && looksLikeImage(type, name);
   // Compress BEFORE handing bytes to Telegram, not after Telegram already
   // rejected them — see _shared/telegramImageCompress.js. No-op if the
   // image is already under the target size or not an image at all (this
@@ -520,7 +520,26 @@ async function sendSingleWithCaption({ botToken, route, text, attachment }) {
 
   const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, { method: "POST", body: form });
   const data = await res.json();
-  if (!data.ok) throw new Error(data.description || "unknown Telegram error");
+  if (!data.ok) {
+    // 2026-09-03 — Telegram's sendPhoto rejects images with an extreme
+    // aspect ratio (over ~20:1) or width+height above 10000px with
+    // "PHOTO_INVALID_DIMENSIONS", completely independent of file size —
+    // a 4KB sliver-shaped screenshot triggers this exactly as easily as
+    // a huge one, so telegramImageCompress.js's size-based compression
+    // never even runs for it (nowhere near the size threshold) and can't
+    // help here. Rather than reimplement Telegram's exact dimension
+    // rules ourselves, fall back once to sendDocument on this specific
+    // error — Telegram's document upload has no dimension constraints,
+    // so the same original bytes go through fine, just shown as a file
+    // attachment instead of an inline photo preview. Keeps the
+    // attachment from being lost/blocking the whole submission instead
+    // of hard-failing it. Guarded to fire at most once (forceDocument)
+    // so a genuinely broken/corrupt file can't loop.
+    if (isImage && !forceDocument && /PHOTO_INVALID_DIMENSIONS/.test(data.description || "")) {
+      return sendSingleWithCaption({ botToken, route, text, attachment, forceDocument: true });
+    }
+    throw new Error(data.description || "unknown Telegram error");
+  }
   const fileId = isImage
     ? data.result.photo?.[data.result.photo.length - 1]?.file_id || null
     : data.result.document?.file_id || null;
