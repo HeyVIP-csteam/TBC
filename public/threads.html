@@ -149,7 +149,17 @@ html[data-theme="light"] {
       // see, tagged with t.country, and expects the frontend to filter
       // — see that endpoint's own comment). This page previously never
       // did that filtering step at all.
-    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => { renderLists(); window.refreshAnnouncementBanner?.(); });
+    // 2026-09-04 — switching country now needs a fresh loadList() (the
+    // server call itself is scoped to the selected country as of
+    // today's fix in functions/api/threads.js), not just a client-side
+    // re-render of already-fetched data — otherwise the list would
+    // still be showing whatever the PREVIOUS country's server response
+    // contained until the next 30s poll caught up. renderLists() is
+    // still called too (via loadList()'s own tail call) so there's no
+    // gap where the old list lingers on screen while the new fetch is
+    // in flight — loadList() only swaps activeThreads/solvedThreads
+    // once the new response actually arrives.
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => { loadList(document.getElementById("threadSearch").value); window.refreshAnnouncementBanner?.(); });
       loadList();
       if (isAdmin) loadRecallLog();
       polishEmoji();
@@ -972,7 +982,22 @@ html[data-theme="light"] {
 
     async function loadList(q) {
       try {
-        const res = await authFetch(`/api/threads${q ? "?q=" + encodeURIComponent(q) : ""}`, { cache: "no-store" });
+        // 2026-09-04 — now also sends the currently selected country as
+        // a query param, so the SERVER only ever returns that one
+        // country's threads (see functions/api/threads.js's own
+        // 2026-09-04 comment for why: filterByCountry() below is left
+        // in place as a second layer, but the fix that actually matters
+        // is not shipping the other countries' data down to the client
+        // in the first place). "ALL" (or no country selected at all,
+        // e.g. AgentCountry isn't loaded on some page) omits the param
+        // entirely, which keeps today's merge-everything-allowed
+        // behavior.
+        const country = window.AgentCountry ? AgentCountry.getCountry() : null;
+        const params = new URLSearchParams();
+        if (q) params.set("q", q);
+        if (country && !(window.AgentCountry && AgentCountry.isAll(country))) params.set("country", country);
+        const qs = params.toString();
+        const res = await authFetch(`/api/threads${qs ? "?" + qs : ""}`, { cache: "no-store" });
         const data = await res.json();
         if (!data.ok) return;
         activeThreads = data.active || [];
