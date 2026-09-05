@@ -925,6 +925,41 @@ export async function backfillMentionCandidatesPage(store, cursor) {
 //
 // KV-ONLY country: falls back to the original read-modify-write path,
 // unchanged from before this pass.
+// 2026-09-05 — the CONTENT-saving writes below (db.batch(appendStmts) /
+// saveThread() in appendMessage()) were deliberately left as a single
+// unretried attempt on 2026-09-03 — "allowed to throw, losing the reply
+// really is fatal" — on the reasoning that retries belonged on the
+// index writes, not this one. That reasoning missed something: a
+// single transient KV/D1 hiccup on THIS specific write still loses the
+// reply outright, with nothing to fall back on — and for a country with
+// no D1 at all (PKR/PHP), this KV put() is the ONLY write that happens
+// at all, so it doesn't get a second layer of protection the way INR's
+// D1 path arguably has (D1's own internal retry-on-busy behavior).
+// Confirmed live: a genuine Telegram-native reply (not a
+// misidentified non-reply — checked directly in the Telegram app) from
+// PYT_BOT ACC, followed by BNAssistant's reply TO that message, both
+// went missing from the same PKR thread in the same short window —
+// consistent with the first write failing outright (no retry) and the
+// second cascading from it (nothing to attach to). Retries this exact
+// write now, with the same backoff shape as everything else in this
+// file, and STILL rethrows if every attempt fails — this doesn't change
+// the "losing the reply is a real, loud failure" judgment call, it just
+// makes a single transient blip survivable before reaching that point.
+async function saveWithRetry(writeFn, label, attempts = 4) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await writeFn();
+    } catch (e) {
+      lastErr = e;
+      console.error(`[threads.js] content write FAILED (attempt ${i + 1}/${attempts}) for ${label}: ${String((e && e.message) || e)}`);
+      if (i < attempts - 1) await sleep(300 * (i + 1) + Math.floor(Math.random() * 200));
+    }
+  }
+  console.error(`[threads.js] content write gave up after ${attempts} attempts for ${label} — this reply is genuinely lost, not just unindexed.`);
+  throw lastErr;
+}
+
 export async function appendMessage(store, threadId, message) {
   const { kv, db } = store;
   const allIds = message.messageIds && message.messageIds.length ? message.messageIds : (message.messageId ? [message.messageId] : []);
@@ -985,7 +1020,7 @@ export async function appendMessage(store, threadId, message) {
         ).bind(threadId)
       );
     }
-    await db.batch(appendStmts);
+    await saveWithRetry(() => db.batch(appendStmts), `thread ${threadId} append (D1)`);
 
     await Promise.all(
       allIds.map((mid) =>
@@ -1032,7 +1067,7 @@ export async function appendMessage(store, threadId, message) {
     // allowed to throw (losing the reply really is fatal); the
     // msgid:/mention-candidate writes run after, via retry + log-only
     // failure (writeIndexEntryWithRetry above), matching the D1 branch.
-    await saveThread(store, thread);
+    await saveWithRetry(() => saveThread(store, thread), `thread ${thread.id} append (KV)`);
     const indexWrites = allIds.map((mid) =>
       writeIndexEntryWithRetry(() => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id), `thread ${thread.id} message ${mid}`)
     );
