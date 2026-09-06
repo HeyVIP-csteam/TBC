@@ -74,6 +74,7 @@ export function resolveColumnValues(columns, { fieldMap, brand, reporter, screen
       if (col === "pic") return reporter || "-";
       if (col === "screenshotLink") return (screenshotLink || (attachmentLinks || []).join(", ")) || "-";
       if (col === "dateFormatted") return formatDateDDMMYYYY(fieldMap.reportDate || fieldMap.date) || "-";
+      if (col === "dateLongLower") return formatDateLongLower(fieldMap.reportDate || fieldMap.date) || "-";
       // "autoDate" — today's date, written automatically with no form
       // field needed (unlike "dateFormatted" above, which reads a real
       // field the agent filled in). Used by modules whose form doesn't
@@ -169,6 +170,32 @@ export function formatDateDDMMYYYY(isoDate) {
   const [y, m, d] = isoDate.split("-");
   if (!y || !m || !d) return isoDate;
   return `${d}/${m}/${y}`;
+}
+
+const MONTH_NAMES_LOWER = [
+  "january", "february", "march", "april", "may", "june",
+  "july", "august", "september", "october", "november", "december",
+];
+
+// "dateLongLower" — e.g. "24-august-2026". Referenced by several PHP
+// promotion Sheet column configs in routing.js (betjili_php/betvisa_php's
+// PROMOTION_SHEET_CONFIG entries) to match that Sheet's existing manual
+// date format, but this formatter itself was never actually written —
+// resolveColumnValues() below had no case for it, so it silently fell
+// through to `fieldMap["dateLongLower"] || "-"`, and since no form field
+// is ever actually named that, every PHP promotion ticket got a bare "-"
+// in its Date column from (at latest) whenever that config started
+// referencing this key — not a recent regression, just never finished.
+// Confirmed 2026-09-06 against the actual Sheet: older rows (written
+// before whatever changed the config to use this key) show real
+// "24-august-2026"-style dates, everything since is "-".
+export function formatDateLongLower(isoDate) {
+  if (!isoDate) return "";
+  const [y, m, d] = isoDate.split("-");
+  if (!y || !m || !d) return isoDate;
+  const month = MONTH_NAMES_LOWER[Number(m) - 1];
+  if (!month) return isoDate;
+  return `${Number(d)}-${month}-${y}`;
 }
 
 // Used for any Risk Issue type that doesn't have its own row list in

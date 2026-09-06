@@ -972,7 +972,24 @@ export async function appendMessage(store, threadId, message) {
     // reply to a not-yet-healed thread would silently vanish instead of
     // being recorded). Also gives us `chatId` for the message_index
     // inserts below without a second read.
-    const existing = await getThread(store, threadId);
+    // 2026-09-06 — this read used to be a single unretried
+    // getThread() call. It's IN FRONT OF the retry-protected write
+    // below (saveWithRetry(() => db.batch(appendStmts))), so a
+    // transient failure here — a plain `db.prepare(...).first()`
+    // throwing under momentary D1 contention, no different from the
+    // SQLITE_BUSY risk everything else in this file retries for —
+    // threw straight out of appendMessage() entirely, before ever
+    // reaching the part with retry protection. Caught only by
+    // telegram-webhook/[country].js's outermost try/catch, logged, and
+    // dropped — same silent-loss shape as the write-side bug fixed on
+    // 2026-09-03/05, just one step earlier in the function and specific
+    // to D1 countries (KV-only PKR/PHP have no equivalent read here).
+    // This is very likely why INR specifically kept recurring after
+    // that fix: the write got a safety net, but the read feeding it
+    // didn't. Retried now with the same rethrow-after-exhausting
+    // semantics as saveWithRetry — losing the reply is still a real
+    // failure, it just survives one bad D1 moment first.
+    const existing = await saveWithRetry(() => getThread(store, threadId), `thread ${threadId} pre-append read (D1)`);
     if (!existing) return null;
 
     // 2026-09-03 — the message-append UPDATE below (the write that
