@@ -436,13 +436,39 @@ export async function createThread(store, { module: moduleId, moduleName, icon, 
   // IGNORE — createThread only ever inserts brand-new ids, never
   // updates an existing pointer). KV-only country: msgid: keys, exactly
   // as before this pass. allSettled (not all) — see comment above.
+  // 2026-09-07 — this used to be a single unretried Promise.allSettled
+  // attempt (see the writeIndexEntryWithRetry() helper this now reuses
+  // — it was added on 2026-09-03 for appendMessage()'s equivalent write,
+  // but never applied HERE). Confirmed live: a ticket whose creation
+  // otherwise fully succeeded (thread record, Sheet row, R2 screenshot —
+  // everything) ended up with a completely empty `messages: []` even
+  // though two genuine Telegram-native replies (PYT_BOT ACC to the root
+  // message, then BNAssistant to THAT reply) both happened in the group.
+  // The root message's own message_index row is exactly what
+  // findThreadIdByMessage() needs to resolve a reply BACK to this
+  // thread — if that one INSERT failed here at creation time (D1
+  // contention, same SQLITE_BUSY class of risk retried everywhere else
+  // in this file), the very first reply silently fails to match
+  // ("a reply to something we're not tracking" — telegram-webhook/
+  // [country].js returns early, never even reaching appendMessage(),
+  // so none of THAT function's retry protection ever got a chance to
+  // help), and every reply-to-that-reply cascades from there with
+  // nothing to attach to. This is very likely why INR kept recurring
+  // even after appendMessage() itself was hardened across three
+  // separate passes — this bug lives one step earlier, at ticket
+  // creation, not in the reply-handling path those passes covered.
   const indexWrites = await Promise.allSettled(
     db
       ? allRootIds.map((mid) =>
-          db.prepare(`INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`)
-            .bind(thread.chatId, mid, thread.id).run()
+          writeIndexEntryWithRetry(
+            () => db.prepare(`INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`)
+                    .bind(thread.chatId, mid, thread.id).run(),
+            `thread ${thread.id} message ${mid} (createThread)`
+          )
         )
-      : allRootIds.map((mid) => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id))
+      : allRootIds.map((mid) =>
+          writeIndexEntryWithRetry(() => kv.put(`msgid:${thread.chatId}:${mid}`, thread.id), `thread ${thread.id} message ${mid} (createThread)`)
+        )
   );
   for (const r of indexWrites) {
     if (r.status === "rejected") {
