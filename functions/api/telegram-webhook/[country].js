@@ -138,7 +138,32 @@ async function handleUpdate(store, update, ownBotId) {
   const isGenuineReply = replyTarget && !isAutoTopicReply;
   if (!isGenuineReply) return; // Not a deliberate reply — ignore, don't guess.
 
-  const threadId = await findThreadIdByMessage(store, msg.chat.id, replyTarget.message_id);
+  // 2026-09-07 — findThreadIdByMessage() returning nothing here used to
+  // be treated as final ("a reply to something we're not tracking") on
+  // the very first try. That's correct for a reply to a message we
+  // genuinely never sent — but it's WRONG for a race: createThread()
+  // sends the Telegram message, THEN writes that message's
+  // message_index row (with its own retry-on-failure as of the last
+  // few passes, but retry takes time, and even the happy path isn't
+  // instant). A fully automated bot (e.g. PYT_BOT ACC) can reply within
+  // milliseconds of seeing the message post — fast enough to hit this
+  // webhook BEFORE our own index write has landed, even though nothing
+  // actually failed on either side. Confirmed live: the earliest
+  // replies (seconds to ~1 minute after ticket creation) were the ones
+  // that went missing while replies 10+ minutes later on the same
+  // ticket matched fine every time — a timing race fits that pattern,
+  // a write failure doesn't (a write failure wouldn't care how much
+  // later the reply came). Retries the LOOKUP itself a few times with
+  // short delays before giving up — cheap (a few hundred ms added only
+  // for the reply that actually races this window, not every request),
+  // and turns "arrived a beat too early" from a silent permanent loss
+  // into "found it on the second or third try."
+  let threadId = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    threadId = await findThreadIdByMessage(store, msg.chat.id, replyTarget.message_id);
+    if (threadId) break;
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+  }
   if (!threadId) return; // Reply to something we're not tracking.
 
   const name = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "Unknown";
