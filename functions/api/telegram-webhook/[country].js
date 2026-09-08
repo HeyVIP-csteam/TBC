@@ -50,7 +50,7 @@ import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js"
 import { resolveWebhookSecretWithOverride } from "../../_shared/botTokenOverride.js";
 import { resolveBotToken } from "../../_shared/routing.js";
 
-export async function onRequestPost({ request, env, params }) {
+export async function onRequestPost({ request, env, params, waitUntil }) {
   const country = (params.country || "").toUpperCase();
   if (!isValidCountry(country)) return new Response("Not found", { status: 404 });
 
@@ -103,7 +103,7 @@ export async function onRequestPost({ request, env, params }) {
   }
 
   try {
-    await handleUpdate(store, update, ownBotId);
+    await handleUpdate(store, update, ownBotId, waitUntil, country);
   } catch (e) {
     // Swallow errors so a broken reply-sync never makes Telegram think the
     // webhook is unhealthy and start retrying/backing off — but DO log so
@@ -117,7 +117,7 @@ export async function onRequestPost({ request, env, params }) {
   return new Response("ok");
 }
 
-async function handleUpdate(store, update, ownBotId) {
+async function handleUpdate(store, update, ownBotId, waitUntil, country) {
   if (update.edited_message) return handleEditedMessage(store, update.edited_message, ownBotId);
   const msg = update.message;
   if (!msg) return;
@@ -137,34 +137,6 @@ async function handleUpdate(store, update, ownBotId) {
   const isAutoTopicReply = replyTarget && msg.is_topic_message && msg.message_thread_id === replyTarget.message_id;
   const isGenuineReply = replyTarget && !isAutoTopicReply;
   if (!isGenuineReply) return; // Not a deliberate reply — ignore, don't guess.
-
-  // 2026-09-07 — findThreadIdByMessage() returning nothing here used to
-  // be treated as final ("a reply to something we're not tracking") on
-  // the very first try. That's correct for a reply to a message we
-  // genuinely never sent — but it's WRONG for a race: createThread()
-  // sends the Telegram message, THEN writes that message's
-  // message_index row (with its own retry-on-failure as of the last
-  // few passes, but retry takes time, and even the happy path isn't
-  // instant). A fully automated bot (e.g. PYT_BOT ACC) can reply within
-  // milliseconds of seeing the message post — fast enough to hit this
-  // webhook BEFORE our own index write has landed, even though nothing
-  // actually failed on either side. Confirmed live: the earliest
-  // replies (seconds to ~1 minute after ticket creation) were the ones
-  // that went missing while replies 10+ minutes later on the same
-  // ticket matched fine every time — a timing race fits that pattern,
-  // a write failure doesn't (a write failure wouldn't care how much
-  // later the reply came). Retries the LOOKUP itself a few times with
-  // short delays before giving up — cheap (a few hundred ms added only
-  // for the reply that actually races this window, not every request),
-  // and turns "arrived a beat too early" from a silent permanent loss
-  // into "found it on the second or third try."
-  let threadId = null;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    threadId = await findThreadIdByMessage(store, msg.chat.id, replyTarget.message_id);
-    if (threadId) break;
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
-  }
-  if (!threadId) return; // Reply to something we're not tracking.
 
   const name = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "Unknown";
 
@@ -187,7 +159,7 @@ async function handleUpdate(store, update, ownBotId) {
     attachmentName = "sticker";
   }
 
-  await appendMessage(store, threadId, {
+  const messageToAppend = {
     from: name,
     handle: msg.from?.username ? `@${msg.from.username}` : null,
     text: msg.text || msg.caption || (attachmentFileId ? `📎 ${attachmentName}` : "(attachment)"),
@@ -198,7 +170,83 @@ async function handleUpdate(store, update, ownBotId) {
     self: false,
     messageId: msg.message_id,
     replyToMessageId: replyTarget.message_id,
-  });
+  };
+
+  // 2026-09-07/08 — findThreadIdByMessage() returning nothing here used
+  // to be treated as final ("a reply to something we're not tracking")
+  // on the very first try. That's correct for a reply to a message we
+  // genuinely never sent — but it's WRONG for two different kinds of
+  // race:
+  //   1. createThread() sends the Telegram message, THEN writes that
+  //      message's message_index row — a fully automated bot can reply
+  //      within milliseconds, fast enough to beat that write even on a
+  //      good day.
+  //   2. For PKR/PHP specifically (no D1, pure KV — see countries.js),
+  //      Cloudflare's own docs put KV's global read-after-write
+  //      consistency window at UP TO 60 SECONDS: the edge that answers
+  //      this webhook request may simply not have replicated the write
+  //      createThread() made moments ago on a different edge yet. This
+  //      is not a bug in our code to fix — it is how KV is documented to
+  //      behave — so a few hundred ms of retry (2026-09-07's first pass
+  //      at this) was nowhere near enough for case 2, confirmed by this
+  //      exact symptom recurring on PHP right after that fix shipped.
+  // Handles both now: a short SYNCHRONOUS retry (a few hundred ms) covers
+  // case 1 without making Telegram wait noticeably longer for its 200.
+  // If that still comes up empty, the match is handed off to a BACKGROUND
+  // retry via waitUntil() — the webhook responds to Telegram immediately
+  // (so Telegram doesn't see a slow endpoint and start backing off/
+  // retrying deliveries), while a worker instance kept alive by
+  // waitUntil() keeps checking every few seconds for up to a minute,
+  // long enough to cover KV's documented worst case. Only after THAT is
+  // exhausted does the reply actually count as un-matchable.
+  let threadId = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    threadId = await findThreadIdByMessage(store, msg.chat.id, replyTarget.message_id);
+    if (threadId) break;
+    if (attempt < 1) await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  if (threadId) {
+    await appendMessage(store, threadId, messageToAppend);
+    return;
+  }
+
+  if (typeof waitUntil === "function") {
+    waitUntil(retryMatchInBackground(store, msg.chat.id, replyTarget.message_id, messageToAppend, country));
+  }
+  // No synchronous fallback beyond this — deliberately not blocking the
+  // webhook response on up to 60 seconds of retrying. Telegram expects a
+  // prompt response; a hung connection here would look like an unhealthy
+  // webhook (see the 2026-08-30 Bot Token Settings live-status work) even
+  // though the eventual match still happens fine in the background.
+}
+
+// Runs AFTER the webhook has already responded to Telegram (see
+// waitUntil() above). Cloudflare's documented KV read-after-write window
+// is up to 60s, so this checks every 5s for up to 60s (12 attempts) —
+// generous enough to cover that worst case without holding a Worker
+// instance open indefinitely for what's meant to be a rare event.
+async function retryMatchInBackground(store, chatId, replyToMessageId, messageToAppend, country) {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    let threadId;
+    try {
+      threadId = await findThreadIdByMessage(store, chatId, replyToMessageId);
+    } catch (e) {
+      console.error(`[telegram-webhook/${country}] background match lookup failed (attempt ${attempt + 1}/12) for reply to message ${replyToMessageId}: ${String((e && e.message) || e)}`);
+      continue;
+    }
+    if (threadId) {
+      try {
+        await appendMessage(store, threadId, messageToAppend);
+        console.error(`[telegram-webhook/${country}] background match SUCCEEDED (attempt ${attempt + 1}/12) for reply to message ${replyToMessageId} -> thread ${threadId}. (This is logged at error level only so it shows up in the same log stream as failures — it is not itself a failure.)`);
+      } catch (e) {
+        console.error(`[telegram-webhook/${country}] background match found thread ${threadId} but appendMessage failed: ${String((e && e.message) || e)}`);
+      }
+      return;
+    }
+  }
+  console.error(`[telegram-webhook/${country}] background match gave up after 60s for reply to message ${replyToMessageId} in chat ${chatId} — this reply is genuinely un-matchable, not just slow.`);
 }
 
 async function handleEditedMessage(store, msg, ownBotId) {
