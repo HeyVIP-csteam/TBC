@@ -50,7 +50,22 @@ import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js"
 import { resolveWebhookSecretWithOverride } from "../../_shared/botTokenOverride.js";
 import { resolveBotToken } from "../../_shared/routing.js";
 
-export async function onRequestPost({ request, env, params, waitUntil }) {
+export async function onRequestPost(context) {
+  const { request, env, params } = context;
+  // 2026-09-11 — FIXED: this used to destructure `waitUntil` straight out
+  // of the context object (`{ request, env, params, waitUntil }`).
+  // `waitUntil` is a METHOD bound to that context object internally —
+  // pulling it out as a standalone reference loses its `this` binding,
+  // so calling it later as a bare function very likely throws ("Illegal
+  // invocation" is the typical shape of this exact mistake). That
+  // exception was silently swallowed by this file's own outer
+  // try/catch around handleUpdate() (see below — it exists specifically
+  // so a broken reply-sync never makes the webhook look unhealthy to
+  // Telegram), which is exactly why the 2026-09-08 background-retry fix
+  // never actually showed any sign of running at all, successful or
+  // failed — it likely never got scheduled in the first place. Keeping
+  // it bound to `context` here avoids the whole class of bug.
+  const waitUntil = context.waitUntil ? context.waitUntil.bind(context) : null;
   const country = (params.country || "").toUpperCase();
   if (!isValidCountry(country)) return new Response("Not found", { status: 404 });
 
@@ -212,7 +227,18 @@ async function handleUpdate(store, update, ownBotId, waitUntil, country) {
   }
 
   if (typeof waitUntil === "function") {
-    waitUntil(retryMatchInBackground(store, msg.chat.id, replyTarget.message_id, messageToAppend, country));
+    try {
+      waitUntil(retryMatchInBackground(store, msg.chat.id, replyTarget.message_id, messageToAppend, country));
+    } catch (e) {
+      // Belt-and-suspenders: if waitUntil() itself throws for any reason
+      // (wrong binding, unsupported runtime, whatever) this MUST be
+      // visible, not swallowed — this exact kind of silent throw is what
+      // made the previous version of this fix look like it was doing
+      // nothing.
+      console.error(`[telegram-webhook/${country}] waitUntil() call itself failed — background retry was NOT scheduled for reply to message ${replyTarget.message_id}: ${String((e && e.message) || e)}`);
+    }
+  } else {
+    console.error(`[telegram-webhook/${country}] waitUntil is not available on this context — background retry can't run for reply to message ${replyTarget.message_id} (this platform/runtime doesn't support it, or the context shape changed again).`);
   }
   // No synchronous fallback beyond this — deliberately not blocking the
   // webhook response on up to 60 seconds of retrying. Telegram expects a
