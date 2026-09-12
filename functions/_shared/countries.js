@@ -39,7 +39,18 @@ export const COUNTRIES = {
     currencySymbol: "₨",
     botTokenEnvVar: "TELEGRAM_BOT_TOKEN_PKR",
     threadsKvBinding: "THREADS_KV_PKR",
-    threadsDbBinding: null,
+    // 2026-09-12 — was `null` (pure KV). Switched to D1 for the same
+    // reason INR already made this move: pure-KV's up-to-60s global
+    // read-after-write window is exactly why bot replies in PKR's
+    // Telegram groups showed up "sometimes, not always" — not a logic
+    // bug, a distributed-consistency one. threads.js's `if (store.db)`
+    // pattern makes this additive: every function already knows how to
+    // use D1 when present. See CHANGES-2026-09-12-pkr-php-d1-migration.md
+    // for the required manual Cloudflare Dashboard steps (create the D1
+    // database, run d1-schema.sql, fill in wrangler.toml's placeholder
+    // database_id below) — this code change alone does nothing until
+    // that database actually exists and is bound.
+    threadsDbBinding: "THREADS_DB_PKR",
     screenshotsBucketBinding: "SCREENSHOTS_BUCKET_PKR",
   },
   PHP: {
@@ -48,7 +59,9 @@ export const COUNTRIES = {
     currencySymbol: "₱",
     botTokenEnvVar: "TELEGRAM_BOT_TOKEN_PHP",
     threadsKvBinding: "THREADS_KV_PHP",
-    threadsDbBinding: null,
+    // 2026-09-12 — same move, same reason, see PKR's comment above and
+    // CHANGES-2026-09-12-pkr-php-d1-migration.md.
+    threadsDbBinding: "THREADS_DB_PHP",
     screenshotsBucketBinding: "SCREENSHOTS_BUCKET_PHP",
   },
 };
