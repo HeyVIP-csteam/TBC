@@ -88,13 +88,21 @@
  * either to `Infinity` to disable that rule entirely. Cleanup runs
  * opportunistically (piggy-backing on normal reads), since Cloudflare
  * Pages Functions don't support Cron Triggers.
+ *
+ * 2026-09-13 — raised 30/90 → 180 (and DELETED_RETENTION_DAYS below to
+ * match) now that the account is on the Workers Paid plan: the 1,000/day
+ * KV delete cap that originally forced these numbers low is now
+ * 1,000,000/month included, so 180 days of headroom costs nothing extra
+ * at this project's ticket volume. See
+ * CHANGES-2026-09-12-pkr-php-d1-migration.md for the D1 migration this
+ * sits alongside.
  */
 
 // Solved tickets older than this many days are auto-deleted.
-const SOLVED_RETENTION_DAYS = 30;
+const SOLVED_RETENTION_DAYS = 180;
 // Any ticket (solved or not) with zero activity for this many days is
 // auto-deleted as a safety net, so a never-solved ticket can't sit forever.
-const STALE_RETENTION_DAYS = 90;
+const STALE_RETENTION_DAYS = 180;
 
 function newId() {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1325,7 +1333,9 @@ export async function removeMessageFromThread(store, threadId, messageId) {
 // own `ts` as the clock. A thread this old the next time anyone (any
 // list, any lookup) reads it just isn't there anymore, same as any
 // other purge.
-export const DELETED_RETENTION_DAYS = 30;
+// 2026-09-13 — raised 30 → 180, same reason as SOLVED_RETENTION_DAYS/
+// STALE_RETENTION_DAYS above (Workers Paid plan headroom).
+export const DELETED_RETENTION_DAYS = 180;
 
 export async function softDeleteThread(store, threadId, deletedBy) {
   const thread = await getThread(store, threadId);
