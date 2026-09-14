@@ -120,7 +120,14 @@ async function handlePost({ request, env }) {
   if (!brand) {
     return json({ ok: false, error: "This ticket doesn't support forwarding (it predates this feature, or its brand no longer exists)." }, 400);
   }
-  if (!canSeeBrand(account, brand.name)) {
+  // BUGFIX (2026-09-14) — same class of bug as check-tid.js (see that
+  // file's comment): brand.name can be ambiguous across countries
+  // ("Crickex" exists in INR/PKR/PHP), so canSeeBrand() couldn't resolve
+  // it for accounts whose allowedBrands is stored in the id-based format
+  // — silently blocking Forward for those agents. brandId is already
+  // available right above (sourceThread.brandId), no reason to go
+  // through the ambiguous name.
+  if (!canSeeBrand(account, brandId)) {
     return json({ ok: false, error: `You don't have access to submit tickets for ${brand.name}.` }, 403);
   }
 

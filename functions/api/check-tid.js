@@ -48,7 +48,22 @@ async function handleGet({ request, env }) {
 
   const brand = BRANDS[brandId];
   if (!brand) return json({ ok: false, error: `Unknown brand "${brandId}".` }, 400);
-  if (!canSeeBrand(account, brand.name)) return json({ ok: false, error: `You don't have access to ${brand.name}.` }, 403);
+  // BUGFIX (2026-09-14) — was `canSeeBrand(account, brand.name)`. Same
+  // class of bug fixed everywhere else on 2026-09-01 (see accounts.js's
+  // canSeeBrand() header): brand.name is a bare name like "Crickex",
+  // which exists in more than one country, so canSeeBrand() can't
+  // resolve it to a specific id and silently returns false for any
+  // account whose allowedBrands is stored in the newer id-based format
+  // (accounts-admin.html has saved ids since 2026-08-20). That produced
+  // a 403 here, which the frontend (app.js's checkTid()) treats as
+  // "check unavailable" and silently clears the warning — so the
+  // duplicate-TID banner would show for some agents and not others,
+  // depending only on which format their own account's permissions
+  // happened to be stored in, never on whether the TID was actually a
+  // duplicate. This file's own brandId param IS already the id (it's
+  // literally the BRANDS[brandId] lookup key two lines up) — no reason
+  // to go through the ambiguous name at all.
+  if (!canSeeBrand(account, brandId)) return json({ ok: false, error: `You don't have access to ${brand.name}.` }, 403);
 
   // No Sheet bound for this brand, or Withdraw Issue's layout isn't set
   // up (SHEET_LAYOUT.withdraw_issue missing/misconfigured) — nothing to
