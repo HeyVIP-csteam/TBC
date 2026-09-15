@@ -957,7 +957,7 @@ const MODULES = [
       "sbj66_pkr|Birthday Bonus": 2000,
       "sbj66_pkr|Download SBJ66 APP & Claim Cash": 199,
       "kv8_pkr|Birthday Bonus": 1500,
-      "kv8_pkr|Download KV8 APP & Claim 199 Cash": 199,
+      "kv8_pkr|Download KV8 APP & Claim 200 Cash": 200,
       "darazplay_pkr|Rs.200 Download DarazPlay App": 200,
     },
         fields: [
@@ -973,7 +973,7 @@ const MODULES = [
           heybaji_pkr: ["Birthday Bonus", "Download HeyBaji APP & Claim Cash"],
           superbaji_pkr: ["Birthday Bonus", "Download SuperBaji APP & Claim Cash"],
           sbj66_pkr: ["Birthday Bonus", "Download SBJ66 APP & Claim Cash"],
-          kv8_pkr: ["Birthday Bonus", "Download KV8 APP & Claim 199 Cash"],
+          kv8_pkr: ["Birthday Bonus", "Download KV8 APP & Claim 200 Cash"],
           darazplay_pkr: ["Birthday Bonus", "Rs.200 Download DarazPlay App"],
         },
       },
