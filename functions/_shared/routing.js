@@ -611,7 +611,7 @@ export const PROMOTION_SHEET_CONFIG = {
     tidColumn: "A",
     columns: ["tid", "date", "username", "amount", "promotion", "brandCurrency", "pic"],
   },
-  "kv8_pkr|Download KV8 APP & Claim 199 Cash": {
+  "kv8_pkr|Download KV8 APP & Claim 200 Cash": {
     sheetId: "1Yiput5AMiRdubIt5h4qQBnPAR4XottEdRbqKZToGa9U",
     tab: "Download & Claim",
     startColumn: "A",
@@ -789,7 +789,7 @@ export const PROMOTION_MESSAGE_TEMPLATE = {
   "sbj66_pkr|Birthday Bonus": PROMOTION_ROWS_PKR,
   "sbj66_pkr|Download SBJ66 APP & Claim Cash": PROMOTION_ROWS_PKR,
   "kv8_pkr|Birthday Bonus": PROMOTION_ROWS_PKR,
-  "kv8_pkr|Download KV8 APP & Claim 199 Cash": PROMOTION_ROWS_PKR,
+  "kv8_pkr|Download KV8 APP & Claim 200 Cash": PROMOTION_ROWS_PKR,
   "darazplay_pkr|Birthday Bonus": PROMOTION_ROWS_PKR,
   "darazplay_pkr|Rs.200 Download DarazPlay App": PROMOTION_ROWS_PKR,
 
