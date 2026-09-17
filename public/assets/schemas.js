@@ -562,6 +562,7 @@ const MODULES = [
       {
         key: "issueType", label: "Issue Type", type: "select", required: true, emphasize: true,
         options: [
+          "Register Number Verification",
           "Bonus Auto Force",
           "Bonus Manual Force",
           "Return To Main",
@@ -576,6 +577,10 @@ const MODULES = [
         ],
       },
       { key: "uid", label: "UID", type: "text", required: true, placeholder: "Player UID..." },
+      {
+        key: "registerNumber", label: "Register Number", type: "text", required: false, placeholder: "Register number...",
+        showIf: { field: "issueType", oneOf: ["Register Number Verification"] },
+      },
       {
         key: "bonusCode", label: "Bonus Code", type: "text", required: false,
         showIf: { field: "issueType", oneOf: ["Bonus Auto Force", "Bonus Manual Force", "Return To Main", "Others Bonus Related Issue", "Bonus Cancel Related Issue"] },
@@ -625,7 +630,7 @@ const MODULES = [
       {
         key: "aadharPan", label: "Aadhar / Pan Card Number", type: "text", required: false,
         placeholder: "Type the number, or upload a screenshot below instead",
-        showIf: { field: "issueType", oneOf: ["KYC Issues"] },
+        showIf: { field: "issueType", oneOf: ["Register Number Verification", "KYC Issues"] },
       },
       {
         key: "remark", label: "Remark", type: "textarea", required: false,
@@ -662,6 +667,7 @@ const MODULES = [
       {
         key: "issueType", label: "Issue Type", type: "select", required: true, emphasize: true,
         options: [
+          "Register Number Verification",
           "Bonus Auto Force",
           "Bonus Manual Force",
           "Return To Main",
@@ -676,6 +682,10 @@ const MODULES = [
         ],
       },
       { key: "uid", label: "UID", type: "text", required: true, placeholder: "Player UID..." },
+      {
+        key: "registerNumber", label: "Register Number", type: "text", required: false, placeholder: "Register number...",
+        showIf: { field: "issueType", oneOf: ["Register Number Verification"] },
+      },
       {
         key: "bonusCode", label: "Bonus Code", type: "text", required: false,
         showIf: { field: "issueType", oneOf: ["Bonus Auto Force", "Bonus Manual Force", "Return To Main", "Others Bonus Related Issue", "Bonus Cancel Related Issue"] },
@@ -725,7 +735,7 @@ const MODULES = [
       {
         key: "aadharPan", label: "CNIC Card Number", type: "text", required: false,
         placeholder: "Type the number, or upload a screenshot below instead",
-        showIf: { field: "issueType", oneOf: ["KYC Issues"] },
+        showIf: { field: "issueType", oneOf: ["Register Number Verification", "KYC Issues"] },
       },
       {
         key: "remark", label: "Remark", type: "textarea", required: false,
