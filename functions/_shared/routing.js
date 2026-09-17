@@ -343,6 +343,11 @@ export function depositChannelModuleId(channelName) {
  */
 export const RISK_ISSUE_FIELD_EMOJI = {
   uid: "👤",
+  // 2026-09-17 — added alongside "Register Number Verification" being
+  // copied over from Account Issue into Risk Issue (same field key,
+  // same emoji ACCOUNT_ISSUE_FIELD_STYLE.registerNumber already uses,
+  // for visual consistency between the two modules' messages).
+  registerNumber: "📱",
   bonusCode: "🎁",
   recycleAmount: "💰",
   turnoverRequirement: "🔄",
