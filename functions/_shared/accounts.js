@@ -555,7 +555,11 @@ export async function listAccounts(env, { viewerUsername, viewer } = {}) {
   const raw = await env.ACCOUNTS_KV.get(ACCOUNTS_INDEX_KEY);
   const usernames = raw ? JSON.parse(raw) : [];
   const accounts = await Promise.all(usernames.map((u) => env.ACCOUNTS_KV.get(`account:${u}`)));
-  return accounts.filter(Boolean).map((a) => JSON.parse(a))
+  const parsed = accounts.filter(Boolean).map((a) => JSON.parse(a));
+  // Merge in each account's lock state from its own dedicated key — see
+  // getAccount()'s comment on why lock state moved out of this blob.
+  const withLock = await Promise.all(parsed.map((a) => mergeLockState(env, a)));
+  return withLock
     .filter((a) => a.role !== "owner" || a.username === viewerUsername)
     .filter((a) => {
       if (!viewer) return true; // no viewer context passed — don't break existing callers
@@ -566,9 +570,42 @@ export async function listAccounts(env, { viewerUsername, viewer } = {}) {
     .map(stripSecret);
 }
 
+function lockKey(username) {
+  return `lock:${username.toLowerCase()}`;
+}
+
+// BUGFIX (2026-09-17, round 2) — lock state used to live inline on the
+// same account:<username> blob that saveAccount() rewrites wholesale on
+// every profile edit. The previous fix (re-reading lock fields right
+// before saveAccount()'s own write) only NARROWED that race, it didn't
+// remove it — and it happened again for real (confirmed via direct KV
+// inspection: an account showed `locked:false` again shortly after a
+// genuine auto-lock had fired, with `tokenVersion` reverted to its
+// pre-lock value). Moving lock state to its own key, that saveAccount()
+// never reads or writes AT ALL, makes this a structural impossibility
+// instead of an unlikely timing window: there is no longer any code
+// path where a profile save can carry forward a stale copy of these
+// three fields, because saveAccount() has no copy of them to carry
+// forward in the first place.
+//
+// Falls back to the OLD inline fields on `account` when this key
+// doesn't exist yet — covers every account that predates this change
+// and has never been locked/unlocked since, so a never-locked account
+// doesn't spuriously need a migration step.
+async function mergeLockState(env, account) {
+  if (!account) return account;
+  const raw = await env.ACCOUNTS_KV.get(lockKey(account.username));
+  if (raw) {
+    const lock = JSON.parse(raw);
+    return { ...account, locked: !!lock.locked, lockedAt: lock.lockedAt || null, lockedReason: lock.lockedReason || null };
+  }
+  return account; // no dedicated key yet — trust the blob's own (legacy) fields as-is
+}
+
 export async function getAccount(env, username) {
   const raw = await env.ACCOUNTS_KV.get(`account:${username.toLowerCase()}`);
-  return raw ? JSON.parse(raw) : null;
+  const account = raw ? JSON.parse(raw) : null;
+  return mergeLockState(env, account);
 }
 
 function stripSecret(account) {
@@ -621,11 +658,6 @@ export async function saveAccount(env, { username, password, passwordChangedBy, 
   // "owner" gets "agent" instead. Either way, this function can never be
   // the mechanism that produces a new owner.
   const finalRole = role !== undefined ? (ASSIGNABLE_ROLES.includes(role) ? role : (existing?.role || "agent")) : (existing?.role || "agent");
-
-  // Re-read the lock fields fresh, as the very last read before this
-  // function's own write — see the long comment where these three
-  // fields are used below for why.
-  const lockSnapshot = await getAccount(env, key);
 
   const account = {
     username: key,
@@ -688,30 +720,15 @@ export async function saveAccount(env, { username, password, passwordChangedBy, 
     // routine profile-field save can never accidentally lock/unlock
     // someone as a side effect.
     //
-    // BUGFIX (2026-09-17) — was `existing?.locked` / `existing?.lockedAt`
-    // / `existing?.lockedReason`, i.e. carried forward from the snapshot
-    // read at the TOP of this function. Cloudflare KV has no
-    // compare-and-swap/transactions, so if setAccountLocked() (login.js's
-    // auto-lock, or a manual SuperAdmin lock) writes in the gap between
-    // that early read and this function's own final put() below, this
-    // write — being the one that lands last — would silently overwrite
-    // the lock straight back to whatever `existing` had, undoing it with
-    // no error and no trace beyond the account's own history. Confirmed
-    // happening for real: a KV inspection after an auto-lock alert had
-    // fired showed `locked: false` again, with `tokenVersion` back down
-    // to the value from BEFORE the lock's own +1 bump — proof this
-    // exact overwrite occurred, not a caching/display issue.
-    // Re-reading right here (see `lockSnapshot` above, fetched as the
-    // very last thing before this object is assembled) shrinks that
-    // window from "however long this whole function takes" down to
-    // whatever's left between that one extra KV read and the put() a
-    // few lines down — doesn't make the race impossible (nothing short
-    // of moving lock state to its own key, checked at write time by
-    // every writer, would), but makes it close enough to never in
-    // practice.
-    locked: lockSnapshot?.locked || false,
-    lockedAt: lockSnapshot?.lockedAt || null,
-    lockedReason: lockSnapshot?.lockedReason || null,
+    // Lock state is NOT written here at all, in any form — see
+    // mergeLockState()/setAccountLocked() above (2026-09-17, round 2):
+    // it lives entirely in its own `lock:<username>` KV key now,
+    // specifically so a routine profile save has no copy of these three
+    // fields to accidentally carry forward and overwrite a concurrent
+    // lock/unlock with. (Round 1 of this fix re-read them right before
+    // this function's own write instead of removing them, which only
+    // narrowed the race instead of closing it — see
+    // CHANGES-2026-09-17-saveAccount-lock-race.md for that history.)
   };
   await env.ACCOUNTS_KV.put(`account:${key}`, JSON.stringify(account));
   if (!existing) {
@@ -732,22 +749,39 @@ export async function saveAccount(env, { username, password, passwordChangedBy, 
 // unrecognized IPs in an hour, or too many consecutive wrong passwords).
 export async function setAccountLocked(env, username, locked, reason) {
   const key = username.toLowerCase();
-  const existing = await getAccount(env, key);
+  const existing = await getAccount(env, key); // merged view — just for the existence check + current tokenVersion
   if (!existing) return null;
-  existing.locked = !!locked;
-  existing.lockedAt = locked ? new Date().toISOString() : null;
-  existing.lockedReason = locked ? (reason || "Locked") : null;
+
+  const lockedAt = locked ? new Date().toISOString() : null;
+  const lockedReason = locked ? (reason || "Locked") : null;
+  // Authoritative write — the ONLY place lock state actually lives now.
+  // See mergeLockState()'s comment above for why this moved out of the
+  // account:<username> blob.
+  await env.ACCOUNTS_KV.put(lockKey(key), JSON.stringify({ locked: !!locked, lockedAt, lockedReason }));
+
   // Bump on both lock AND unlock — a token issued before the lock should
   // never come back to life just because the account was later unlocked;
-  // whoever unlocks it should get a fresh token via a real login.
-  existing.tokenVersion = (existing.tokenVersion || 0) + 1;
-  await env.ACCOUNTS_KV.put(`account:${key}`, JSON.stringify(existing));
-  return stripSecret(existing);
+  // whoever unlocks it should get a fresh token via a real login. This
+  // still lives on the main blob (read alongside role/officeId/etc
+  // everywhere else, not worth its own key) — a residual, much
+  // lower-stakes race can still theoretically clobber THIS specific
+  // field if a saveAccount() call lands in the gap (losing a
+  // tokenVersion bump just delays invalidating one stale token, it
+  // can't silently un-lock or un-unlock anyone), unlike the field this
+  // whole fix is about. `...rest` deliberately drops any locked/
+  // lockedAt/lockedReason this merged `existing` view was carrying, so
+  // the blob never re-acquires a stale copy of them.
+  const { locked: _droppedLocked, lockedAt: _droppedLockedAt, lockedReason: _droppedLockedReason, ...rest } = existing;
+  const updated = { ...rest, tokenVersion: (existing.tokenVersion || 0) + 1 };
+  await env.ACCOUNTS_KV.put(`account:${key}`, JSON.stringify(updated));
+
+  return stripSecret({ ...updated, locked: !!locked, lockedAt, lockedReason });
 }
 
 export async function deleteAccount(env, username) {
   const key = username.toLowerCase();
   await env.ACCOUNTS_KV.delete(`account:${key}`);
+  await env.ACCOUNTS_KV.delete(lockKey(key)).catch(() => {}); // best-effort — fine if it never existed
   const raw = await env.ACCOUNTS_KV.get(ACCOUNTS_INDEX_KEY);
   const usernames = raw ? JSON.parse(raw) : [];
   await env.ACCOUNTS_KV.put(ACCOUNTS_INDEX_KEY, JSON.stringify(usernames.filter((u) => u !== key)));
