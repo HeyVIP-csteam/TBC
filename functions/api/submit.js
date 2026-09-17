@@ -28,7 +28,7 @@ const VALID_MODULES = Object.keys(MODULE_META).filter((id) => !DEPOSIT_CHANNEL_P
 // always gets JSON back, even when something we didn't anticipate breaks.
 export async function onRequestPost(context) {
   try {
-    return await handleSubmit(context);
+    return await handleSubmit({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }

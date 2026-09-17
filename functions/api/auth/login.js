@@ -192,7 +192,31 @@ const LOGIN_FAIL_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 export async function onRequestPost(context) {
   try {
-    return await handleLogin(context);
+    // BUGFIX (2026-09-17) — was `handleLogin(context)` with `waitUntil`
+    // then destructured straight out of that context object inside
+    // handleLogin's own signature (`async function handleLogin({
+    // request, env, waitUntil })`). Same class of bug already fixed once
+    // in telegram-webhook/[country].js on 2026-09-11 (see
+    // CHANGES-2026-09-11-waitUntil-binding-bug.md): `waitUntil` is a
+    // METHOD on the Cloudflare execution-context object, implemented
+    // relying on `this` being that same object. Pull it out on its own
+    // and it's just a detached function reference — every one of this
+    // file's several `waitUntil(...)` calls (Telegram alerts, activity
+    // log writes, and recordPendingIpRequest()) was racing the request's
+    // teardown with no actual background-execution guarantee at all,
+    // instead of the guarantee waitUntil is supposed to provide.
+    //
+    // That race is exactly why the two symptoms looked so different for
+    // what's the same underlying bug: a single Telegram fetch is fast
+    // enough to often finish before teardown by sheer luck, so those
+    // alerts mostly appeared to work — but recordPendingIpRequest() does
+    // TWO sequential KV round-trips (read the pending list, then write
+    // it back), which loses that race far more often, so entries it
+    // should have added to the IP Access dashboard's Pending list often
+    // silently never landed. Binding `waitUntil` correctly here removes
+    // the race entirely for every one of this file's background calls,
+    // not just the pending-list one.
+    return await handleLogin({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }

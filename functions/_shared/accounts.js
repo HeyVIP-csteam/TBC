@@ -622,6 +622,11 @@ export async function saveAccount(env, { username, password, passwordChangedBy, 
   // the mechanism that produces a new owner.
   const finalRole = role !== undefined ? (ASSIGNABLE_ROLES.includes(role) ? role : (existing?.role || "agent")) : (existing?.role || "agent");
 
+  // Re-read the lock fields fresh, as the very last read before this
+  // function's own write — see the long comment where these three
+  // fields are used below for why.
+  const lockSnapshot = await getAccount(env, key);
+
   const account = {
     username: key,
     salt,
@@ -682,9 +687,31 @@ export async function saveAccount(env, { username, password, passwordChangedBy, 
     // action, or the auto-lock triggers in api/auth/login.js), so a
     // routine profile-field save can never accidentally lock/unlock
     // someone as a side effect.
-    locked: existing?.locked || false,
-    lockedAt: existing?.lockedAt || null,
-    lockedReason: existing?.lockedReason || null,
+    //
+    // BUGFIX (2026-09-17) — was `existing?.locked` / `existing?.lockedAt`
+    // / `existing?.lockedReason`, i.e. carried forward from the snapshot
+    // read at the TOP of this function. Cloudflare KV has no
+    // compare-and-swap/transactions, so if setAccountLocked() (login.js's
+    // auto-lock, or a manual SuperAdmin lock) writes in the gap between
+    // that early read and this function's own final put() below, this
+    // write — being the one that lands last — would silently overwrite
+    // the lock straight back to whatever `existing` had, undoing it with
+    // no error and no trace beyond the account's own history. Confirmed
+    // happening for real: a KV inspection after an auto-lock alert had
+    // fired showed `locked: false` again, with `tokenVersion` back down
+    // to the value from BEFORE the lock's own +1 bump — proof this
+    // exact overwrite occurred, not a caching/display issue.
+    // Re-reading right here (see `lockSnapshot` above, fetched as the
+    // very last thing before this object is assembled) shrinks that
+    // window from "however long this whole function takes" down to
+    // whatever's left between that one extra KV read and the put() a
+    // few lines down — doesn't make the race impossible (nothing short
+    // of moving lock state to its own key, checked at write time by
+    // every writer, would), but makes it close enough to never in
+    // practice.
+    locked: lockSnapshot?.locked || false,
+    lockedAt: lockSnapshot?.lockedAt || null,
+    lockedReason: lockSnapshot?.lockedReason || null,
   };
   await env.ACCOUNTS_KV.put(`account:${key}`, JSON.stringify(account));
   if (!existing) {

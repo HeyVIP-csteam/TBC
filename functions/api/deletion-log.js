@@ -38,7 +38,7 @@ import { COUNTRY_CODES, resolveThreadsStore } from "../_shared/countries.js";
 // allowed to see, same as the ticket list itself.
 export async function onRequestGet(context) {
   try {
-    return await handleGet(context);
+    return await handleGet({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }

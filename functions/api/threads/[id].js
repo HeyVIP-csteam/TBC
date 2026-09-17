@@ -153,7 +153,7 @@ export async function onRequestGet({ request, env, params }) {
 // This outer catch is the guarantee that never happens.
 export async function onRequestPost(context) {
   try {
-    return await handleThreadAction(context);
+    return await handleThreadAction({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }

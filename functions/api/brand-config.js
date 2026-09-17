@@ -100,7 +100,7 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
   try {
-    return await handlePost(context);
+    return await handlePost({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }
