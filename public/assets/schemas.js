@@ -634,7 +634,7 @@ const MODULES = [
       },
       {
         key: "remark", label: "Remark", type: "textarea", required: false,
-        showIf: { field: "issueType", oneOf: ["Bonus Auto Force", "Bonus Manual Force", "Return To Main", "Account Suspend / Inactive", "Bonus Cancel Related Issue", "Verify Bank Detail"] },
+        showIf: { field: "issueType", oneOf: ["Register Number Verification", "Bonus Auto Force", "Bonus Manual Force", "Return To Main", "Account Suspend / Inactive", "Bonus Cancel Related Issue", "Verify Bank Detail"] },
       },
       {
         key: "issueDescription", label: "Issue Description", type: "textarea", required: false,
@@ -739,7 +739,7 @@ const MODULES = [
       },
       {
         key: "remark", label: "Remark", type: "textarea", required: false,
-        showIf: { field: "issueType", oneOf: ["Bonus Auto Force", "Bonus Manual Force", "Return To Main", "Account Suspend / Inactive", "Bonus Cancel Related Issue"] },
+        showIf: { field: "issueType", oneOf: ["Register Number Verification", "Bonus Auto Force", "Bonus Manual Force", "Return To Main", "Account Suspend / Inactive", "Bonus Cancel Related Issue"] },
       },
       {
         key: "issueDescription", label: "Issue Description", type: "textarea", required: false,
