@@ -29,6 +29,19 @@ pages_build_output_dir = "public"
 binding = "ACCOUNTS_KV"
 id = "4821238464004b8289e4ded5a467d582"
 
+# 2026-09-17 —— 账号/办公室/锁定状态/登录失败计数/IP Access 这几类数据
+# 从纯 KV 迁去 D1，根治"同一条数据在不同边缘节点读到不同结果"（今天连撞
+# 三次：工单消息、IP 白名单生效延迟、账号锁定状态被覆盖/读不一致）。
+# 用法见 functions/_shared/accountsStore.js 顶部注释——采用跟 PKR/PHP
+# 工单 D1 迁移同一个"读不到就退回旧 KV、顺手治愈进 D1"模式，不需要额外
+#的批量搬迁步骤，旧的 ACCOUNTS_KV 数据不会丢、也不用手动导出导入。
+# 上面这个 ACCOUNTS_KV 绑定本身继续保留——presence/活动日志/promo code
+# 缓存/TG 路由安全告警配置这几类还留在纯 KV 上，没有跟着这次一起搬。
+[[d1_databases]]
+binding = "ACCOUNTS_DB"
+database_name = "accounts-db"
+database_id = "c3835a7b-0973-4300-91ce-8132b7825127"
+
 # === INR（真实值，从 INR 项目原始 wrangler.toml 抄）===
 [[r2_buckets]]
 binding = "SCREENSHOTS_BUCKET_INR"
