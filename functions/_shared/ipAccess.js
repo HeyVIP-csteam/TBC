@@ -46,6 +46,8 @@
  * to wire the two together).
  */
 
+import { accountsStore } from "./accountsStore.js";
+
 const BLOCKED_KEY = "blocked-ips";
 const PENDING_KEY = "pending-ips";
 const LOG_KEY = "ip-access-log";
@@ -53,12 +55,12 @@ const MAX_LOG_SIZE = 500;
 const MAX_PENDING_SIZE = 500;
 
 async function readList(env, key) {
-  const raw = await env.ACCOUNTS_KV.get(key);
+  const raw = await accountsStore(env).get(key);
   return raw ? JSON.parse(raw) : [];
 }
 
 async function writeList(env, key, list) {
-  await env.ACCOUNTS_KV.put(key, JSON.stringify(list));
+  await accountsStore(env).put(key, JSON.stringify(list));
 }
 
 function newLogId() {

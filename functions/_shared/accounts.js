@@ -48,6 +48,7 @@
 import { canSeeCountry, normalizeAllowedCountries } from "./countryAccess.js";
 import { COUNTRY_CODES } from "./countries.js";
 import { BRANDS as ROUTING_BRANDS } from "./routing.js";
+import { accountsStore } from "./accountsStore.js";
 
 const OFFICES_INDEX_KEY = "offices-index";
 const ACCOUNTS_INDEX_KEY = "accounts-index";
@@ -460,14 +461,14 @@ function base64ToBytes(b64) {
 // ---- offices ----
 
 export async function listOffices(env) {
-  const raw = await env.ACCOUNTS_KV.get(OFFICES_INDEX_KEY);
+  const raw = await accountsStore(env).get(OFFICES_INDEX_KEY);
   const ids = raw ? JSON.parse(raw) : [];
-  const offices = await Promise.all(ids.map((id) => env.ACCOUNTS_KV.get(`office:${id}`)));
+  const offices = await Promise.all(ids.map((id) => accountsStore(env).get(`office:${id}`)));
   return offices.filter(Boolean).map((o) => JSON.parse(o));
 }
 
 export async function getOffice(env, id) {
-  const raw = await env.ACCOUNTS_KV.get(`office:${id}`);
+  const raw = await accountsStore(env).get(`office:${id}`);
   return raw ? JSON.parse(raw) : null;
 }
 
@@ -491,23 +492,23 @@ export async function saveOffice(env, { id, name, allowedIPs, ipMeta }) {
     for (const ip of cleanIPs) if (existingMeta[ip]) meta[ip] = existingMeta[ip];
   }
   const office = { id: officeId, name, allowedIPs: cleanIPs, ipMeta: meta };
-  await env.ACCOUNTS_KV.put(`office:${officeId}`, JSON.stringify(office));
+  await accountsStore(env).put(`office:${officeId}`, JSON.stringify(office));
   if (!id) {
-    const raw = await env.ACCOUNTS_KV.get(OFFICES_INDEX_KEY);
+    const raw = await accountsStore(env).get(OFFICES_INDEX_KEY);
     const ids = raw ? JSON.parse(raw) : [];
     if (!ids.includes(officeId)) {
       ids.unshift(officeId);
-      await env.ACCOUNTS_KV.put(OFFICES_INDEX_KEY, JSON.stringify(ids));
+      await accountsStore(env).put(OFFICES_INDEX_KEY, JSON.stringify(ids));
     }
   }
   return office;
 }
 
 export async function deleteOffice(env, id) {
-  await env.ACCOUNTS_KV.delete(`office:${id}`);
-  const raw = await env.ACCOUNTS_KV.get(OFFICES_INDEX_KEY);
+  await accountsStore(env).delete(`office:${id}`);
+  const raw = await accountsStore(env).get(OFFICES_INDEX_KEY);
   const ids = raw ? JSON.parse(raw) : [];
-  await env.ACCOUNTS_KV.put(OFFICES_INDEX_KEY, JSON.stringify(ids.filter((x) => x !== id)));
+  await accountsStore(env).put(OFFICES_INDEX_KEY, JSON.stringify(ids.filter((x) => x !== id)));
 }
 
 // ---- accounts ----
@@ -552,9 +553,9 @@ export async function deleteOffice(env, id) {
 // bypasses everywhere else — unconditional top authority, not a
 // special case bolted on here.
 export async function listAccounts(env, { viewerUsername, viewer } = {}) {
-  const raw = await env.ACCOUNTS_KV.get(ACCOUNTS_INDEX_KEY);
+  const raw = await accountsStore(env).get(ACCOUNTS_INDEX_KEY);
   const usernames = raw ? JSON.parse(raw) : [];
-  const accounts = await Promise.all(usernames.map((u) => env.ACCOUNTS_KV.get(`account:${u}`)));
+  const accounts = await Promise.all(usernames.map((u) => accountsStore(env).get(`account:${u}`)));
   const parsed = accounts.filter(Boolean).map((a) => JSON.parse(a));
   // Merge in each account's lock state from its own dedicated key — see
   // getAccount()'s comment on why lock state moved out of this blob.
@@ -594,7 +595,7 @@ function lockKey(username) {
 // doesn't spuriously need a migration step.
 async function mergeLockState(env, account) {
   if (!account) return account;
-  const raw = await env.ACCOUNTS_KV.get(lockKey(account.username));
+  const raw = await accountsStore(env).get(lockKey(account.username));
   if (raw) {
     const lock = JSON.parse(raw);
     return { ...account, locked: !!lock.locked, lockedAt: lock.lockedAt || null, lockedReason: lock.lockedReason || null };
@@ -603,7 +604,7 @@ async function mergeLockState(env, account) {
 }
 
 export async function getAccount(env, username) {
-  const raw = await env.ACCOUNTS_KV.get(`account:${username.toLowerCase()}`);
+  const raw = await accountsStore(env).get(`account:${username.toLowerCase()}`);
   const account = raw ? JSON.parse(raw) : null;
   return mergeLockState(env, account);
 }
@@ -730,13 +731,13 @@ export async function saveAccount(env, { username, password, passwordChangedBy, 
     // narrowed the race instead of closing it — see
     // CHANGES-2026-09-17-saveAccount-lock-race.md for that history.)
   };
-  await env.ACCOUNTS_KV.put(`account:${key}`, JSON.stringify(account));
+  await accountsStore(env).put(`account:${key}`, JSON.stringify(account));
   if (!existing) {
-    const raw = await env.ACCOUNTS_KV.get(ACCOUNTS_INDEX_KEY);
+    const raw = await accountsStore(env).get(ACCOUNTS_INDEX_KEY);
     const usernames = raw ? JSON.parse(raw) : [];
     if (!usernames.includes(key)) {
       usernames.unshift(key);
-      await env.ACCOUNTS_KV.put(ACCOUNTS_INDEX_KEY, JSON.stringify(usernames));
+      await accountsStore(env).put(ACCOUNTS_INDEX_KEY, JSON.stringify(usernames));
     }
   }
   return stripSecret(account);
@@ -757,7 +758,7 @@ export async function setAccountLocked(env, username, locked, reason) {
   // Authoritative write — the ONLY place lock state actually lives now.
   // See mergeLockState()'s comment above for why this moved out of the
   // account:<username> blob.
-  await env.ACCOUNTS_KV.put(lockKey(key), JSON.stringify({ locked: !!locked, lockedAt, lockedReason }));
+  await accountsStore(env).put(lockKey(key), JSON.stringify({ locked: !!locked, lockedAt, lockedReason }));
 
   // Bump on both lock AND unlock — a token issued before the lock should
   // never come back to life just because the account was later unlocked;
@@ -773,18 +774,18 @@ export async function setAccountLocked(env, username, locked, reason) {
   // the blob never re-acquires a stale copy of them.
   const { locked: _droppedLocked, lockedAt: _droppedLockedAt, lockedReason: _droppedLockedReason, ...rest } = existing;
   const updated = { ...rest, tokenVersion: (existing.tokenVersion || 0) + 1 };
-  await env.ACCOUNTS_KV.put(`account:${key}`, JSON.stringify(updated));
+  await accountsStore(env).put(`account:${key}`, JSON.stringify(updated));
 
   return stripSecret({ ...updated, locked: !!locked, lockedAt, lockedReason });
 }
 
 export async function deleteAccount(env, username) {
   const key = username.toLowerCase();
-  await env.ACCOUNTS_KV.delete(`account:${key}`);
-  await env.ACCOUNTS_KV.delete(lockKey(key)).catch(() => {}); // best-effort — fine if it never existed
-  const raw = await env.ACCOUNTS_KV.get(ACCOUNTS_INDEX_KEY);
+  await accountsStore(env).delete(`account:${key}`);
+  await accountsStore(env).delete(lockKey(key)).catch(() => {}); // best-effort — fine if it never existed
+  const raw = await accountsStore(env).get(ACCOUNTS_INDEX_KEY);
   const usernames = raw ? JSON.parse(raw) : [];
-  await env.ACCOUNTS_KV.put(ACCOUNTS_INDEX_KEY, JSON.stringify(usernames.filter((u) => u !== key)));
+  await accountsStore(env).put(ACCOUNTS_INDEX_KEY, JSON.stringify(usernames.filter((u) => u !== key)));
 }
 
 // "Admin-or-above exists" — governs the original bootstrap window (create
@@ -821,7 +822,7 @@ async function touchLastActive(env, account) {
   const fresh = await getAccount(env, account.username);
   if (!fresh) return;
   fresh.lastActiveAt = new Date(now).toISOString();
-  await env.ACCOUNTS_KV.put(`account:${account.username}`, JSON.stringify(fresh));
+  await accountsStore(env).put(`account:${account.username}`, JSON.stringify(fresh));
 }
 
 /**

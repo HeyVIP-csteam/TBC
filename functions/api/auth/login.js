@@ -113,6 +113,7 @@ import { sendTelegramMessage } from "../../_shared/telegram.js";
 import { getSecurityAlertsRoute } from "../../_shared/routes.js";
 import { isIpBlocked, recordPendingIpRequest } from "../../_shared/ipAccess.js";
 import { logActivity } from "../../_shared/activityLog.js";
+import { accountsStore } from "../../_shared/accountsStore.js";
 import { resolveAllowedCountries } from "../../_shared/countryAccess.js";
 import { COUNTRY_CODES } from "../../_shared/countries.js";
 import { resolveBotToken } from "../../_shared/routing.js";
@@ -361,7 +362,7 @@ async function handleLogin({ request, env, waitUntil }) {
 // clears the slate immediately (see clearLoginFailures() below).
 async function recordLoginFailure(env, username, { kind, ip }) {
   const key = `loginfail:${username}`;
-  const raw = await env.ACCOUNTS_KV.get(key);
+  const raw = await accountsStore(env).get(key);
   const now = Date.now();
   let entries = raw ? JSON.parse(raw) : [];
   entries = entries.filter((e) => now - e.ts < LOGIN_FAIL_WINDOW_MS);
@@ -371,15 +372,15 @@ async function recordLoginFailure(env, username, { kind, ip }) {
 
   if (count >= LOGIN_FAIL_LOCK_THRESHOLD) {
     await setAccountLocked(env, username, true, `${count} failed login attempts within 1 hour`);
-    await env.ACCOUNTS_KV.delete(key); // fresh count if this account is ever unlocked and tried again
+    await accountsStore(env).delete(key); // fresh count if this account is ever unlocked and tried again
     return { locked: true, count };
   }
-  await env.ACCOUNTS_KV.put(key, JSON.stringify(entries));
+  await accountsStore(env).put(key, JSON.stringify(entries));
   return { locked: false, count };
 }
 
 async function clearLoginFailures(env, username) {
-  await env.ACCOUNTS_KV.delete(`loginfail:${username}`).catch(() => {});
+  await accountsStore(env).delete(`loginfail:${username}`).catch(() => {});
 }
 
 async function notifyAccountLocked(env, { account, reason }) {
