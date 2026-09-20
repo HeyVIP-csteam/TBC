@@ -114,6 +114,19 @@ html[data-theme="light"] {
         }
         localStorage.setItem("agentAuth", JSON.stringify({
           username: data.account.username, token: data.token, role: data.account.role, allowedBrands: data.account.allowedBrands, allowedModules: data.account.allowedModules,
+          // FIXED (2026-09-20) — allowedCountries was never included here even
+          // though /api/auth/login has returned it since the 2026-08-20 merge
+          // (see that file's own comment). Missing it meant every client-side
+          // country check (agent-country.js's getAllowedCountries()) treated
+          // `undefined` as "unrestricted", which could let a stale leftover
+          // country-switcher value (agentCountry in localStorage, deliberately
+          // NOT cleared by login/logout — see agent-country.js's own header)
+          // from a DIFFERENT previously-logged-in account keep being accepted
+          // as valid instead of being rejected and reset — silently rendering
+          // the wrong country's brand list and filtering it against this
+          // account's real (different-country) allowedBrands, producing an
+          // empty Brand dropdown with no error shown anywhere.
+          allowedCountries: data.account.allowedCountries,
           allowedAdminSections: data.account.allowedAdminSections, adminSectionEditAccess: data.account.adminSectionEditAccess, canManageAdminAccess: data.account.canManageAdminAccess,
           canViewActiveAgents: data.account.canViewActiveAgents,
         }));
