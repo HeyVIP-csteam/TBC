@@ -523,15 +523,37 @@ html[data-theme="light"] {
       let banner = "";
       if (isDeleteType && thread) {
         const deletedAtMs = new Date(entry.ts || thread.deletedAt || Date.now()).getTime();
-        const purgeDate = new Date(deletedAtMs + 30 * 86400000);
+        // FIXED (2026-09-24) — was hardcoded to 30 days here, left over
+        // from before functions/_shared/threads.js's DELETED_RETENTION_DAYS
+        // was raised 30 -> 180 on 2026-09-13 (see that file's own comment).
+        // The actual purge logic has used 180 for 11 days already; this
+        // display-only banner just never got updated to match, so it was
+        // telling admins a record would be gone in 30 days when it's
+        // really good for 180. No shared client-side mirror of that
+        // constant exists yet (unlike countries.js mirroring
+        // functions/_shared/countries.js) — hardcoding 180 here to match,
+        // same as this file already does for other retention-adjacent
+        // numbers, until/unless one gets added.
+        const purgeDate = new Date(deletedAtMs + 180 * 86400000);
         banner = `
           <div class="edit-modal-note" style="background:rgba(200,145,47,0.14); border:1px solid var(--accent-gold); border-radius:8px; padding:10px 12px; font-size:12.5px; margin-bottom:14px;">
-            ⚠️ Deleted by <b>${escapeHtml(entry.by || "unknown")}</b> on ${escapeHtml(new Date(entry.ts).toLocaleString())}. The full record will be permanently removed on ${escapeHtml(purgeDate.toLocaleDateString())} (30 days after deletion).
+            ⚠️ Deleted by <b>${escapeHtml(entry.by || "unknown")}</b> on ${escapeHtml(new Date(entry.ts).toLocaleString())}. The full record will be permanently removed on ${escapeHtml(purgeDate.toLocaleDateString())} (180 days after deletion).
           </div>`;
       } else if (isDeleteType && !thread) {
+        // FIXED (2026-09-24) — same stale "30 days" text as the banner
+        // above, but also worth noting: this branch fires for ANY reason
+        // getThread's includeDeleted fetch came back thread:null, not
+        // only genuine 180-day expiry — e.g. the viewing account being
+        // below admin rank (includeDeleted=1 is admin-rank-gated server-
+        // side, see functions/api/threads/[id].js) gets the exact same
+        // null-thread result and lands here too, wrongly implying the
+        // data itself is gone. Wording softened to not assert expiry as
+        // the definite cause; a real fix would have the server
+        // distinguish "expired" from "not authorized" in its response
+        // (see [id].js) so this could say which one actually happened.
         banner = `
           <div class="edit-modal-note err" style="font-size:12.5px; margin-bottom:14px;">
-            This ticket's data was stored for more than 30 days and can no longer be read. Deleted by <b>${escapeHtml(entry.by || "unknown")}</b> on ${escapeHtml(new Date(entry.ts).toLocaleString())}.
+            This ticket's full data couldn't be loaded — either it's past the 180-day retention window and was purged, or this account doesn't have permission to view deleted tickets' content. Deleted by <b>${escapeHtml(entry.by || "unknown")}</b> on ${escapeHtml(new Date(entry.ts).toLocaleString())}.
           </div>`;
       }
 
