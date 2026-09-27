@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=fab742c8" />
+<link rel="stylesheet" href="/assets/style.css?v=5ffcbdba" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -295,7 +295,7 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <script src="/assets/schemas.js?v=3f70df87"></script>
+  <script src="/assets/schemas.js?v=0d6207ba"></script>
   <script src="/assets/active-agents-modal.js?v=2d846145"></script>
   <script src="/assets/spa-shell.js?v=b5a78ef0"></script>
   <script>
@@ -321,7 +321,7 @@ html[data-theme="light"] {
     // unrelated-looking as the Account Management sidebar toggle's
     // click handler further down never getting wired at all. One
     // misplaced `const` broke two seemingly-unrelated features at once.
-    const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken"];
+    const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken", "report"];
 
     window.initThemeToggle();
     window.initClock();
@@ -715,6 +715,12 @@ html[data-theme="light"] {
       { id: "whitelistIp", name: "IP Access", icon: "🌐" },
       { id: "settings", name: "Settings", icon: "⚙️" },
       { id: "agentProfile", name: "Agent Profile", icon: "🪪" },
+      // Owner-only-by-default (see OWNER_ONLY_BY_DEFAULT_SECTIONS above) —
+      // same treatment as "botToken" below: always listed, but rendered
+      // disabled for any non-Owner viewer (see adminSectionChecksHtml()'s
+      // forceDisabled check, which reads OWNER_ONLY_BY_DEFAULT_SECTIONS
+      // generically rather than hardcoding section ids one at a time).
+      { id: "report", name: "Report", icon: "📈" },
     ];
     const INTEGRATION_PORTAL_SECTIONS_LIST = [
       { id: "tgRoutes", name: "TG Group / Channel", icon: "📡" },
@@ -734,7 +740,7 @@ html[data-theme="light"] {
       // silently fail if they tried to check it.
       { id: "botToken", name: "Bot Token Settings", icon: "🔐" },
     ];
-    const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet", "botToken"];
+    const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet", "botToken", "report"];
     // Must match defaultSectionsForRank()/defaultEditForRank() in
     // functions/_shared/accounts.js exactly:
     //   agent -> nothing, senior -> createAccount,
@@ -2799,14 +2805,14 @@ html[data-theme="light"] {
       function adminSectionChecksHtml(list) {
         return list.map((s) => {
           const isChecked = accountCanSeeAdminSection(a, s.id);
-          // MERGED (2026-08-21) — "botToken" is the one section in
-          // either list that a non-Owner viewer can never toggle, even
-          // if they otherwise have full canManageOthersAdminAccess —
-          // see this section's own note where it's defined in
-          // INTEGRATION_PORTAL_SECTIONS_LIST. Rendered disabled (not
-          // hidden) so it still reflects the target's real current
-          // state and round-trips correctly on an unrelated save.
-          const forceDisabled = s.id === "botToken" && authInfo?.role !== "owner";
+          // MERGED (2026-08-21, generalized 2026-09-27) — any section in
+          // OWNER_ONLY_BY_DEFAULT_SECTIONS (currently "botToken" and
+          // "report") is one a non-Owner viewer can never toggle, even if
+          // they otherwise have full canManageOthersAdminAccess — see
+          // that section's own note where it's defined. Rendered
+          // disabled (not hidden) so it still reflects the target's real
+          // current state and round-trips correctly on an unrelated save.
+          const forceDisabled = OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(s.id) && authInfo?.role !== "owner";
           const checkboxHtml = `
           <label class="agent-profile-module-check${forceDisabled ? " ap-force-disabled" : ""}">
             <input type="checkbox" class="ap-admin-section-checkbox" value="${acctEsc(s.id)}" ${isChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} />
@@ -3113,14 +3119,27 @@ html[data-theme="light"] {
       if (adminSectionLists.length) {
         const adminChecks = adminSectionLists.flatMap((list) => Array.from(list.querySelectorAll(".ap-admin-section-checkbox")));
         const selectedSections = adminChecks.filter((c) => c.checked).map((c) => c.value);
-        payload.allowedAdminSections = selectedSections.length === adminChecks.length ? "all" : selectedSections;
+        // BUGFIX (2026-09-27) — collapsing "every box checked" down to the
+        // string "all" used to happen unconditionally, but
+        // canSeeAdminSection()/canEditAdminSection() deliberately treat a
+        // stored "all" as NOT covering OWNER_ONLY_BY_DEFAULT_SECTIONS
+        // (botToken, report) — only an explicit array naming them counts.
+        // So an Owner ticking literally every box (meaning to grant
+        // everything, Report/Bot Token included) got the opposite of
+        // what they asked for: the save silently collapsed to "all",
+        // which — for these two — means NEITHER. Keep it as an explicit
+        // array whenever any owner-only section is among the selected
+        // ones, so they actually round-trip.
+        const selectedHasOwnerOnly = selectedSections.some((id) => OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(id));
+        payload.allowedAdminSections = (!selectedHasOwnerOnly && selectedSections.length === adminChecks.length) ? "all" : selectedSections;
 
         const editSections = EDITABLE_ADMIN_SECTIONS.filter((id) => {
           if (!selectedSections.includes(id)) return false;
           const radio = document.querySelector(`input[name="apEditLevel_${id}"]:checked`);
           return radio && radio.value === "edit";
         });
-        payload.adminSectionEditAccess = editSections.length === EDITABLE_ADMIN_SECTIONS.length ? "all" : editSections;
+        const editHasOwnerOnly = editSections.some((id) => OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(id));
+        payload.adminSectionEditAccess = (!editHasOwnerOnly && editSections.length === EDITABLE_ADMIN_SECTIONS.length) ? "all" : editSections;
       }
       const delegationToggle = document.getElementById("ap_canManageAdminAccess");
       if (delegationToggle) {

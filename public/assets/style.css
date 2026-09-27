@@ -1327,6 +1327,15 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
 .sidebar-item.expandable .arrow { transition: transform 0.15s ease; }
 .sidebar-item.expandable.open .arrow { transform: rotate(90deg); }
 
+/* Report (2026-09-27) — a thin divider between the regular module
+   links and the standalone Report link below them, so it reads as its
+   own thing rather than one more module. */
+.sidebar-sep {
+  height: 1px;
+  background: var(--panel-border, rgba(255,255,255,0.08));
+  margin: 10px 4px;
+}
+
 /* Account Management — "one continuous card" style: the toggle header
    and its sub-items live inside one rounded, bordered group instead of
    an indented tree line, so it reads as a single self-contained panel.

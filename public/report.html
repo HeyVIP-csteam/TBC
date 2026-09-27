@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Report</title>
+<script src="/assets/theme.js?v=c61fb537"></script>
+<style>
+/* Inline placeholder canvas background — see promo.html for the full
+   explanation; kept byte-for-byte in sync with style.css's html{} rule
+   so there's zero visible change once the stylesheet finishes loading. */
+html {
+  background-color: #090c1c;
+  background-image:
+    linear-gradient(180deg, rgba(3,4,13,0.35) 0%, rgba(3,4,13,0.55) 55%, rgba(3,4,13,0.75) 100%),
+    url('/assets/img/bg-space.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+html[data-theme="light"] {
+  background-color: #dbe7fb;
+  background-image:
+    radial-gradient(900px 500px at 90% 0%, #eaf1ff 0%, transparent 55%),
+    linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
+}
+</style>
+<link rel="stylesheet" href="/assets/style.css?v=5ffcbdba" />
+<link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
+<script src="/assets/toast.js?v=d9d84724"></script>
+<script src="/assets/starfield.js?v=b6e92821" defer></script>
+<script src="/assets/authguard.js?v=101bd636"></script>
+<script src="/assets/countries.js?v=78bdc076"></script>
+<script src="/assets/country-modules.js?v=7cb5b511"></script>
+<script src="/assets/agent-country.js?v=9d067776"></script>
+<script src="/assets/presence-heartbeat.js?v=10aea858"></script>
+<script src="/assets/announcement-banner.js?v=26c15118" defer></script>
+<style id="reportStyles">
+
+  .report-title-card {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 18px 22px; margin-bottom: 16px;
+  }
+  .report-title-left { display: flex; align-items: flex-start; gap: 12px; }
+  .report-title-left .header-icon { font-size: 22px; }
+  .report-title-text { font-family: var(--font-display); font-weight: 700; font-size: 17px; color: var(--ink); }
+  .report-title-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+
+  .report-controls {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 16px 18px; margin-bottom: 16px;
+  }
+  .rc-group { display: flex; flex-direction: column; gap: 6px; }
+  .rc-group label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-soft); font-weight: 700; }
+  .rc-seg { display: flex; background: var(--field-bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+  .rc-seg button { border: none; background: transparent; color: var(--ink-soft); font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-family: inherit; white-space: nowrap; }
+  .rc-seg button.active { background: linear-gradient(135deg, #6d5ce8, #4338ca); color: #fff; }
+  .report-controls select {
+    background: var(--field-bg); border: 1.5px solid var(--border); color: var(--ink);
+    border-radius: 10px; padding: 8px 12px; font-size: 13px; min-width: 190px; font-family: inherit;
+  }
+  .rc-spacer { flex: 1; }
+  .rc-actions { display: flex; align-items: stretch; gap: 10px; flex-wrap: nowrap; }
+  .rc-total-chip { background: rgba(124,108,240,0.14); border: 1px solid var(--accent-glow); border-radius: 12px; padding: 10px 18px; text-align: center; min-width: 120px; }
+  .rc-total-chip .num { font-size: 22px; font-weight: 800; font-family: var(--font-display); color: var(--ink); }
+  .rc-total-chip .lbl { font-size: 10.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.4px; }
+  .rc-export-btn {
+    background: var(--field-bg); border: 1.5px solid var(--border); color: var(--ink);
+    border-radius: 12px; padding: 10px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
+    font-family: inherit; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .rc-export-btn:hover { border-color: var(--accent-gold); color: var(--accent-gold); }
+  .rc-export-btn:disabled { opacity: 0.5; cursor: default; }
+
+  .report-custom-range {
+    display: none; align-items: center; gap: 10px; background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 16px; margin-bottom: 16px; font-size: 13px;
+  }
+  .report-custom-range.open { display: flex; }
+  .report-custom-range label { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; }
+  .report-custom-range input[type="date"] {
+    background: var(--field-bg); border: 1.5px solid var(--border); color: var(--ink);
+    border-radius: 8px; padding: 6px 10px; font-size: 13px; font-family: inherit;
+  }
+  .report-custom-range .arrow { color: var(--ink-soft); }
+
+  .report-state {
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 30px 20px; text-align: center; color: var(--ink-soft); font-size: 13.5px;
+  }
+  .report-state.err { color: #e0577a; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .summary-card {
+    background: var(--card-bg); border: 1px solid var(--border); border-top: 3px solid var(--m-accent, var(--accent-gold));
+    border-radius: 14px; padding: 16px 18px 15px; box-shadow: var(--shadow); cursor: pointer; transition: transform 0.12s;
+  }
+  .summary-card:hover { transform: translateY(-2px); }
+  .summary-card.selected { border-color: var(--m-accent); box-shadow: 0 0 0 1px var(--m-accent), 0 8px 20px -8px var(--m-accent); }
+  .summary-card .sc-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--m-accent, var(--ink)); margin-bottom: 12px; }
+  .summary-card .sc-num { font-family: var(--font-display); font-size: 28px; font-weight: 800; line-height: 1; margin-bottom: 8px; color: var(--ink); }
+  .summary-card .sc-bar-track { height: 5px; border-radius: 999px; background: var(--field-bg); overflow: hidden; margin-bottom: 6px; }
+  .summary-card .sc-bar-fill { height: 100%; border-radius: 999px; background: var(--m-accent, var(--accent-gold)); }
+  .summary-card .sc-pct { font-size: 11px; color: var(--ink-soft); }
+
+  .report-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .report-card + .report-card { margin-top: 16px; }
+  .rcard-head { padding: 16px 20px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 6px; }
+  .rcard-head h2 { margin: 0; font-size: 15px; font-family: var(--font-display); color: var(--ink); }
+  .rcard-head .sub { font-size: 12px; color: var(--ink-soft); }
+
+  .rlist-head { display: flex; padding: 10px 20px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--ink-soft); font-weight: 700; border-bottom: 1px solid var(--border); background: var(--field-bg); }
+  .rlist-head .c-name { flex: 1; } .rlist-head .c-count { width: 70px; text-align: right; }
+
+  .rrow { border-bottom: 1px solid var(--border); }
+  .rrow-main { display: flex; align-items: center; gap: 12px; padding: 13px 20px; }
+  .rrow-main.clickable { cursor: pointer; }
+  .rrow-main.clickable:hover { background: var(--field-bg); }
+  .rrow-chevron { color: var(--ink-soft); font-size: 10px; width: 12px; flex-shrink: 0; transition: transform 0.15s; }
+  .rrow-main.expanded .rrow-chevron { transform: rotate(90deg); }
+  .rrow-name { width: 220px; flex-shrink: 0; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+  .rrow-bar-track { flex: 1; height: 7px; border-radius: 999px; background: var(--field-bg); overflow: hidden; }
+  .rrow-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #f5a524, #f3c463); }
+  .rrow-count { width: 60px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 13.5px; flex-shrink: 0; color: var(--ink); }
+
+  .rbreakdown { display: none; padding: 4px 20px 16px 42px; background: var(--field-bg); flex-wrap: wrap; gap: 8px; }
+  .rbreakdown.open { display: flex; }
+  .rchip { background: var(--card-bg); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font-size: 12px; color: var(--ink-soft); display: flex; gap: 6px; align-items: center; }
+  .rchip b { color: var(--ink); font-weight: 700; }
+
+  .rank-badge {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--field-bg); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: var(--ink-soft);
+    flex-shrink: 0; margin-right: 2px;
+  }
+  .rank-list .rrow:nth-child(1) .rank-badge { background: linear-gradient(135deg,#f3c463,#e0a83f); color: #241a04; border-color: transparent; }
+  .rank-list .rrow:nth-child(2) .rank-badge { background: linear-gradient(135deg,#cfd6e6,#9aa3c4); color: #1a2040; border-color: transparent; }
+  .rank-list .rrow:nth-child(3) .rank-badge { background: linear-gradient(135deg,#d8a877,#b5814f); color: #241a04; border-color: transparent; }
+
+  .rlist-foot { display: flex; padding: 13px 20px; font-size: 13px; font-weight: 700; border-top: 1px solid var(--border); color: var(--ink); }
+  .rlist-foot .c-name { flex: 1; } .rlist-foot .c-count { width: 70px; text-align: right; }
+  .rmore-note { padding: 10px 20px; font-size: 12px; color: var(--ink-soft); border-top: 1px solid var(--border); font-style: italic; }
+</style>
+</head>
+<body class="subpage-fixed">
+  <header class="topbar">
+    <div class="topbar-left">
+      <img src="/assets/img/logo.webp" alt="HeyVIP" class="logo-img" />
+      <span class="wordmark">CS TEAM - TBC</span>
+    </div>
+    <div class="topbar-right">
+      <span class="clock" id="liveClock"></span>
+      <button class="theme-pill" id="themeToggle"></button>
+      <span class="agent-whoami" id="agentWhoami"></span>
+    </div>
+  </header>
+
+  <div class="subpage-shell">
+    <aside class="sidebar" id="hubNavMount"></aside>
+    <div class="subpage-content-col">
+    <div class="subpage-right-col">
+      <div id="announcementBanner"></div>
+      <main class="subpage-main">
+
+  <div class="report-shell">
+    <div class="report-title-card">
+      <div class="report-title-left">
+        <span class="header-icon">📈</span>
+        <div>
+          <div class="report-title-text">Report</div>
+          <div class="report-title-sub">Ticket counts across every module, by day / month / custom range</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="report-controls">
+      <div class="rc-group">
+        <label>Time Range</label>
+        <div class="rc-seg" id="rangeSeg">
+          <button class="active" data-val="today">Today</button>
+          <button data-val="month">This Month</button>
+          <button data-val="custom">Custom…</button>
+        </div>
+      </div>
+      <div class="rc-group">
+        <label>Issue Type</label>
+        <select id="moduleSelect"></select>
+      </div>
+      <div class="rc-group">
+        <label>Country</label>
+        <select id="countrySelect"></select>
+      </div>
+      <div class="rc-actions">
+        <div class="rc-total-chip"><div class="num" id="totalNum">—</div><div class="lbl" id="totalLbl">Total Today</div></div>
+        <button class="rc-export-btn" id="exportBtn">⬇ Export</button>
+      </div>
+      <div class="rc-spacer"></div>
+    </div>
+
+    <div class="report-custom-range" id="customRange">
+      <label>From</label>
+      <input type="date" id="fromDate" />
+      <span class="arrow">→</span>
+      <label>To</label>
+      <input type="date" id="toDate" />
+    </div>
+
+    <div id="reportContainer"><div class="report-state" id="reportInitState">Loading…</div></div>
+  </div>
+
+      </main>
+    </div>
+    </div>
+  </div>
+
+  <script src="/assets/schemas.js?v=0d6207ba"></script>
+  <script src="/assets/hub-nav.js?v=5cd0d791"></script>
+  <script>
+    window.initThemeToggle();
+    window.initClock();
+    window.AgentAuth.renderWhoami("agentWhoami");
+    window.HubNav.mount("hubNavMount", { activeModule: "report" });
+
+    // ---- module registry (sourced from schemas.js — no duplicate list
+    // to keep in sync) — Daily Report is deliberately excluded, same
+    // reasoning as the backend (free-text shift summary, not a
+    // countable "issue type"). ----
+    const EXCLUDED_MODULES = ["daily_report"];
+    const REPORT_MODULE_LIST = (window.MODULES || []).filter((m) => !EXCLUDED_MODULES.includes(m.id));
+    const MODULE_BY_ID = {};
+    REPORT_MODULE_LIST.forEach((m) => { MODULE_BY_ID[m.id] = m; });
+
+    const COUNTRY_COLORS = { INR: "#4ADE80", PKR: "#38BDF8", PHP: "#F472B6" };
+    const BRAND_PALETTE = ["#38BDF8", "#A78BFA", "#4ADE80", "#FB923C", "#F472B6", "#FBBF24", "#F87171", "#34D399", "#818CF8"];
+    function brandColor(brandId) {
+      const ids = (window.BRANDS || []).map((b) => b.id);
+      const idx = ids.indexOf(brandId);
+      return BRAND_PALETTE[(idx >= 0 ? idx : 0) % BRAND_PALETTE.length];
+    }
+    function brandName(brandId) {
+      const b = (window.BRANDS || []).find((x) => x.id === brandId);
+      return b ? b.name : (brandId || "(unknown)");
+    }
+
+    // ---- populate the Issue Type / Country selects ----
+    const moduleSelect = document.getElementById("moduleSelect");
+    moduleSelect.innerHTML =
+      `<option value="ALL_MODULES">🗂️ All</option>` +
+      REPORT_MODULE_LIST.map((m) => {
+        const phpOnly = Array.isArray(m.countries) && m.countries.length === 1 && m.countries[0] === "PHP";
+        return `<option value="${m.id}">${m.icon} ${m.name}${phpOnly ? " (PHP only)" : ""}</option>`;
+      }).join("");
+
+    const countrySelect = document.getElementById("countrySelect");
+    countrySelect.innerHTML =
+      `<option value="ALL">All</option>` +
+      (window.COUNTRY_CODES || []).map((c) => `<option value="${c}">${c}</option>`).join("");
+
+    // ---- state ----
+    const state = { range: "today", moduleId: "ALL_MODULES", country: "ALL", selectedDim: null };
+    let allRows = []; // flat {module,country,brand,type,count} from the API, for the currently-fetched range+country
+    let lastError = null;
+    let lastPartialErrors = null;
+
+    // REVISED (2026-09-27) — this dashboard uses one shared reference
+    // timezone, GMT+8, for "Today"/"This Month", the same way for every
+    // viewer regardless of where their own browser sits — matches
+    // dayBoundaryMs() in functions/api/admin/report.js, which
+    // interprets these same YYYY-MM-DD strings in GMT+8 too. Computed
+    // via UTC math (get the UTC instant, shift it 8 hours) rather than
+    // reading the browser's own local date, since the viewer's location
+    // is deliberately NOT what decides this.
+    const REPORT_TZ_OFFSET_MS = 8 * 60 * 60 * 1000; // GMT+8
+    function pad2(n) { return String(n).padStart(2, "0"); }
+    function gmt8Now() { return new Date(Date.now() + REPORT_TZ_OFFSET_MS); } // fields read as UTC below give GMT+8's wall-clock date
+    function todayStr() {
+      const d = gmt8Now();
+      return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+    }
+    function monthRangeStrs() {
+      const now = gmt8Now();
+      const from = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-01`;
+      return { from, to: todayStr() };
+    }
+    function currentFromTo() {
+      if (state.range === "today") return { from: todayStr(), to: todayStr() };
+      if (state.range === "month") return monthRangeStrs();
+      return { from: document.getElementById("fromDate").value, to: document.getElementById("toDate").value };
+    }
+    function rangeLabel() {
+      const { from, to } = currentFromTo();
+      if (state.range === "today") return "Today";
+      if (state.range === "month") return "This Month";
+      return from && to ? `${from} → ${to}` : "Custom range";
+    }
+
+    function sumRows(rows) { return rows.reduce((a, r) => a + r.count, 0); }
+    function rowsFor(moduleId, country) {
+      return allRows.filter((r) => (moduleId === "ALL_MODULES" || r.module === moduleId) && (country === "ALL" || r.country === country));
+    }
+    function dimLabel(name, isCountry) { return isCountry ? name : brandName(name); }
+
+    // Single-module detail table: typed modules group by their issue-
+    // type field (with a brand/country breakdown per type); non-typed
+    // modules (QA, Genie Issue) group directly by brand/country.
+    function computeModuleRows(moduleId, country) {
+      const rows = rowsFor(moduleId, country);
+      const isAll = country === "ALL";
+      const hasTypes = rows.some((r) => r.type);
+      const groups = {};
+      if (hasTypes) {
+        rows.forEach((r) => {
+          const t = r.type || "(unspecified)";
+          groups[t] = groups[t] || {};
+          const dim = isAll ? r.country : (r.brand || "(unknown)");
+          groups[t][dim] = (groups[t][dim] || 0) + r.count;
+        });
+      } else {
+        rows.forEach((r) => {
+          const dim = isAll ? r.country : (r.brand || "(unknown)");
+          groups[dim] = groups[dim] || {};
+          groups[dim]._total = (groups[dim]._total || 0) + r.count;
+        });
+      }
+      if (hasTypes) {
+        return Object.keys(groups).map((t) => {
+          const dims = groups[t];
+          const total = Object.values(dims).reduce((a, b) => a + b, 0);
+          const breakdown = Object.keys(dims).map((d) => ({ name: dimLabel(d, isAll), count: dims[d] })).sort((a, b) => b.count - a.count);
+          return { name: t, count: total, breakdown };
+        }).sort((a, b) => b.count - a.count);
+      }
+      return Object.keys(groups).map((d) => ({ name: dimLabel(d, isAll), count: groups[d]._total || 0, breakdown: null })).sort((a, b) => b.count - a.count);
+    }
+
+    function topCardDimension(country) {
+      if (country === "ALL") {
+        return (window.COUNTRY_CODES || []).map((c) => ({ name: c, color: COUNTRY_COLORS[c] || "#f3c463", total: sumRows(allRows.filter((r) => r.country === c)) }));
+      }
+      return (window.BRANDS || []).filter((b) => b.country === country)
+        .map((b) => ({ name: b.name, id: b.id, color: brandColor(b.id), total: sumRows(allRows.filter((r) => r.country === country && r.brand === b.id)) }));
+    }
+
+    function moduleTotalsForDim(dimId, isCountryDim, country) {
+      const filtered = isCountryDim ? allRows.filter((r) => r.country === dimId) : allRows.filter((r) => r.country === country && r.brand === dimId);
+      const byModule = {};
+      filtered.forEach((r) => { byModule[r.module] = (byModule[r.module] || 0) + r.count; });
+      return Object.keys(byModule).filter((m) => MODULE_BY_ID[m])
+        .map((m) => ({ moduleId: m, total: byModule[m] })).filter((x) => x.total > 0).sort((a, b) => b.total - a.total);
+    }
+
+    function escapeHtml(str) {
+      return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function buildSummaryCard(entry, grandAcrossAll) {
+      const pct = grandAcrossAll ? Math.round((entry.total / grandAcrossAll) * 100) : 0;
+      const el = document.createElement("div");
+      el.className = "summary-card" + (state.selectedDim === (entry.id || entry.name) ? " selected" : "");
+      el.style.setProperty("--m-accent", entry.color);
+      el.innerHTML = `
+        <div class="sc-head">${escapeHtml(entry.name)}</div>
+        <div class="sc-num">${entry.total}</div>
+        <div class="sc-bar-track"><div class="sc-bar-fill" style="width:${pct}%"></div></div>
+        <div class="sc-pct">${pct}% of total</div>`;
+      el.addEventListener("click", () => {
+        const key = entry.id || entry.name;
+        state.selectedDim = state.selectedDim === key ? null : key;
+        render();
+      });
+      return el;
+    }
+
+    function buildModuleCard(moduleId, country) {
+      const m = MODULE_BY_ID[moduleId];
+      const rows = computeModuleRows(moduleId, country);
+      const isAll = country === "ALL";
+      const grandTotal = rows.reduce((a, b) => a + b.count, 0);
+      const maxCount = Math.max(1, ...rows.map((r) => r.count));
+      const hasTypes = rowsFor(moduleId, country).some((r) => r.type);
+      const typeColLabel = hasTypes ? "Issue Type" : (isAll ? "Country" : "Brand");
+      const card = document.createElement("div");
+      card.className = "report-card";
+      card.innerHTML = `
+        <div class="rcard-head">
+          <h2>${m ? m.icon + " " + escapeHtml(m.name) : escapeHtml(moduleId)} — by ${typeColLabel}</h2>
+          <div class="sub">${rangeLabel()} · ${isAll ? "All countries" : country} · Total <b style="color:var(--ink)">${grandTotal}</b></div>
+        </div>
+        <div class="rlist-head"><div class="c-name">${typeColLabel}</div><div class="c-count">Count</div></div>
+        <div class="rlist-body"></div>
+        <div class="rlist-foot"><div class="c-name">Total</div><div class="c-count">${grandTotal}</div></div>`;
+      const body = card.querySelector(".rlist-body");
+      if (!rows.length) {
+        body.innerHTML = `<div class="report-state">No tickets in this range.</div>`;
+      } else {
+        rows.forEach((r) => {
+          const canExpand = !!(r.breakdown && r.breakdown.length);
+          const wrap = document.createElement("div");
+          wrap.className = "rrow";
+          const main = document.createElement("div");
+          main.className = "rrow-main" + (canExpand ? " clickable" : "");
+          main.innerHTML = `
+            <span class="rrow-chevron">${canExpand ? "▶" : ""}</span>
+            <span class="rrow-name" title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
+            <div class="rrow-bar-track"><div class="rrow-bar-fill" style="width:${Math.round((r.count / maxCount) * 100)}%"></div></div>
+            <span class="rrow-count">${r.count}</span>`;
+          const bd = document.createElement("div");
+          bd.className = "rbreakdown";
+          if (canExpand) bd.innerHTML = r.breakdown.map((b) => `<div class="rchip">${escapeHtml(b.name)} <b>${b.count}</b></div>`).join("");
+          if (canExpand) main.addEventListener("click", () => { main.classList.toggle("expanded"); bd.classList.toggle("open"); });
+          wrap.appendChild(main); wrap.appendChild(bd);
+          body.appendChild(wrap);
+        });
+      }
+      return card;
+    }
+
+    function buildRankList(entries, title) {
+      const grand = entries.reduce((a, b) => a + b.total, 0);
+      const max = Math.max(1, ...entries.map((e) => e.total));
+      const card = document.createElement("div");
+      card.className = "report-card rank-list";
+      card.innerHTML = `
+        <div class="rcard-head"><h2>Ranking — ${escapeHtml(title)}</h2><div class="sub">${rangeLabel()}</div></div>
+        <div class="rlist-head"><div class="c-name">Issue Type</div><div class="c-count">Count</div></div>
+        <div class="rlist-body"></div>
+        <div class="rlist-foot"><div class="c-name">Total</div><div class="c-count">${grand}</div></div>`;
+      const body = card.querySelector(".rlist-body");
+      entries.forEach((e, i) => {
+        const m = MODULE_BY_ID[e.moduleId];
+        const wrap = document.createElement("div");
+        wrap.className = "rrow";
+        wrap.innerHTML = `
+          <div class="rrow-main">
+            <span class="rank-badge">${i + 1}</span>
+            <span style="margin-right:2px;">${m ? m.icon : "❓"}</span>
+            <span class="rrow-name" style="width:auto; flex:0 0 180px;">${m ? escapeHtml(m.name) : escapeHtml(e.moduleId)}</span>
+            <div class="rrow-bar-track"><div class="rrow-bar-fill" style="width:${Math.round((e.total / max) * 100)}%; background:${m ? m.accent : "#f3c463"}"></div></div>
+            <span class="rrow-count">${e.total}</span>
+          </div>`;
+        body.appendChild(wrap);
+      });
+      return card;
+    }
+
+    function render() {
+      const container = document.getElementById("reportContainer");
+      container.innerHTML = "";
+      document.getElementById("totalLbl").textContent = "Total " + (state.range === "today" ? "Today" : state.range === "month" ? "This Month" : "(range)");
+
+      if (lastError) {
+        container.innerHTML = `<div class="report-state err">${escapeHtml(lastError)}</div>`;
+        document.getElementById("totalNum").textContent = "—";
+        return;
+      }
+
+      if (lastPartialErrors) {
+        const warn = document.createElement("div");
+        warn.className = "report-state err";
+        warn.style.marginBottom = "12px";
+        warn.textContent = `⚠️ Couldn't scan ${lastPartialErrors.join(", ")} — totals below may be undercounted for ${lastPartialErrors.length > 1 ? "those countries" : "that country"}. Try again shortly.`;
+        container.appendChild(warn);
+      }
+
+      if (state.moduleId === "ALL_MODULES") {
+        const cardEntries = topCardDimension(state.country);
+        const grand = cardEntries.reduce((a, b) => a + b.total, 0);
+
+        const grid = document.createElement("div");
+        grid.className = "summary-grid";
+        cardEntries.forEach((entry) => grid.appendChild(buildSummaryCard(entry, grand)));
+        container.appendChild(grid);
+
+        if (state.selectedDim) {
+          const isCountryCard = state.country === "ALL";
+          const ranked = moduleTotalsForDim(state.selectedDim, isCountryCard, state.country);
+          const title = isCountryCard ? state.selectedDim : brandName(state.selectedDim);
+          container.appendChild(buildRankList(ranked, title));
+        }
+        document.getElementById("totalNum").textContent = grand;
+      } else {
+        const card = buildModuleCard(state.moduleId, state.country);
+        container.appendChild(card);
+        document.getElementById("totalNum").textContent = sumRows(rowsFor(state.moduleId, state.country));
+      }
+    }
+
+    async function fetchAndRender() {
+      const { from, to } = currentFromTo();
+      if (!from || !to) return; // custom range with a date not picked yet
+      const container = document.getElementById("reportContainer");
+      container.innerHTML = `<div class="report-state">Loading…</div>`;
+      lastError = null;
+      lastPartialErrors = null;
+      try {
+        const params = new URLSearchParams({ from, to, module: "ALL", country: state.country });
+        const res = await window.AgentAuth.authFetch(`/api/admin/report?${params.toString()}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.ok) {
+          lastError = data.error || "Failed to load report.";
+          allRows = [];
+        } else {
+          allRows = data.rows || [];
+          // Not a hard failure — the rest of the data is still valid and
+          // worth showing, but a partial scan means the totals for those
+          // countries are undercounted, so this has to be visible, not
+          // silently swallowed (see report.js's own partialErrors note).
+          if (data.partialErrors && data.partialErrors.length) lastPartialErrors = data.partialErrors;
+        }
+      } catch {
+        lastError = "Failed to load — check your connection.";
+        allRows = [];
+      }
+      render();
+    }
+
+    document.getElementById("rangeSeg").addEventListener("click", (e) => {
+      const btn = e.target.closest("button"); if (!btn) return;
+      document.querySelectorAll("#rangeSeg button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active"); state.range = btn.dataset.val; state.selectedDim = null;
+      const customBox = document.getElementById("customRange");
+      if (state.range === "custom") {
+        customBox.classList.add("open");
+        if (!document.getElementById("fromDate").value) {
+          const from = gmt8Now(); from.setUTCDate(from.getUTCDate() - 6);
+          document.getElementById("fromDate").value = `${from.getUTCFullYear()}-${pad2(from.getUTCMonth() + 1)}-${pad2(from.getUTCDate())}`;
+          document.getElementById("toDate").value = todayStr();
+          fetchAndRender();
+          return;
+        }
+      } else {
+        customBox.classList.remove("open");
+      }
+      fetchAndRender();
+    });
+    document.getElementById("fromDate").addEventListener("change", () => { state.selectedDim = null; fetchAndRender(); });
+    document.getElementById("toDate").addEventListener("change", () => { state.selectedDim = null; fetchAndRender(); });
+    // Mirrors the interactive preview's "country lock" behavior: a
+    // PHP-only module (Deposit Request / Bank Issue) shouldn't silently
+    // show "no tickets" just because the Country dropdown is still on
+    // INR/PKR from before — grey out the countries that don't apply and
+    // auto-switch to one that does. Applies to any module whose
+    // `countries` list (from schemas.js) doesn't cover the current
+    // selection, not just the two PHP-only ones known today.
+    function applyCountryLock() {
+      const m = MODULE_BY_ID[state.moduleId];
+      const allowed = state.moduleId === "ALL_MODULES" || !m ? (window.COUNTRY_CODES || []) : m.countries;
+      Array.from(countrySelect.options).forEach((opt) => {
+        opt.disabled = opt.value === "ALL" ? false : !allowed.includes(opt.value);
+      });
+      const currentOk = state.country === "ALL" ? allowed.length > 1 : allowed.includes(state.country);
+      if (!currentOk) {
+        state.country = allowed[0];
+        countrySelect.value = state.country;
+        return true; // country changed — caller should re-fetch
+      }
+      return false;
+    }
+
+    moduleSelect.addEventListener("change", (e) => {
+      state.moduleId = e.target.value; state.selectedDim = null;
+      const countryChanged = applyCountryLock();
+      if (countryChanged) fetchAndRender(); else render();
+    });
+    countrySelect.addEventListener("change", (e) => { state.country = e.target.value; state.selectedDim = null; fetchAndRender(); });
+
+    // ---- Export: a static, self-contained snapshot of what's on
+    // screen right now (numbers frozen at export time — this page's
+    // own live data fetch needs the viewer's auth token, which a
+    // downloaded file obviously can't carry, so re-querying isn't an
+    // option for a real export the way the design-preview mockup could
+    // fake it). Still genuinely interactive within itself: the same
+    // expand/collapse behavior works in the downloaded copy, it just
+    // won't re-fetch a different date range. ----
+    document.getElementById("exportBtn").addEventListener("click", () => {
+      const btn = document.getElementById("exportBtn");
+      const container = document.getElementById("reportContainer");
+      const { from, to } = currentFromTo();
+      // Freeze to the dark-theme variable values regardless of which
+      // theme the exporting viewer currently has toggled — an exported
+      // snapshot with no toggle of its own should always render
+      // legibly, and dark is this app's default.
+      const rootVars = `
+        :root {
+          --ink:#eef1fb; --ink-soft:#9aa3c4; --border:#262c50; --field-bg:#1a2040; --card-bg:#141a33;
+          --radius:14px; --shadow:0 20px 45px -20px rgba(0,0,0,0.6); --accent-gold:#f3c463; --accent-glow:rgba(124,108,240,0.45);
+          --font-display: "Space Grotesk", sans-serif;
+        }`;
+      const reportStyles = document.getElementById("reportStyles")?.textContent || "";
+      const snapshotHtml = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Report export — ${escapeHtml(from)} to ${escapeHtml(to)}</title>
+<style>
+  ${rootVars}
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background:#090c1c; color:var(--ink); margin:0; padding:28px; }
+  h1 { font-size:18px; margin:0 0 6px; } .meta { color:var(--ink-soft); font-size:12.5px; margin-bottom:20px; }
+  ${reportStyles}
+</style></head><body>
+<h1>📈 Report export</h1>
+<div class="meta">Range: ${escapeHtml(from)} → ${escapeHtml(to)} · Issue Type: ${escapeHtml(moduleSelect.selectedOptions[0]?.textContent || "All")} · Country: ${escapeHtml(state.country)} · Exported ${escapeHtml(new Date().toLocaleString())}</div>
+<div class="report-state" style="display:none;"></div>
+${container.innerHTML}
+<script>
+  // Chevron expand/collapse doesn't survive innerHTML serialization
+  // (event listeners aren't part of the HTML) — re-wire it generically
+  // here so the exported copy is still genuinely interactive, not just
+  // a frozen picture of the numbers.
+  document.querySelectorAll(".rrow-main.clickable").forEach(function (main) {
+    var bd = main.parentElement.querySelector(".rbreakdown");
+    if (!bd) return;
+    main.addEventListener("click", function () {
+      main.classList.toggle("expanded");
+      bd.classList.toggle("open");
+    });
+  });
+  document.querySelectorAll(".summary-card").forEach(function (card) {
+    card.style.cursor = "default"; // selecting a brand card to filter the ranking isn't reproducible from a frozen snapshot
+  });
+</script>
+</body></html>`;
+      const blob = new Blob([snapshotHtml], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const label = state.moduleId === "ALL_MODULES" ? "all-issue-types" : state.moduleId;
+      a.download = `report-${label}-${state.country}-${from}_to_${to}.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      if (window.showToast) window.showToast(`Exported: ${a.download}`);
+    });
+
+    // ---- initial load: default range is Today ----
+    applyCountryLock();
+    fetchAndRender();
+  </script>
+</body>
+</html>

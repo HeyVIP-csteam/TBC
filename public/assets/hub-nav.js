@@ -33,17 +33,17 @@
     if (rank >= ROLE_RANK.senior) return ["createAccount"];
     return [];
   }
+  // MERGED (2026-08-21, generalized 2026-09-27) — mirrors _shared/
+  // accounts.js's OWNER_ONLY_BY_DEFAULT_SECTIONS array: neither of these
+  // may be implied by a rank-tiered "all" default the way every other
+  // section is — only an explicit array naming it counts. Keep this
+  // list in sync with the server file's own constant of the same name.
+  const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken", "report"];
   function accountCanSeeAdminSection(acc, sectionId) {
     if (!acc) return false;
     if (acc.role === "owner") return true;
     const sections = acc.allowedAdminSections !== undefined ? acc.allowedAdminSections : defaultSectionsForRank(ROLE_RANK[acc.role] ?? 0);
-    // MERGED (2026-08-21) — mirrors _shared/accounts.js's
-    // OWNER_ONLY_BY_DEFAULT_SECTIONS exception: "botToken" must NOT be
-    // implied by a rank-tiered "all" default the way every other
-    // section is — see index.html's own copy of this same fix for the
-    // fuller reasoning (this file and index.html each keep their own
-    // client-side replica of the server's canSeeAdminSection logic).
-    if (sectionId === "botToken") {
+    if (OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(sectionId)) {
       return Array.isArray(sections) && sections.includes(sectionId);
     }
     if (sections === "all") return true;
@@ -152,6 +152,31 @@
           </a>
         `;
       });
+
+      // Report (2026-09-27) — aggregate ticket-count dashboard across
+      // every module/country/brand. Deliberately NOT gated the same way
+      // as a submission module (canSeeModule/allowedModules): it's an
+      // Owner-only-by-default admin section (see
+      // OWNER_ONLY_BY_DEFAULT_SECTIONS above), same mechanism as Bot
+      // Token Settings, just surfaced here as its own top-level link
+      // (with a separator) rather than tucked inside the Account
+      // Management group — matches where the person who spec'd this
+      // feature wanted it to sit.
+      {
+        const authInfoForReport = window.AgentAuth ? window.AgentAuth.getAuth() : null;
+        const isOwnerForReport = authInfoForReport?.role === "owner";
+        if (isOwnerForReport || accountCanSeeAdminSection(authInfoForReport, "report")) {
+          const isActive = opts.activeModule === "report";
+          html += `
+            <div class="sidebar-sep"></div>
+            <a href="/report.html" class="sidebar-item${isActive ? " active" : ""}" style="--item-accent:#f3c463;">
+              <div class="icon" style="background:#f3c46333;">📈</div>
+              <div class="text"><div class="name">Report</div><div class="desc">Issue counts by day / month</div></div>
+              <span class="arrow">&rarr;</span>
+            </a>
+          `;
+        }
+      }
 
       const rank = ROLE_RANK[authInfo?.role] ?? 0;
       const isOwner = authInfo?.role === "owner";
