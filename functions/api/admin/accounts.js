@@ -52,7 +52,7 @@
  *     caller rank >= admin AND (editing themselves OR strictly
  *     outranking the target).
  */
-import { listAccounts, saveAccount, deleteAccount, getAccount, authenticateStaff, anySuperAdminExists, setAccountLocked, ROLE_RANK, rankOf, canSeeAdminSection, canEditAdminSection, canManageOthersAdminAccess, withSectionToggled, effectiveAllowedAdminSections, effectiveAdminSectionEditAccess, ADMIN_SECTIONS, EDITABLE_ADMIN_SECTIONS, requestIP } from "../../_shared/accounts.js";
+import { listAccounts, saveAccount, deleteAccount, getAccount, authenticateStaff, anySuperAdminExists, setAccountLocked, ROLE_RANK, rankOf, canSeeAdminSection, canEditAdminSection, canManageOthersAdminAccess, withSectionToggled, effectiveAllowedAdminSections, effectiveAdminSectionEditAccess, ADMIN_SECTIONS, EDITABLE_ADMIN_SECTIONS, OWNER_ONLY_BY_DEFAULT_SECTIONS, requestIP } from "../../_shared/accounts.js";
 import { logActivity } from "../../_shared/activityLog.js";
 import { resolveAllowedCountries } from "../../_shared/countryAccess.js";
 import { COUNTRY_CODES } from "../../_shared/countries.js";
@@ -176,31 +176,36 @@ async function handlePost({ request, env, waitUntil }) {
     if (!body.username) return json({ ok: false, error: "Username is required." }, 400);
     const targetUsername = body.username.toLowerCase();
     const existingTarget = await getAccount(env, targetUsername);
-    // "botToken" specifically: stricter than every other section — even
-    // a canManageOthersAdminAccess DELEGATE (a non-Owner someone was
-    // handed that flag by) must NOT be able to GRANT Bot Token access
-    // to a third party, only the literal Owner can (see
+    // OWNER_ONLY_BY_DEFAULT_SECTIONS (currently "botToken" and, as of
+    // 2026-09-27, "report"): stricter than every other section — even a
+    // canManageOthersAdminAccess DELEGATE (a non-Owner someone was
+    // handed that flag by) must NOT be able to GRANT any of these to a
+    // third party, only the literal Owner can (see
     // OWNER_ONLY_BY_DEFAULT_SECTIONS in _shared/accounts.js for the
-    // full reasoning — a Bot Token is a real credential, not routing
-    // metadata). This is delta-aware, not a blanket "botToken anywhere
-    // in the body is forbidden" check: index.html's account-edit UI
-    // deliberately still RENDERS this checkbox (disabled) for non-Owner
-    // editors so an existing grant round-trips correctly on an
-    // unrelated save (e.g. just editing PID) instead of being silently
-    // revoked by a save that never meant to touch it — see that file's
-    // own comment on why. So only a genuine NEW addition (wasn't in
-    // existingTarget's stored array, is in the incoming one) trips this;
-    // preserving or removing an existing grant does not, since a
-    // non-Owner delegate legitimately might resave the target's other
-    // permissions without disturbing this one, and REMOVING access is
-    // not the dangerous direction here.
+    // full per-section reasoning — a Bot Token is a real credential,
+    // Report is aggregate business data across every country, neither
+    // is "just routing metadata" like the rest of this list). This is
+    // delta-aware, not a blanket "any of these anywhere in the body is
+    // forbidden" check: index.html's account-edit UI deliberately still
+    // RENDERS these checkboxes (disabled) for non-Owner editors so an
+    // existing grant round-trips correctly on an unrelated save (e.g.
+    // just editing PID) instead of being silently revoked by a save
+    // that never meant to touch it — see that file's own comment on
+    // why. So only a genuine NEW addition (wasn't in existingTarget's
+    // stored array, is in the incoming one) trips this; preserving or
+    // removing an existing grant does not, since a non-Owner delegate
+    // legitimately might resave the target's other permissions without
+    // disturbing this one, and REMOVING access is not the dangerous
+    // direction here.
     const existingAllowedSections = existingTarget?.allowedAdminSections;
     const existingEditSections = existingTarget?.adminSectionEditAccess;
-    const botTokenNewlyGranted =
-      (Array.isArray(body.allowedAdminSections) && body.allowedAdminSections.includes("botToken") && !(Array.isArray(existingAllowedSections) && existingAllowedSections.includes("botToken"))) ||
-      (Array.isArray(body.adminSectionEditAccess) && body.adminSectionEditAccess.includes("botToken") && !(Array.isArray(existingEditSections) && existingEditSections.includes("botToken")));
-    if (botTokenNewlyGranted && auth.account?.role !== "owner") {
-      return json({ ok: false, error: "Only the account owner can grant Bot Token Settings access." }, 403);
+    const newlyGrantedOwnerOnlySection = OWNER_ONLY_BY_DEFAULT_SECTIONS.find((sectionId) =>
+      (Array.isArray(body.allowedAdminSections) && body.allowedAdminSections.includes(sectionId) && !(Array.isArray(existingAllowedSections) && existingAllowedSections.includes(sectionId))) ||
+      (Array.isArray(body.adminSectionEditAccess) && body.adminSectionEditAccess.includes(sectionId) && !(Array.isArray(existingEditSections) && existingEditSections.includes(sectionId)))
+    );
+    if (newlyGrantedOwnerOnlySection && auth.account?.role !== "owner") {
+      const label = newlyGrantedOwnerOnlySection === "botToken" ? "Bot Token Settings" : newlyGrantedOwnerOnlySection === "report" ? "Report" : newlyGrantedOwnerOnlySection;
+      return json({ ok: false, error: `Only the account owner can grant ${label} access.` }, 403);
     }
 
     // CANNOT GRANT MORE COUNTRY/BRAND ACCESS THAN YOU YOURSELF HAVE

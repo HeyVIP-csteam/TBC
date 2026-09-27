@@ -169,19 +169,24 @@ export function rankOf(role) { return ROLE_RANK[role] ?? ROLE_RANK.agent; }
 // account (even a SuperAdmin) — see OWNER_ONLY_BY_DEFAULT_SECTIONS
 // below, which is what actually enforces "not even superadmin's
 // 'all' implicitly includes this one."
-export const ADMIN_SECTIONS = ["createAccount", "whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "integrationPortal", "promoCodeSheet", "issueSubmissionSheet", "botToken"];
-export const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet", "botToken"];
+export const ADMIN_SECTIONS = ["createAccount", "whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "integrationPortal", "promoCodeSheet", "issueSubmissionSheet", "botToken", "report"];
+export const EDITABLE_ADMIN_SECTIONS = ["whitelistIp", "tgRoutes", "depositSheets", "settings", "agentProfile", "announcements", "bettingLinks", "webLink", "promoCodeSheet", "issueSubmissionSheet", "botToken", "report"];
 
 // Sections excluded from the "rank >= superadmin -> 'all' sections by
 // default" fallthrough in defaultSectionsForRank()/defaultEditForRank()
-// below — currently just "botToken" (2026-08-21, see that section's own
-// comment above for the full reasoning). Checked explicitly in
+// below — "botToken" (2026-08-21, see that section's own comment above
+// for the full reasoning) and, as of 2026-09-27, "report" too: per
+// explicit business-owner decision, the Report page (aggregate ticket
+// counts across every country/brand) stays OWNER-ONLY by default,
+// requiring an Owner to explicitly grant it — even to a SuperAdmin —
+// rather than inheriting it "for free" the way every other section
+// does under a rank-tiered "all". Checked explicitly in
 // canSeeAdminSection()/canEditAdminSection() below since "all" as a
 // stored value is meant to mean "every section that exists, including
-// ones added later" everywhere else — this is the one deliberate
+// ones added later" everywhere else — this is the deliberate
 // exception, so it has to be called out by name rather than solved by
 // changing what "all" means globally.
-const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken"];
+export const OWNER_ONLY_BY_DEFAULT_SECTIONS = ["botToken", "report"];
 
 function defaultSectionsForRank(rank) {
   if (rank >= ROLE_RANK.superadmin) return "all";
