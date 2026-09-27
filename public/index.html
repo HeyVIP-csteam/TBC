@@ -599,6 +599,41 @@ html[data-theme="light"] {
     const isAdmin = myRank >= ROLE_RANK.admin;
     const isSuperAdmin = myRank >= ROLE_RANK.superadmin;
 
+    // Report (2026-09-27) — same link hub-nav.js adds for every OTHER
+    // page; index.html renders its own sidebar independently of
+    // hub-nav.js (see that file's header comment), so it needs its own
+    // copy of this block too. Missed on first pass: every page built on
+    // hub-nav.js got the link, the home page didn't — caught via a
+    // screenshot in the 2026-09-27 conversation this shipped from.
+    // Owner-only-by-default (OWNER_ONLY_BY_DEFAULT_SECTIONS above),
+    // same mechanism as Bot Token Settings — deliberately NOT gated
+    // like a submission module (canSeeModule/allowedModules). Placed
+    // here (after authInfo/ROLE_RANK exist, reusing the canSeeAdminSection(sectionId)
+    // wrapper defined further down — function declarations are hoisted,
+    // so calling it from here is safe) rather than right after the
+    // module-links loop above: that point runs BEFORE `const ROLE_RANK`
+    // below it, and canSeeAdminSection ultimately reads ROLE_RANK — the
+    // exact "declared too early" TDZ crash this file's own comment a
+    // few lines up already warns about once before.
+    if (canSeeAdminSection("report")) {
+      const sep = document.createElement("div");
+      sep.className = "sidebar-sep";
+      list.appendChild(sep);
+      const reportLink = document.createElement("a");
+      reportLink.href = "/report.html";
+      reportLink.className = "sidebar-item";
+      reportLink.style.setProperty("--item-accent", "#f3c463");
+      reportLink.innerHTML = `
+        <div class="icon" style="background:#f3c46333;">📈</div>
+        <div class="text">
+          <div class="name">Report</div>
+          <div class="desc">Issue counts by day / month</div>
+        </div>
+        <span class="arrow">&rarr;</span>
+      `;
+      list.appendChild(reportLink);
+    }
+
     // ---- Announcement card: gated by the "announcements" admin section
     // (defaults to admin+, but an Owner can grant/revoke it per account
     // via Agent Profile — see accounts.js) — breathes while at least one
