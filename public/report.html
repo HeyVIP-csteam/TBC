@@ -366,8 +366,21 @@ html[data-theme="light"] {
     // 2026-09-27 fix: an unbounded single query silently truncating on
     // a large table), but this matching gap was real too and is worth
     // keeping fixed regardless.
+    // BUGFIX (2026-09-27) — the earlier id-or-name fix still missed real
+    // data: the diagnostic added alongside it (see below) caught actual
+    // tickets storing brand as a bare lowercase slug ("crickex",
+    // "betvisa", "betjili") — matching neither the id ("crickex_inr")
+    // nor the properly-cased name ("Crickex") exactly. Root cause is
+    // upstream (something in ticket submission is writing that lowercase
+    // form instead of resolving it through the brand registry — worth
+    // checking separately), but matching case-insensitively against the
+    // name here is a correct, resilient fix regardless of whether/when
+    // that gets addressed at the source: comparing lowercased strings is
+    // never wrong, only ever more forgiving.
     function rowMatchesBrand(row, brandObj) {
-      return row.brand === brandObj.id || row.brand === brandObj.name;
+      if (!row.brand) return false;
+      if (row.brand === brandObj.id) return true;
+      return String(row.brand).toLowerCase() === String(brandObj.name).toLowerCase();
     }
     function topCardDimension(country) {
       if (country === "ALL") {
@@ -375,29 +388,6 @@ html[data-theme="light"] {
       }
       return (window.BRANDS || []).filter((b) => b.country === country)
         .map((b) => ({ name: b.name, id: b.id, color: brandColor(b.id), total: sumRows(allRows.filter((r) => r.country === country && rowMatchesBrand(r, b))) }));
-    }
-
-    // TEMPORARY DIAGNOSTIC (2026-09-27) — added specifically to find out
-    // WHY the per-brand cards for a country don't add up to that
-    // country's true total (see the conversation this shipped from: a
-    // screenshot showing INR = 14 with "All" selected but its own 5
-    // brand cards only summing to 2). Rather than guess at a matching
-    // rule, this lists the ACTUAL raw `brand` values sitting on rows
-    // that don't match any known brand for this country, with counts —
-    // whatever shows up here is the real, current shape of the data,
-    // not a theory about it. Remove once the real cause is confirmed
-    // and fixed at the source.
-    function unmatchedBrandDiagnostics(country) {
-      if (country === "ALL") return [];
-      const brands = (window.BRANDS || []).filter((b) => b.country === country);
-      const countryRows = allRows.filter((r) => r.country === country);
-      const unmatched = countryRows.filter((r) => !brands.some((b) => rowMatchesBrand(r, b)));
-      const byRaw = {};
-      unmatched.forEach((r) => {
-        const key = r.brand === null || r.brand === undefined || r.brand === "" ? "(empty/null)" : JSON.stringify(r.brand);
-        byRaw[key] = (byRaw[key] || 0) + r.count;
-      });
-      return Object.keys(byRaw).map((k) => ({ raw: k, count: byRaw[k] })).sort((a, b) => b.count - a.count);
     }
 
     function moduleTotalsForDim(dimId, isCountryDim, country) {
@@ -536,22 +526,6 @@ html[data-theme="light"] {
         grid.className = "summary-grid";
         cardEntries.forEach((entry) => grid.appendChild(buildSummaryCard(entry, grand)));
         container.appendChild(grid);
-
-        // TEMPORARY DIAGNOSTIC — see unmatchedBrandDiagnostics()'s own
-        // comment. Only ever shows up when the brand cards genuinely
-        // don't add up to the country's real total; says nothing when
-        // everything matches.
-        const diag = unmatchedBrandDiagnostics(state.country);
-        if (diag.length) {
-          const box = document.createElement("div");
-          box.className = "report-state err";
-          box.style.textAlign = "left";
-          box.style.marginTop = "12px";
-          const totalUnmatched = diag.reduce((a, d) => a + d.count, 0);
-          box.innerHTML = `⚠️ Diagnostic: ${totalUnmatched} ticket(s) in ${escapeHtml(state.country)} today don't match any known brand for this country — raw <code>brand</code> value(s) found on those tickets:<br>` +
-            diag.map((d) => `&nbsp;&nbsp;• ${escapeHtml(d.raw)} — ${d.count} ticket(s)`).join("<br>");
-          container.appendChild(box);
-        }
 
         if (state.selectedDim) {
           const isCountryCard = state.country === "ALL";
