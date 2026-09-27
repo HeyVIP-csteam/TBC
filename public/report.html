@@ -377,6 +377,29 @@ html[data-theme="light"] {
         .map((b) => ({ name: b.name, id: b.id, color: brandColor(b.id), total: sumRows(allRows.filter((r) => r.country === country && rowMatchesBrand(r, b))) }));
     }
 
+    // TEMPORARY DIAGNOSTIC (2026-09-27) — added specifically to find out
+    // WHY the per-brand cards for a country don't add up to that
+    // country's true total (see the conversation this shipped from: a
+    // screenshot showing INR = 14 with "All" selected but its own 5
+    // brand cards only summing to 2). Rather than guess at a matching
+    // rule, this lists the ACTUAL raw `brand` values sitting on rows
+    // that don't match any known brand for this country, with counts —
+    // whatever shows up here is the real, current shape of the data,
+    // not a theory about it. Remove once the real cause is confirmed
+    // and fixed at the source.
+    function unmatchedBrandDiagnostics(country) {
+      if (country === "ALL") return [];
+      const brands = (window.BRANDS || []).filter((b) => b.country === country);
+      const countryRows = allRows.filter((r) => r.country === country);
+      const unmatched = countryRows.filter((r) => !brands.some((b) => rowMatchesBrand(r, b)));
+      const byRaw = {};
+      unmatched.forEach((r) => {
+        const key = r.brand === null || r.brand === undefined || r.brand === "" ? "(empty/null)" : JSON.stringify(r.brand);
+        byRaw[key] = (byRaw[key] || 0) + r.count;
+      });
+      return Object.keys(byRaw).map((k) => ({ raw: k, count: byRaw[k] })).sort((a, b) => b.count - a.count);
+    }
+
     function moduleTotalsForDim(dimId, isCountryDim, country) {
       let filtered;
       if (isCountryDim) {
@@ -513,6 +536,22 @@ html[data-theme="light"] {
         grid.className = "summary-grid";
         cardEntries.forEach((entry) => grid.appendChild(buildSummaryCard(entry, grand)));
         container.appendChild(grid);
+
+        // TEMPORARY DIAGNOSTIC — see unmatchedBrandDiagnostics()'s own
+        // comment. Only ever shows up when the brand cards genuinely
+        // don't add up to the country's real total; says nothing when
+        // everything matches.
+        const diag = unmatchedBrandDiagnostics(state.country);
+        if (diag.length) {
+          const box = document.createElement("div");
+          box.className = "report-state err";
+          box.style.textAlign = "left";
+          box.style.marginTop = "12px";
+          const totalUnmatched = diag.reduce((a, d) => a + d.count, 0);
+          box.innerHTML = `⚠️ Diagnostic: ${totalUnmatched} ticket(s) in ${escapeHtml(state.country)} today don't match any known brand for this country — raw <code>brand</code> value(s) found on those tickets:<br>` +
+            diag.map((d) => `&nbsp;&nbsp;• ${escapeHtml(d.raw)} — ${d.count} ticket(s)`).join("<br>");
+          container.appendChild(box);
+        }
 
         if (state.selectedDim) {
           const isCountryCard = state.country === "ALL";
@@ -665,7 +704,7 @@ html[data-theme="light"] {
       // See this handler's own header comment on why these are inlined
       // via .toString() instead of copy-pasted.
       const reusedFuncsSrc = [
-        escapeHtml, brandColor, brandName, dimLabel, sumRows, rowsFor,
+        escapeHtml, brandColor, brandName, dimLabel, sumRows, rowsFor, rowMatchesBrand,
         computeModuleRows, topCardDimension, moduleTotalsForDim,
         buildSummaryCard, buildModuleCard, buildRankList, applyCountryLock,
         formatDateDisplay,
