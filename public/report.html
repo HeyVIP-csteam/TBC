@@ -296,11 +296,24 @@ html[data-theme="light"] {
       if (state.range === "month") return monthRangeStrs();
       return { from: document.getElementById("fromDate").value, to: document.getElementById("toDate").value };
     }
+    // Formats a YYYY-MM-DD string as e.g. "Sep 27, 2026" — parsed as a
+    // plain calendar date (not a UTC instant) so it always shows the
+    // exact date that was picked, regardless of the viewer's own
+    // timezone.
+    function formatDateDisplay(dateStr) {
+      const [y, m, d] = dateStr.split("-").map(Number);
+      const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+      return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+    }
+    // REVISED (2026-09-27) — used to just say "Today" / "This Month",
+    // which reads fine on screen but is ambiguous once it's sitting in
+    // an exported file someone opens later ("this month" as of when?).
+    // Always shows the real date(s) now, for every mode.
     function rangeLabel() {
       const { from, to } = currentFromTo();
-      if (state.range === "today") return "Today";
-      if (state.range === "month") return "This Month";
-      return from && to ? `${from} → ${to}` : "Custom range";
+      if (!from || !to) return "Custom range";
+      const modePrefix = state.range === "today" ? "Today · " : state.range === "month" ? "This Month · " : "";
+      return from === to ? `${modePrefix}${formatDateDisplay(from)}` : `${modePrefix}${formatDateDisplay(from)} – ${formatDateDisplay(to)}`;
     }
 
     function sumRows(rows) { return rows.reduce((a, r) => a + r.count, 0); }
@@ -611,6 +624,8 @@ html[data-theme="light"] {
       const btn = document.getElementById("exportBtn");
       const exportedRangeLabel = rangeLabel();
       const { from, to } = currentFromTo();
+      const spanDays = Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
+      const showDateFilter = spanDays > 2; // per explicit request: only worth showing for more than a couple of days
 
       const rootVars = `
         :root {
@@ -623,7 +638,10 @@ html[data-theme="light"] {
         .exp-controls { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 18px; margin-bottom:16px; }
         .exp-controls .rc-group { display:flex; flex-direction:column; gap:6px; }
         .exp-controls label { font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); font-weight:700; }
-        .exp-controls select { background:var(--field-bg); border:1.5px solid var(--border); color:var(--ink); border-radius:10px; padding:8px 12px; font-size:13px; min-width:190px; font-family:inherit; }
+        .exp-controls select, .exp-controls input[type="date"] { background:var(--field-bg); border:1.5px solid var(--border); color:var(--ink); border-radius:10px; padding:8px 12px; font-size:13px; font-family:inherit; }
+        .exp-controls select { min-width:190px; }
+        .exp-reset-btn { background:var(--field-bg); border:1.5px solid var(--border); color:var(--ink); border-radius:10px; padding:9px 14px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
+        .exp-reset-btn:hover { border-color:var(--accent-gold); color:var(--accent-gold); }
       `;
       // See this handler's own header comment on why these are inlined
       // via .toString() instead of copy-pasted.
@@ -631,16 +649,20 @@ html[data-theme="light"] {
         escapeHtml, brandColor, brandName, dimLabel, sumRows, rowsFor,
         computeModuleRows, topCardDimension, moduleTotalsForDim,
         buildSummaryCard, buildModuleCard, buildRankList, applyCountryLock,
+        formatDateDisplay,
       ].map((fn) => fn.toString()).join("\n\n");
 
       const embedded = {
-        rows: allRows,
+        rows: allRows, // now per-day (see `date` on each row) — this is what makes the sub-range filter below possible
         modules: REPORT_MODULE_LIST.map((m) => ({ id: m.id, name: m.name, icon: m.icon, accent: m.accent, countries: m.countries })),
         brands: (window.BRANDS || []).map((b) => ({ id: b.id, name: b.name, country: b.country })),
         countries: window.COUNTRY_CODES || [],
         countryColors: COUNTRY_COLORS,
         brandPalette: BRAND_PALETTE,
         rangeLabel: exportedRangeLabel,
+        exportFrom: from,
+        exportTo: to,
+        showDateFilter,
       };
 
       const scriptOpenTag = "<" + "script>"; // see this file's own note further up on why these can't be written literally
@@ -656,6 +678,11 @@ html[data-theme="light"] {
 </style></head><body>
 <h1>📈 Report export</h1>
 <div class="meta">${escapeHtml(exportedRangeLabel)} · Exported ${escapeHtml(new Date().toLocaleString())} · scoped to whatever countries/modules this account can see</div>
+<div class="exp-controls" id="dateFilterControls" style="${showDateFilter ? "" : "display:none;"}">
+  <div class="rc-group"><label>From</label><input type="date" id="subFromDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(from)}" /></div>
+  <div class="rc-group"><label>To</label><input type="date" id="subToDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(to)}" /></div>
+  <button class="exp-reset-btn" id="resetRangeBtn" type="button">Reset to full range</button>
+</div>
 <div class="exp-controls">
   <div class="rc-group"><label>Issue Type</label><select id="moduleSelect"></select></div>
   <div class="rc-group"><label>Country</label><select id="countrySelect"></select></div>
@@ -663,7 +690,8 @@ html[data-theme="light"] {
 <div id="reportContainer"></div>
 ${scriptOpenTag}
   const EMBEDDED = ${JSON.stringify(embedded)};
-  let allRows = EMBEDDED.rows;
+  const ALL_ROWS_FULL = EMBEDDED.rows; // never mutated — the sub-range filter below re-slices FROM this, into allRows
+  let allRows = ALL_ROWS_FULL;
   const REPORT_MODULE_LIST = EMBEDDED.modules;
   const MODULE_BY_ID = {};
   REPORT_MODULE_LIST.forEach(function (m) { MODULE_BY_ID[m.id] = m; });
@@ -672,7 +700,13 @@ ${scriptOpenTag}
   const COUNTRY_COLORS = EMBEDDED.countryColors;
   const BRAND_PALETTE = EMBEDDED.brandPalette;
   const state = { moduleId: "ALL_MODULES", country: "ALL", selectedDim: null };
-  function rangeLabel() { return EMBEDDED.rangeLabel; }
+  // Reflects whichever sub-range (if any) is currently applied via the
+  // From/To inputs above — defaults to the full exported range.
+  let subFrom = EMBEDDED.exportFrom, subTo = EMBEDDED.exportTo;
+  function rangeLabel() {
+    if (subFrom === EMBEDDED.exportFrom && subTo === EMBEDDED.exportTo) return EMBEDDED.rangeLabel;
+    return subFrom === subTo ? formatDateDisplay(subFrom) : formatDateDisplay(subFrom) + " – " + formatDateDisplay(subTo);
+  }
 
   ${reusedFuncsSrc}
 
@@ -708,6 +742,27 @@ ${scriptOpenTag}
   }
   moduleSelect.addEventListener("change", function (e) { state.moduleId = e.target.value; state.selectedDim = null; applyCountryLock(); render(); });
   countrySelect.addEventListener("change", function (e) { state.country = e.target.value; state.selectedDim = null; render(); });
+
+  if (EMBEDDED.showDateFilter) {
+    const subFromInput = document.getElementById("subFromDate");
+    const subToInput = document.getElementById("subToDate");
+    function applyDateFilter() {
+      subFrom = subFromInput.value || EMBEDDED.exportFrom;
+      subTo = subToInput.value || EMBEDDED.exportTo;
+      if (subFrom > subTo) { const t = subFrom; subFrom = subTo; subTo = t; subFromInput.value = subFrom; subToInput.value = subTo; }
+      allRows = ALL_ROWS_FULL.filter(function (r) { return r.date >= subFrom && r.date <= subTo; });
+      state.selectedDim = null;
+      render();
+    }
+    subFromInput.addEventListener("change", applyDateFilter);
+    subToInput.addEventListener("change", applyDateFilter);
+    document.getElementById("resetRangeBtn").addEventListener("click", function () {
+      subFromInput.value = EMBEDDED.exportFrom;
+      subToInput.value = EMBEDDED.exportTo;
+      applyDateFilter();
+    });
+  }
+
   applyCountryLock();
   render();
 ${scriptCloseTag}
