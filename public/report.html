@@ -640,8 +640,6 @@ html[data-theme="light"] {
         .exp-controls label { font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); font-weight:700; }
         .exp-controls select, .exp-controls input[type="date"] { background:var(--field-bg); border:1.5px solid var(--border); color:var(--ink); border-radius:10px; padding:8px 12px; font-size:13px; font-family:inherit; }
         .exp-controls select { min-width:190px; }
-        .exp-reset-btn { background:var(--field-bg); border:1.5px solid var(--border); color:var(--ink); border-radius:10px; padding:9px 14px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
-        .exp-reset-btn:hover { border-color:var(--accent-gold); color:var(--accent-gold); }
       `;
       // See this handler's own header comment on why these are inlined
       // via .toString() instead of copy-pasted.
@@ -678,12 +676,9 @@ html[data-theme="light"] {
 </style></head><body>
 <h1>📈 Report export</h1>
 <div class="meta">${escapeHtml(exportedRangeLabel)} · Exported ${escapeHtml(new Date().toLocaleString())} · scoped to whatever countries/modules this account can see</div>
-<div class="exp-controls" id="dateFilterControls" style="${showDateFilter ? "" : "display:none;"}">
-  <div class="rc-group"><label>From</label><input type="date" id="subFromDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(from)}" /></div>
-  <div class="rc-group"><label>To</label><input type="date" id="subToDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(to)}" /></div>
-  <button class="exp-reset-btn" id="resetRangeBtn" type="button">Reset to full range</button>
-</div>
 <div class="exp-controls">
+  <div class="rc-group" id="dateFilterFromGroup" style="${showDateFilter ? "" : "display:none;"}"><label>From</label><input type="date" id="subFromDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(from)}" /></div>
+  <div class="rc-group" id="dateFilterToGroup" style="${showDateFilter ? "" : "display:none;"}"><label>To</label><input type="date" id="subToDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(to)}" /></div>
   <div class="rc-group"><label>Issue Type</label><select id="moduleSelect"></select></div>
   <div class="rc-group"><label>Country</label><select id="countrySelect"></select></div>
 </div>
@@ -756,11 +751,6 @@ ${scriptOpenTag}
     }
     subFromInput.addEventListener("change", applyDateFilter);
     subToInput.addEventListener("change", applyDateFilter);
-    document.getElementById("resetRangeBtn").addEventListener("click", function () {
-      subFromInput.value = EMBEDDED.exportFrom;
-      subToInput.value = EMBEDDED.exportTo;
-      applyDateFilter();
-    });
   }
 
   applyCountryLock();
