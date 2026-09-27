@@ -355,21 +355,42 @@ html[data-theme="light"] {
       return Object.keys(groups).map((d) => ({ name: dimLabel(d, isAll), count: groups[d]._total || 0, breakdown: null })).sort((a, b) => b.count - a.count);
     }
 
+    // BUGFIX (2026-09-27) — this used to match a row to a brand card by
+    // exact id equality only (r.brand === b.id). Most tickets carry a
+    // real brandId ("crickex_inr"), but any record that only ever had
+    // the bare display name in its brand field (older records — see
+    // report.js's own comment on this fallback) would match NO card at
+    // all and silently undercount. Now matches by id OR by name — the
+    // actual root cause of the undercount this was chasing turned out
+    // to be in the backend's D1 scan instead (see report.js's own
+    // 2026-09-27 fix: an unbounded single query silently truncating on
+    // a large table), but this matching gap was real too and is worth
+    // keeping fixed regardless.
+    function rowMatchesBrand(row, brandObj) {
+      return row.brand === brandObj.id || row.brand === brandObj.name;
+    }
     function topCardDimension(country) {
       if (country === "ALL") {
         return (window.COUNTRY_CODES || []).map((c) => ({ name: c, color: COUNTRY_COLORS[c] || "#f3c463", total: sumRows(allRows.filter((r) => r.country === c)) }));
       }
       return (window.BRANDS || []).filter((b) => b.country === country)
-        .map((b) => ({ name: b.name, id: b.id, color: brandColor(b.id), total: sumRows(allRows.filter((r) => r.country === country && r.brand === b.id)) }));
+        .map((b) => ({ name: b.name, id: b.id, color: brandColor(b.id), total: sumRows(allRows.filter((r) => r.country === country && rowMatchesBrand(r, b))) }));
     }
 
     function moduleTotalsForDim(dimId, isCountryDim, country) {
-      const filtered = isCountryDim ? allRows.filter((r) => r.country === dimId) : allRows.filter((r) => r.country === country && r.brand === dimId);
+      let filtered;
+      if (isCountryDim) {
+        filtered = allRows.filter((r) => r.country === dimId);
+      } else {
+        const brandObj = (window.BRANDS || []).find((b) => b.id === dimId);
+        filtered = allRows.filter((r) => r.country === country && brandObj && rowMatchesBrand(r, brandObj));
+      }
       const byModule = {};
       filtered.forEach((r) => { byModule[r.module] = (byModule[r.module] || 0) + r.count; });
       return Object.keys(byModule).filter((m) => MODULE_BY_ID[m])
         .map((m) => ({ moduleId: m, total: byModule[m] })).filter((x) => x.total > 0).sort((a, b) => b.total - a.total);
     }
+
 
     function escapeHtml(str) {
       return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
