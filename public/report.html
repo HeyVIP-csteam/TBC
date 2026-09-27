@@ -591,6 +591,17 @@ html[data-theme="light"] {
           --font-display: "Space Grotesk", sans-serif;
         }`;
       const reportStyles = document.getElementById("reportStyles")?.textContent || "";
+      // Guarding against the classic gotcha: writing the literal closing
+      // script-tag sequence anywhere inside THIS page's own script
+      // block — even inside a comment or a JS string/template literal —
+      // makes the HTML PARSER (which tokenizes before the JS engine
+      // ever runs) end the enclosing script element right there,
+      // dumping everything after it as plain visible page text (this
+      // hit exactly that, in production, before this fix — see the
+      // 2026-09-27 conversation). Building the tags via concatenation
+      // keeps that exact substring out of the raw file altogether.
+      const scriptOpenTag = "<" + "script>";
+      const scriptCloseTag = "<" + "/script>";
       const snapshotHtml = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Report export — ${escapeHtml(from)} to ${escapeHtml(to)}</title>
 <style>
@@ -603,7 +614,7 @@ html[data-theme="light"] {
 <div class="meta">Range: ${escapeHtml(from)} → ${escapeHtml(to)} · Issue Type: ${escapeHtml(moduleSelect.selectedOptions[0]?.textContent || "All")} · Country: ${escapeHtml(state.country)} · Exported ${escapeHtml(new Date().toLocaleString())}</div>
 <div class="report-state" style="display:none;"></div>
 ${container.innerHTML}
-<script>
+${scriptOpenTag}
   // Chevron expand/collapse doesn't survive innerHTML serialization
   // (event listeners aren't part of the HTML) — re-wire it generically
   // here so the exported copy is still genuinely interactive, not just
@@ -619,7 +630,7 @@ ${container.innerHTML}
   document.querySelectorAll(".summary-card").forEach(function (card) {
     card.style.cursor = "default"; // selecting a brand card to filter the ranking isn't reproducible from a frozen snapshot
   });
-</script>
+${scriptCloseTag}
 </body></html>`;
       const blob = new Blob([snapshotHtml], { type: "text/html" });
       const url = URL.createObjectURL(blob);
