@@ -59,6 +59,17 @@ function dayBoundaryMs(dateStr, endOfDay) {
   return endOfDay ? localMidnightUtcMs + 24 * 60 * 60 * 1000 - 1 : localMidnightUtcMs;
 }
 
+// Given a UTC-instant ms timestamp, the GMT+8 calendar date (YYYY-MM-DD)
+// it falls on — same reference timezone as above. Each aggregated row
+// carries this so a downloaded export (which has no server to
+// re-query) can still let the viewer narrow to a sub-range within what
+// was exported, entirely client-side.
+function gmt8DateStr(ms) {
+  const d = new Date(ms + REPORT_TIMEZONE_OFFSET_MINUTES * 60000);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
 // Which raw fieldMap key holds "the categorical type" for a module, if
 // any — mirrors the actual field `key` values in public/assets/
 // schemas.js (issueType for most, promotion for Promotion Request,
@@ -132,10 +143,10 @@ async function handleGet({ request, env }) {
   // see that endpoint's own comment.)
   const countries = (countryFilter === "ALL" ? COUNTRY_CODES : [countryFilter]).filter((c) => canSeeCountry(auth.account, c));
 
-  // counts["module|country|brandId|type"] -> number
+  // counts["module|country|brandId|type|date"] -> number
   const counts = Object.create(null);
-  function bump(moduleId, country, brandId, type) {
-    const key = `${moduleId}|${country}|${brandId || "_"}|${type || "_"}`;
+  function bump(moduleId, country, brandId, type, date) {
+    const key = `${moduleId}|${country}|${brandId || "_"}|${type || "_"}|${date}`;
     counts[key] = (counts[key] || 0) + 1;
   }
 
@@ -170,17 +181,18 @@ async function handleGet({ request, env }) {
       // the bare display name — fall back to that rather than drop the
       // ticket from the count entirely.
       const brandKey = t.brandId || t.brand || null;
-      bump(t.module, country, brandKey, type);
+      bump(t.module, country, brandKey, type, gmt8DateStr(ts));
     }
   }
 
   const rows = Object.keys(counts).map((key) => {
-    const [moduleId, country, brand, type] = key.split("|");
+    const [moduleId, country, brand, type, date] = key.split("|");
     return {
       module: moduleId,
       country,
       brand: brand === "_" ? null : brand,
       type: type === "_" ? null : type,
+      date,
       count: counts[key],
     };
   });
