@@ -139,6 +139,21 @@ async function handleGet({ request, env }) {
     // veto a name that's actually fine.
     .filter((t) => canSeeCountry(account, t.country) && (canSeeBrand(account, t.brandId, t.country) || canSeeBrand(account, t.brand, t.country)));
 
+  // BUGFIX (2026-09-27) — listThreads() sorts each COUNTRY's own
+  // results by lastActivity before this ever runs, but merging several
+  // countries with flatMap just concatenates those already-sorted
+  // arrays one after another — every INR thread first, then every PKR
+  // thread, etc. — not a single list interleaved by real time across
+  // countries. An account allowed to see multiple countries got what
+  // looked like "grouped by currency, then time within that", which
+  // wasn't intentional (see the 2026-09-27 conversation this was
+  // caught in: a PKR thread from 5:04 PM sitting BELOW several INR
+  // threads from earlier that same day). Re-sorting the merged set here
+  // makes the final order pure recency, regardless of which country
+  // each thread came from — the permission filtering above is
+  // untouched, only the ordering changes.
+  all.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+
   return json({
     ok: true,
     active: all.filter((t) => !t.solved),
