@@ -150,38 +150,59 @@ async function handleGet({ request, env }) {
     counts[key] = (counts[key] || 0) + 1;
   }
 
+  // BUGFIX (2026-09-27) — this used to be a single unbounded
+  // `SELECT data FROM threads` per country. D1 (like most databases
+  // fronting an HTTP API) caps how much a single query can return in
+  // one response; past that cap it does NOT throw — it just hands back
+  // however many rows fit, silently. With "Solved: 4705"+ tickets in a
+  // busy country, each carrying its full reply history/attachments in
+  // the `data` blob, a full-table single query is a real, believable
+  // way to quietly lose an unpredictable chunk of rows with no error
+  // anywhere — which looks exactly like "today's count is way lower
+  // than it should be" with nothing in the logs to explain why (see the
+  // 2026-09-27 conversation this was caught in). Paginating with
+  // LIMIT/OFFSET keeps every individual query small regardless of how
+  // large the table grows, so no single response can ever hit that
+  // ceiling.
+  const SCAN_PAGE_SIZE = 200;
+  const MAX_SCAN_PAGES = 2000; // 400k rows/country hard stop — a runaway loop, not a real table size, should it ever come to that
   const scanErrors = [];
   for (const country of countries) {
     const store = resolveThreadsStore(env, country);
     if (!store.db) continue; // country's ticket storage not bound yet — skip, don't fail the whole report
-    let result;
-    try {
-      result = await store.db.prepare(`SELECT data FROM threads`).all();
-    } catch (e) {
-      scanErrors.push(country);
-      continue; // one country's D1 hiccuping shouldn't blank out the rest
-    }
-    const rows = (result && result.results) || [];
-    for (const row of rows) {
-      let t;
+    let offset = 0;
+    for (let page = 0; page < MAX_SCAN_PAGES; page++) {
+      let result;
       try {
-        t = JSON.parse(row.data);
-      } catch {
-        continue; // corrupt row — nothing to count
+        result = await store.db.prepare(`SELECT data FROM threads LIMIT ?1 OFFSET ?2`).bind(SCAN_PAGE_SIZE, offset).all();
+      } catch (e) {
+        scanErrors.push(country);
+        break; // one country's D1 hiccuping shouldn't blank out the rest
       }
-      if (!t || t.deleted) continue;
-      if (!REPORT_MODULES.includes(t.module)) continue;
-      if (moduleFilter !== "ALL" && t.module !== moduleFilter) continue;
-      if (!canSeeModule(auth.account, t.module)) continue;
-      const ts = new Date(t.submittedAt).getTime();
-      if (!Number.isFinite(ts) || ts < fromMs || ts > toMs) continue;
-      const typeField = MODULE_TYPE_FIELD[t.module];
-      const type = typeField && t.fieldMap ? t.fieldMap[typeField] || null : null;
-      // brandId is the norm since 2026-09-01; older records only have
-      // the bare display name — fall back to that rather than drop the
-      // ticket from the count entirely.
-      const brandKey = t.brandId || t.brand || null;
-      bump(t.module, country, brandKey, type, gmt8DateStr(ts));
+      const rows = (result && result.results) || [];
+      for (const row of rows) {
+        let t;
+        try {
+          t = JSON.parse(row.data);
+        } catch {
+          continue; // corrupt row — nothing to count
+        }
+        if (!t || t.deleted) continue;
+        if (!REPORT_MODULES.includes(t.module)) continue;
+        if (moduleFilter !== "ALL" && t.module !== moduleFilter) continue;
+        if (!canSeeModule(auth.account, t.module)) continue;
+        const ts = new Date(t.submittedAt).getTime();
+        if (!Number.isFinite(ts) || ts < fromMs || ts > toMs) continue;
+        const typeField = MODULE_TYPE_FIELD[t.module];
+        const type = typeField && t.fieldMap ? t.fieldMap[typeField] || null : null;
+        // brandId is the norm since 2026-09-01; older records only have
+        // the bare display name — fall back to that rather than drop the
+        // ticket from the count entirely.
+        const brandKey = t.brandId || t.brand || null;
+        bump(t.module, country, brandKey, type, gmt8DateStr(ts));
+      }
+      if (rows.length < SCAN_PAGE_SIZE) break; // last page for this country
+      offset += SCAN_PAGE_SIZE;
     }
   }
 
