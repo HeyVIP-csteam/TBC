@@ -94,7 +94,7 @@ html[data-theme="light"] {
   }
   .report-state.err { color: #e0577a; }
 
-  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 240px)); gap: 14px; margin-bottom: 16px; }
   .summary-card {
     background: var(--card-bg); border: 1px solid var(--border); border-top: 3px solid var(--m-accent, var(--accent-gold));
     border-radius: 14px; padding: 16px 18px 15px; box-shadow: var(--shadow); cursor: pointer; transition: transform 0.12s;
@@ -497,7 +497,15 @@ html[data-theme="light"] {
       lastError = null;
       lastPartialErrors = null;
       try {
-        const params = new URLSearchParams({ from, to, module: "ALL", country: state.country });
+        // Always fetch every country this account is permitted to see
+        // (server-side canSeeCountry already narrows it per-account) —
+        // NOT just whichever country the on-screen filter happens to be
+        // set to. The Country dropdown is now a pure client-side view
+        // filter (see rowsFor()); this is what makes allRows always hold
+        // the complete permitted dataset, which both fixes Export
+        // (see the exportBtn handler) and means switching Country no
+        // longer needs a round trip at all.
+        const params = new URLSearchParams({ from, to, module: "ALL", country: "ALL" });
         const res = await window.AgentAuth.authFetch(`/api/admin/report?${params.toString()}`, { cache: "no-store" });
         const data = await res.json();
         if (!data.ok) {
@@ -556,34 +564,49 @@ html[data-theme="light"] {
       if (!currentOk) {
         state.country = allowed[0];
         countrySelect.value = state.country;
-        return true; // country changed — caller should re-fetch
       }
-      return false;
     }
 
+    // Module and Country are now pure client-side view filters — allRows
+    // (fetched with country=ALL, see fetchAndRender) already holds every
+    // permitted country's data for the current time range, so switching
+    // either one just re-slices what's already in memory. Only the Time
+    // Range controls (below) still need a server round trip.
     moduleSelect.addEventListener("change", (e) => {
       state.moduleId = e.target.value; state.selectedDim = null;
-      const countryChanged = applyCountryLock();
-      if (countryChanged) fetchAndRender(); else render();
+      applyCountryLock();
+      render();
     });
-    countrySelect.addEventListener("change", (e) => { state.country = e.target.value; state.selectedDim = null; fetchAndRender(); });
+    countrySelect.addEventListener("change", (e) => { state.country = e.target.value; state.selectedDim = null; render(); });
 
-    // ---- Export: a static, self-contained snapshot of what's on
-    // screen right now (numbers frozen at export time — this page's
-    // own live data fetch needs the viewer's auth token, which a
-    // downloaded file obviously can't carry, so re-querying isn't an
-    // option for a real export the way the design-preview mockup could
-    // fake it). Still genuinely interactive within itself: the same
-    // expand/collapse behavior works in the downloaded copy, it just
-    // won't re-fetch a different date range. ----
+    // ---- Export: a self-contained, fully interactive snapshot — NOT
+    // of whatever's on screen right now, but of every module/country/
+    // brand this account is permitted to see, for the currently
+    // selected time range (see the 2026-09-27 conversation this was
+    // revised in: exporting "whatever the on-screen filters happen to
+    // show" was the bug — an account scoped to PKR only should export
+    // PKR only, an All-Countries account should export everything, and
+    // that scoping already comes from the server for free, since
+    // allRows is now always fetched with country=ALL and canSeeCountry
+    // does the narrowing — see fetchAndRender above). The exported copy
+    // embeds allRows itself, not a fixed picture of one view of it, so
+    // Issue Type / Country still work as real, live filters inside the
+    // downloaded file — clicking a summary card still reveals its
+    // ranking, exactly like this page. Only the Time Range control is
+    // gone (a downloaded file has no server to ask for a different
+    // range); the range it covers is shown as plain text instead.
+    //
+    // The functions below are inlined via ordinary .toString() rather
+    // than hand-copied into a template string — this file has already
+    // been bitten twice by two copies of the same logic drifting apart
+    // (the KV8 promotion name, and MODULE_META vs schemas.js): this way
+    // there is only one copy, ever, and the export can never fall
+    // behind what this page actually does.
     document.getElementById("exportBtn").addEventListener("click", () => {
       const btn = document.getElementById("exportBtn");
-      const container = document.getElementById("reportContainer");
+      const exportedRangeLabel = rangeLabel();
       const { from, to } = currentFromTo();
-      // Freeze to the dark-theme variable values regardless of which
-      // theme the exporting viewer currently has toggled — an exported
-      // snapshot with no toggle of its own should always render
-      // legibly, and dark is this app's default.
+
       const rootVars = `
         :root {
           --ink:#eef1fb; --ink-soft:#9aa3c4; --border:#262c50; --field-bg:#1a2040; --card-bg:#141a33;
@@ -591,59 +614,111 @@ html[data-theme="light"] {
           --font-display: "Space Grotesk", sans-serif;
         }`;
       const reportStyles = document.getElementById("reportStyles")?.textContent || "";
-      // Guarding against the classic gotcha: writing the literal closing
-      // script-tag sequence anywhere inside THIS page's own script
-      // block — even inside a comment or a JS string/template literal —
-      // makes the HTML PARSER (which tokenizes before the JS engine
-      // ever runs) end the enclosing script element right there,
-      // dumping everything after it as plain visible page text (this
-      // hit exactly that, in production, before this fix — see the
-      // 2026-09-27 conversation). Building the tags via concatenation
-      // keeps that exact substring out of the raw file altogether.
-      const scriptOpenTag = "<" + "script>";
+      const controlsStyles = `
+        .exp-controls { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 18px; margin-bottom:16px; }
+        .exp-controls .rc-group { display:flex; flex-direction:column; gap:6px; }
+        .exp-controls label { font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); font-weight:700; }
+        .exp-controls select { background:var(--field-bg); border:1.5px solid var(--border); color:var(--ink); border-radius:10px; padding:8px 12px; font-size:13px; min-width:190px; font-family:inherit; }
+      `;
+      // See this handler's own header comment on why these are inlined
+      // via .toString() instead of copy-pasted.
+      const reusedFuncsSrc = [
+        escapeHtml, brandColor, brandName, dimLabel, sumRows, rowsFor,
+        computeModuleRows, topCardDimension, moduleTotalsForDim,
+        buildSummaryCard, buildModuleCard, buildRankList, applyCountryLock,
+      ].map((fn) => fn.toString()).join("\n\n");
+
+      const embedded = {
+        rows: allRows,
+        modules: REPORT_MODULE_LIST.map((m) => ({ id: m.id, name: m.name, icon: m.icon, accent: m.accent, countries: m.countries })),
+        brands: (window.BRANDS || []).map((b) => ({ id: b.id, name: b.name, country: b.country })),
+        countries: window.COUNTRY_CODES || [],
+        countryColors: COUNTRY_COLORS,
+        brandPalette: BRAND_PALETTE,
+        rangeLabel: exportedRangeLabel,
+      };
+
+      const scriptOpenTag = "<" + "script>"; // see this file's own note further up on why these can't be written literally
       const scriptCloseTag = "<" + "/script>";
       const snapshotHtml = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Report export — ${escapeHtml(from)} to ${escapeHtml(to)}</title>
 <style>
   ${rootVars}
-  body { font-family: -apple-system, "Segoe UI", sans-serif; background:#090c1c; color:var(--ink); margin:0; padding:28px; }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background:#090c1c; color:var(--ink); margin:0; padding:28px; max-width:1400px; }
   h1 { font-size:18px; margin:0 0 6px; } .meta { color:var(--ink-soft); font-size:12.5px; margin-bottom:20px; }
+  ${controlsStyles}
   ${reportStyles}
 </style></head><body>
 <h1>📈 Report export</h1>
-<div class="meta">Range: ${escapeHtml(from)} → ${escapeHtml(to)} · Issue Type: ${escapeHtml(moduleSelect.selectedOptions[0]?.textContent || "All")} · Country: ${escapeHtml(state.country)} · Exported ${escapeHtml(new Date().toLocaleString())}</div>
-<div class="report-state" style="display:none;"></div>
-${container.innerHTML}
+<div class="meta">${escapeHtml(exportedRangeLabel)} · Exported ${escapeHtml(new Date().toLocaleString())} · scoped to whatever countries/modules this account can see</div>
+<div class="exp-controls">
+  <div class="rc-group"><label>Issue Type</label><select id="moduleSelect"></select></div>
+  <div class="rc-group"><label>Country</label><select id="countrySelect"></select></div>
+</div>
+<div id="reportContainer"></div>
 ${scriptOpenTag}
-  // Chevron expand/collapse doesn't survive innerHTML serialization
-  // (event listeners aren't part of the HTML) — re-wire it generically
-  // here so the exported copy is still genuinely interactive, not just
-  // a frozen picture of the numbers.
-  document.querySelectorAll(".rrow-main.clickable").forEach(function (main) {
-    var bd = main.parentElement.querySelector(".rbreakdown");
-    if (!bd) return;
-    main.addEventListener("click", function () {
-      main.classList.toggle("expanded");
-      bd.classList.toggle("open");
-    });
-  });
-  document.querySelectorAll(".summary-card").forEach(function (card) {
-    card.style.cursor = "default"; // selecting a brand card to filter the ranking isn't reproducible from a frozen snapshot
-  });
+  const EMBEDDED = ${JSON.stringify(embedded)};
+  let allRows = EMBEDDED.rows;
+  const REPORT_MODULE_LIST = EMBEDDED.modules;
+  const MODULE_BY_ID = {};
+  REPORT_MODULE_LIST.forEach(function (m) { MODULE_BY_ID[m.id] = m; });
+  window.BRANDS = EMBEDDED.brands;
+  window.COUNTRY_CODES = EMBEDDED.countries;
+  const COUNTRY_COLORS = EMBEDDED.countryColors;
+  const BRAND_PALETTE = EMBEDDED.brandPalette;
+  const state = { moduleId: "ALL_MODULES", country: "ALL", selectedDim: null };
+  function rangeLabel() { return EMBEDDED.rangeLabel; }
+
+  ${reusedFuncsSrc}
+
+  const moduleSelect = document.getElementById("moduleSelect");
+  moduleSelect.innerHTML = "<option value=\\"ALL_MODULES\\">🗂️ All</option>" +
+    REPORT_MODULE_LIST.map(function (m) {
+      const phpOnly = Array.isArray(m.countries) && m.countries.length === 1 && m.countries[0] === "PHP";
+      return "<option value=\\"" + m.id + "\\">" + m.icon + " " + m.name + (phpOnly ? " (PHP only)" : "") + "</option>";
+    }).join("");
+  const countrySelect = document.getElementById("countrySelect");
+  countrySelect.innerHTML = "<option value=\\"ALL\\">All</option>" +
+    EMBEDDED.countries.map(function (c) { return "<option value=\\"" + c + "\\">" + c + "</option>"; }).join("");
+
+  function render() {
+    const container = document.getElementById("reportContainer");
+    container.innerHTML = "";
+    if (state.moduleId === "ALL_MODULES") {
+      const cardEntries = topCardDimension(state.country);
+      const grand = cardEntries.reduce(function (a, b) { return a + b.total; }, 0);
+      const grid = document.createElement("div");
+      grid.className = "summary-grid";
+      cardEntries.forEach(function (entry) { grid.appendChild(buildSummaryCard(entry, grand)); });
+      container.appendChild(grid);
+      if (state.selectedDim) {
+        const isCountryCard = state.country === "ALL";
+        const ranked = moduleTotalsForDim(state.selectedDim, isCountryCard, state.country);
+        const title = isCountryCard ? state.selectedDim : brandName(state.selectedDim);
+        container.appendChild(buildRankList(ranked, title));
+      }
+    } else {
+      container.appendChild(buildModuleCard(state.moduleId, state.country));
+    }
+  }
+  moduleSelect.addEventListener("change", function (e) { state.moduleId = e.target.value; state.selectedDim = null; applyCountryLock(); render(); });
+  countrySelect.addEventListener("change", function (e) { state.country = e.target.value; state.selectedDim = null; render(); });
+  applyCountryLock();
+  render();
 ${scriptCloseTag}
 </body></html>`;
       const blob = new Blob([snapshotHtml], { type: "text/html" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const label = state.moduleId === "ALL_MODULES" ? "all-issue-types" : state.moduleId;
-      a.download = `report-${label}-${state.country}-${from}_to_${to}.html`;
+      a.download = `report-all-permitted-data-${from}_to_${to}.html`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
       if (window.showToast) window.showToast(`Exported: ${a.download}`);
     });
+
 
     // ---- initial load: default range is Today ----
     applyCountryLock();
