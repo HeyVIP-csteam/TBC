@@ -38,6 +38,8 @@ html[data-theme="light"] {
 <script src="/assets/announcement-banner.js?v=26c15118" defer></script>
 <style id="reportStyles">
 
+  .report-shell { max-width: 1500px; width: 100%; margin: 0 auto; padding: 0 24px 80px; }
+
   .report-title-card {
     display: flex; align-items: flex-start; justify-content: space-between;
     gap: 16px; background: var(--card-bg); border: 1px solid var(--border);
@@ -162,6 +164,7 @@ html[data-theme="light"] {
   <div class="subpage-shell">
     <aside class="sidebar" id="hubNavMount"></aside>
     <div class="subpage-content-col">
+      <nav class="brand-row" id="pageBrandRow"><div class="brand-row-track"></div></nav>
     <div class="subpage-right-col">
       <div id="announcementBanner"></div>
       <main class="subpage-main">
@@ -219,11 +222,13 @@ html[data-theme="light"] {
 
   <script src="/assets/schemas.js?v=0d6207ba"></script>
   <script src="/assets/hub-nav.js?v=5cd0d791"></script>
+  <script src="/assets/brand-row.js?v=ea371f55"></script>
   <script>
     window.initThemeToggle();
     window.initClock();
     window.AgentAuth.renderWhoami("agentWhoami");
     window.HubNav.mount("hubNavMount", { activeModule: "report" });
+    window.BrandRow.mount("pageBrandRow");
 
     // ---- module registry (sourced from schemas.js — no duplicate list
     // to keep in sync) — Daily Report is deliberately excluded, same
