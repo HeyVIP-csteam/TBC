@@ -539,6 +539,45 @@
     });
   }
 
+  // 2026-10-06 — shrink screenshots in the BROWSER before upload.
+  // Every attachment goes up base64-encoded inside ONE JSON body (up to
+  // 3 files x 20MB each => easily 60-80MB of JSON), and the server then
+  // decodes + re-compresses each image inside the Worker. Big pasted
+  // PNG screenshots (the usual "image.png" case) can blow past
+  // Cloudflare's request-size / Worker CPU limits, and when that
+  // happens Cloudflare answers with its own HTML error page BEFORE
+  // submit.js ever runs — which is where the agent's
+  // "Unexpected token '<', \"<!DOCTYPE\"... is not valid JSON" came
+  // from. Downscaling to a sane max side + JPEG keeps a typical screenshot
+  // at a few hundred KB, with no visible loss for this use case (they're
+  // evidence screenshots read on a phone/desktop, not print assets).
+  // PDFs and anything that isn't a decodable image are sent untouched.
+  const IMG_MAX_SIDE = 2000;      // px, longest side
+  const IMG_SKIP_BELOW = 400 * 1024; // already small enough — don't re-encode
+  async function prepareFileForUpload(file) {
+    const isRaster = /^image\/(png|jpe?g|webp)$/i.test(file.type || "");
+    if (!isRaster || file.size <= IMG_SKIP_BELOW) return file;
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, IMG_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff"; // JPEG has no alpha — avoid black backgrounds from transparent PNGs
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      if (bitmap.close) bitmap.close();
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+      if (!blob || blob.size >= file.size) return file; // never make it bigger
+      const newName = (file.name || "image").replace(/\.[^.]+$/, "") + ".jpg";
+      return new File([blob], newName, { type: "image/jpeg" });
+    } catch {
+      return file; // undecodable / old browser — fall back to original bytes
+    }
+  }
+
   // ---- Submit ----
   const form = document.getElementById("issueForm");
   const btn = document.getElementById("submitBtn");
@@ -584,7 +623,10 @@
         .map((f) => ({ key: f.key, label: f.label, value: formData.get(f.key) || "" }));
 
       const attachments = await Promise.all(
-        files.map(async (f) => ({ name: f.name, type: f.type, dataUrl: await fileToDataUrl(f) }))
+        files.map(async (orig) => {
+          const f = await prepareFileForUpload(orig);
+          return { name: f.name, type: f.type, dataUrl: await fileToDataUrl(f) };
+        })
       );
 
       const payload = {
@@ -610,7 +652,19 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      // Read as text first: if Cloudflare (not our function) rejected the
+      // request — too large, timed out, Worker limit — the body is an HTML
+      // page and res.json() would throw the cryptic "Unexpected token '<'"
+      // error. Turn that into something an agent can act on.
+      const rawBody = await res.text();
+      let data;
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        if (res.status === 413) throw new Error("Upload too large — please attach fewer or smaller screenshots and try again.");
+        if (res.status === 524 || res.status === 504 || res.status === 522) throw new Error("The server took too long to respond. Please wait a moment and check TG Reply Threads before resubmitting, to avoid a duplicate ticket.");
+        throw new Error(`Server returned an unexpected response (HTTP ${res.status}). Try again with smaller/fewer screenshots; if it keeps happening, tell the admin.`);
+      }
       if (!res.ok || !data.ok) throw new Error(data.error || "Submission failed");
 
       // Attachment send to Telegram can silently degrade to a text-only
