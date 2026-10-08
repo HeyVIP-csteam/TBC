@@ -663,7 +663,13 @@
       } catch {
         if (res.status === 413) throw new Error("Upload too large — please attach fewer or smaller screenshots and try again.");
         if (res.status === 524 || res.status === 504 || res.status === 522) throw new Error("The server took too long to respond. Please wait a moment and check TG Reply Threads before resubmitting, to avoid a duplicate ticket.");
-        throw new Error(`Server returned an unexpected response (HTTP ${res.status}). Try again with smaller/fewer screenshots; if it keeps happening, tell the admin.`);
+        // Diagnostic detail for the admin — which layer answered (our
+        // function never returns HTML, so this identifies a proxy/WAF/
+        // Cloudflare page), plus its <title> if it has one.
+        const title = (rawBody.match(/<title[^>]*>([^<]{0,80})/i) || [])[1] || "";
+        const via = res.headers.get("cf-ray") ? "Cloudflare" : (res.headers.get("server") || "unknown");
+        console.error("[submit] non-JSON response", { status: res.status, via, contentType: res.headers.get("content-type"), title, bodyStart: rawBody.slice(0, 200) });
+        throw new Error(`Server returned an unexpected response (HTTP ${res.status}, via ${via}${title ? `: "${title.trim()}"` : ""}). Try again with smaller/fewer screenshots; if it keeps happening, send this message to the admin.`);
       }
       if (!res.ok || !data.ok) throw new Error(data.error || "Submission failed");
 
