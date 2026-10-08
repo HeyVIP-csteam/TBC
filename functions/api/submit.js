@@ -451,6 +451,24 @@ async function sendTelegramWithAttachments({ botToken, route, text, attachments 
     return { messageId: r.messageId, messageIds: [r.messageId], attachmentLinks: [], attachmentFileIds: [] };
   }
 
+  // Telegram caps photo/document captions at 1024 visible characters
+  // (a plain message allows 4096). Long tickets (e.g. Daily Report) used
+  // to be rejected with "message caption is too long", dropping every
+  // screenshot. For those, send the full text as its own message FIRST
+  // (it becomes the ticket's root message, same as a text-only ticket),
+  // then the screenshots with no caption.
+  if (visibleLength(text) > 1024) {
+    const textRes = await sendTelegramMessage({ botToken, route, text });
+    if (!textRes.ok) throw new Error(textRes.error);
+    const media = await sendAttachmentsNoCaption({ botToken, route, attachments });
+    return {
+      messageId: textRes.messageId,
+      messageIds: [textRes.messageId, ...media.map((m) => m.messageId)],
+      attachmentLinks: media.map((m) => buildMessageLink(route, m.messageId)),
+      attachmentFileIds: media.map((m) => m.fileId).filter(Boolean),
+    };
+  }
+
   if (attachments.length === 1) {
     const { messageId, fileId } = await sendSingleWithCaption({ botToken, route, text, attachment: attachments[0] });
     return { messageId, messageIds: [messageId], attachmentLinks: [buildMessageLink(route, messageId)], attachmentFileIds: fileId ? [fileId] : [] };
@@ -486,6 +504,27 @@ async function sendTelegramWithAttachments({ botToken, route, text, attachments 
     attachmentLinks: sent.map((s) => buildMessageLink(route, s.messageId)),
     attachmentFileIds: sent.map((s) => s.fileId).filter(Boolean),
   };
+}
+
+// Length Telegram counts for a caption: the text AFTER HTML tags are
+// parsed away and entities (&amp; etc.) decoded.
+function visibleLength(html) {
+  return String(html || "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&(amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi, "x").length;
+}
+
+// Send attachments with no caption: all-images -> one album, otherwise
+// one message each. Returns [{messageId, fileId}].
+async function sendAttachmentsNoCaption({ botToken, route, attachments }) {
+  if (attachments.length > 1 && attachments.every((a) => looksLikeImage(a.type, a.name))) {
+    return sendMediaGroup({ botToken, route, text: undefined, attachments });
+  }
+  const out = [];
+  for (const att of attachments) {
+    out.push(await sendSingleWithCaption({ botToken, route, text: undefined, attachment: att }));
+  }
+  return out;
 }
 
 async function sendSingleWithCaption({ botToken, route, text, attachment, forceDocument = false }) {
@@ -553,7 +592,7 @@ async function sendMediaGroup({ botToken, route, text, attachments }) {
 
   const media = attachments.map((att, i) => {
     const entry = { type: "photo", media: `attach://file${i}` };
-    if (i === 0) {
+    if (i === 0 && text) {
       entry.caption = text;
       entry.parse_mode = "HTML";
     }
