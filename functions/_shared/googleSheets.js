@@ -61,12 +61,28 @@ async function fetchWithRetry(url, options) {
 // Reused across requests within the same Worker isolate so we don't
 // re-mint an OAuth token on every single submission.
 let cachedToken = null; // { token, expiresAt }
+let tokenInFlight = null; // shared promise while a token fetch is running
+
+// 2026-10-10 — submit.js calls this before the Telegram send so a cold
+// isolate's Google token fetch (JWT sign + oauth2 round trip) overlaps the
+// Telegram upload instead of happening afterwards.
+export function prewarmSheetsAccessToken(env) {
+  return getAccessToken(env);
+}
 
 async function getAccessToken(env) {
   const now = Math.floor(Date.now() / 1000);
   if (cachedToken && cachedToken.expiresAt > now + 30) {
     return cachedToken.token;
   }
+  // Concurrent callers share one fetch instead of each signing a JWT.
+  if (!tokenInFlight) {
+    tokenInFlight = fetchAccessToken(env, now).finally(() => { tokenInFlight = null; });
+  }
+  return tokenInFlight;
+}
+
+async function fetchAccessToken(env, now) {
 
   const clientEmail = env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const privateKeyPem = env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;

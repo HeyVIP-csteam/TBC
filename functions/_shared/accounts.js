@@ -598,6 +598,25 @@ function lockKey(username) {
 // doesn't exist yet — covers every account that predates this change
 // and has never been locked/unlocked since, so a never-locked account
 // doesn't spuriously need a migration step.
+/**
+ * 2026-10-10 — getAccount() + the account's office, in one D1 round trip
+ * (see accountsStore.getAuthBundle). Returns { account, office } where
+ * account has lock state merged exactly like getAccount(), and office is
+ * the parsed office record, or `undefined` when it wasn't fetched here —
+ * pass it straight to officeIpCheckPasses(), which then loads it itself.
+ */
+export async function getAccountWithOffice(env, username) {
+  const bundle = await accountsStore(env).getAuthBundle(String(username).toLowerCase());
+  if (!bundle.account) return { account: null, office: undefined };
+  const account = mergeLockRaw(JSON.parse(bundle.account), bundle.lock);
+  let office;
+  if (bundle.office !== undefined && account.officeId) {
+    const parsed = JSON.parse(bundle.office);
+    if (parsed && parsed.id === account.officeId) office = parsed;
+  }
+  return { account, office };
+}
+
 // Same merge as mergeLockState() below, from an already-fetched raw value.
 function mergeLockRaw(account, lockRaw) {
   if (!account || !lockRaw) return account;
@@ -891,14 +910,8 @@ export async function verifyRequest(request, env) {
   // 2026-10-10 — account + lock + office in ONE D1 round trip (was 3-4
   // sequential reads, plus a guaranteed KV miss on `lock:` for every
   // never-locked account). Same data, same checks, same order as before.
-  const bundle = await accountsStore(env).getAuthBundle(String(payload.u).toLowerCase());
-  if (!bundle.account) return null;
-  const account = mergeLockRaw(JSON.parse(bundle.account), bundle.lock);
-  let office; // undefined = let officeIpCheckPasses() fetch it itself
-  if (bundle.office !== undefined && account.officeId) {
-    const parsed = JSON.parse(bundle.office);
-    if (parsed && parsed.id === account.officeId) office = parsed;
-  }
+  const { account, office } = await getAccountWithOffice(env, payload.u);
+  if (!account) return null;
 
   // Checked BEFORE anything else — a locked account should be rejected
   // on every single request, and a browser holding a still-unexpired

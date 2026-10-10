@@ -20,7 +20,16 @@
  * and don't work here). Must be declared in package.json so Cloudflare
  * Pages' build step runs `npm install` and bundles it.
  */
-import { PhotonImage, resize, SamplingFilter } from "@cf-wasm/photon/workerd";
+// 2026-10-10 — loaded lazily (dynamic import) instead of at module top
+// level. Pages bundles every function into ONE Worker, so a static import
+// made every cold start of EVERY endpoint (login, thread list, …)
+// instantiate this 1.5 MB WebAssembly module, even though it's only ever
+// needed for the rare photo over ~9.3 MB.
+let photonPromise = null;
+function loadPhoton() {
+  if (!photonPromise) photonPromise = import("@cf-wasm/photon/workerd");
+  return photonPromise;
+}
 
 // Telegram's real limit is 10MB for sendPhoto / each item in
 // sendMediaGroup. Target a bit under that so re-encoding overhead,
@@ -61,6 +70,7 @@ export async function compressImageForTelegram(bytes, { type, name } = {}) {
   let inputImage = null;
   let workingImage = null;
   try {
+    const { PhotonImage, resize, SamplingFilter } = await loadPhoton();
     inputImage = PhotonImage.new_from_byteslice(bytes);
     let width = inputImage.get_width();
     let height = inputImage.get_height();

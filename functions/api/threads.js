@@ -58,7 +58,11 @@ export async function onRequestGet(context) {
 }
 
 async function handleGet({ request, env }, waitUntil) {
+  // 2026-10-10 — Server-Timing (visible in DevTools → Network → Timing):
+  // how long the login check vs the list query took on the server.
+  const tStart = Date.now();
   const account = await verifyRequest(request, env);
+  const tAuth = Date.now();
   if (!account) return json({ ok: false, error: "Login required." }, 401);
 
   const url = new URL(request.url);
@@ -164,14 +168,27 @@ async function handleGet({ request, env }, waitUntil) {
   // untouched, only the ordering changes.
   all.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
+  // 2026-10-10 — `?fields=counts`: the Home page's TG Reply Threads card
+  // only needs [id, replyCount] per thread to compute its unread badge and
+  // unsolved count. It used to download every full summary (all countries,
+  // 180 days of solved) every 15s from every open tab.
+  if (url.searchParams.get("fields") === "counts") {
+    const slim = (t) => [t.id, t.replyCount || 0];
+    return json({
+      ok: true,
+      active: all.filter((t) => !t.solved).map(slim),
+      solved: all.filter((t) => t.solved).map(slim),
+    }, 200, { "Server-Timing": `auth;dur=${tAuth - tStart}, list;dur=${Date.now() - tAuth}` });
+  }
+
   return json({
     ok: true,
     active: all.filter((t) => !t.solved),
     solved: all.filter((t) => t.solved),
     notConfigured: anyNotConfigured,
-  });
+  }, 200, { "Server-Timing": `auth;dur=${tAuth - tStart}, list;dur=${Date.now() - tAuth}` });
 }
 
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+function json(obj, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extraHeaders } });
 }

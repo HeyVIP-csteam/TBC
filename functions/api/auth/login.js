@@ -108,7 +108,7 @@
  * the per-country TELEGRAM_BOT_TOKEN_<CODE> secrets ARE live-editable
  * there per-country, same as every other country Telegram feature.
  */
-import { getAccount, verifyPassword, officeIpCheckPasses, getOffice, requestIP, setAccountLocked, issueToken } from "../../_shared/accounts.js";
+import { getAccountWithOffice, verifyPassword, officeIpCheckPasses, getOffice, requestIP, setAccountLocked, issueToken } from "../../_shared/accounts.js";
 import { sendTelegramMessage } from "../../_shared/telegram.js";
 import { getSecurityAlertsRoute } from "../../_shared/routes.js";
 import { isIpBlocked, recordPendingIpRequest } from "../../_shared/ipAccess.js";
@@ -238,7 +238,12 @@ async function handleLogin({ request, env, waitUntil }) {
 
   const badCreds = () => json({ ok: false, error: "Wrong username or password." }, 401);
 
-  const account = await getAccount(env, username);
+  // 2026-10-10 — account (+lock +office, one D1 query) and the IP block
+  // list are fetched in parallel instead of one after another.
+  const [{ account, office: preloadedOffice }, ipBlocked] = await Promise.all([
+    getAccountWithOffice(env, username),
+    isIpBlocked(env, requestIP(request) || ""),
+  ]);
   if (!account) {
     const ip = requestIP(request) || "unknown";
     if (waitUntil) waitUntil(logActivity(env, { category: "Auth", action: "Login Failed", agent: username, ip, detail: "Unrecognized username" }));
@@ -264,7 +269,7 @@ async function handleLogin({ request, env, waitUntil }) {
   // business owner out of their own site with no override.
   if (account.role !== "owner") {
     const requestIp = requestIP(request) || "";
-    if (await isIpBlocked(env, requestIp)) {
+    if (ipBlocked) {
       return json({ ok: false, error: `Access from this IP address (${requestIp}) has been blocked. Contact a SuperAdmin if you believe this is a mistake.` }, 403);
     }
   }
@@ -300,7 +305,7 @@ async function handleLogin({ request, env, waitUntil }) {
     return json({ ok: false, error: `Your account has no office assigned, so it can't log in from anywhere. Ask an admin to assign you an office (your current IP: ${ip}).` }, 401);
   }
 
-  if (!(await officeIpCheckPasses(env, account, request))) {
+  if (!(await officeIpCheckPasses(env, account, request, preloadedOffice))) {
     const ip = requestIP(request) || "unknown";
     // Fire-and-forget via waitUntil — never adds latency to the actual
     // rejection response, and a Telegram hiccup here can't turn into a
@@ -314,7 +319,7 @@ async function handleLogin({ request, env, waitUntil }) {
       waitUntil(logActivity(env, { category: "Auth", action: "Account Auto-Locked", agent: account.username, ip, detail: `${count} failed login attempts within the last hour` }));
     }
 
-    const office = await getOffice(env, account.officeId);
+    const office = preloadedOffice !== undefined ? preloadedOffice : await getOffice(env, account.officeId);
     const officeName = office?.name || "your office";
 
     // Parks this exact (office, IP) pair on the IP Access dashboard's
@@ -330,7 +335,10 @@ async function handleLogin({ request, env, waitUntil }) {
   // Fully successful login (right password AND office/IP check passed) —
   // whatever failed-attempt history existed before this is over; don't
   // let it carry forward toward a future lockout.
-  await clearLoginFailures(env, account.username);
+  // Background (waitUntil) — resetting the failure counter doesn't need to
+  // hold up the agent's login response.
+  if (waitUntil) waitUntil(clearLoginFailures(env, account.username));
+  else await clearLoginFailures(env, account.username);
 
   const successIp = requestIP(request) || "unknown";
   if (waitUntil) waitUntil(logActivity(env, { category: "Auth", action: "Login", agent: account.username, ip: successIp, detail: "Login succeeded" }));

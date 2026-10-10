@@ -125,6 +125,21 @@ export function ensureThreadListSchema(store) {
   return p;
 }
 
+/**
+ * Forget the per-isolate "tables exist / backfill done" memo for a country
+ * — called when a statement fails because thread_list is missing (e.g. the
+ * table was dropped or the database re-created), so the next attempt
+ * re-creates it instead of failing forever. Returns true if `err` was such
+ * an error (callers then simply retry).
+ */
+export function recoverFromMissingListTable(store, err) {
+  const msg = String((err && err.message) || err || "");
+  if (!/no such table: thread_list/i.test(msg)) return false;
+  schemaPromise.delete(store.country);
+  readyMemo.delete(store.country);
+  return true;
+}
+
 /** Statement that (re)computes one thread's list row from its `threads` row. */
 export function upsertListRowStmt(db, id) {
   return db.prepare(UPSERT_ONE_SQL).bind(id);

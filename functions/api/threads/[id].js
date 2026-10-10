@@ -93,7 +93,9 @@ import { logActivity } from "../../_shared/activityLog.js";
 // because whichever field got edited/interacted-with FIRST on a given
 // ticket "worked", and everything after that appeared broken.
 export async function onRequestGet({ request, env, params }) {
+  const tStart = Date.now(); // Server-Timing, see functions/api/threads.js
   const account = await verifyRequest(request, env);
+  const tAuth = Date.now();
   if (!account) return json({ ok: false, error: "Login required." }, 401);
   const url = new URL(request.url);
   const country = (url.searchParams.get("country") || "").toUpperCase();
@@ -124,7 +126,7 @@ export async function onRequestGet({ request, env, params }) {
   // perfectly valid and would resolve fine via the country-scoped
   // fallback. Try both independently; either one succeeding is enough.
   if (thread && (!thread.deleted || includeDeleted) && (canSeeBrand(account, thread.brandId, country) || canSeeBrand(account, thread.brand, country))) {
-    return json({ ok: true, thread: { ...thread, country } });
+    return json({ ok: true, thread: { ...thread, country } }, 200, { "Server-Timing": `auth;dur=${tAuth - tStart}, thread;dur=${Date.now() - tAuth}` });
   }
   // thread === null means genuinely no record anywhere (not just a
   // brand-visibility filter or a soft-delete, both of which legitimately
@@ -780,9 +782,9 @@ function telegramDeleteError(tg) {
   return desc || "Recall failed.";
 }
 
-function json(obj, status = 200) {
+function json(obj, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extraHeaders },
   });
 }

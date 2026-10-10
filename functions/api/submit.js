@@ -1,7 +1,7 @@
 import { BRANDS, RECORD_TO_SHEET, MODULE_META, SHEET_LAYOUT, MESSAGE_TEMPLATE, SCREENSHOT_R2_ENABLED, PROMOTION_SHEET_CONFIG, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken, DEPOSIT_CHANNEL_PSEUDO_MODULES, depositChannelModuleId } from "../_shared/routing.js";
-import { appendRowToSheet, appendRowByColumns, writeRowForDate } from "../_shared/googleSheets.js";
+import { appendRowToSheet, appendRowByColumns, writeRowForDate, prewarmSheetsAccessToken } from "../_shared/googleSheets.js";
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
-import { createThread } from "../_shared/threads.js";
+import { createThread, setThreadSheetRef } from "../_shared/threads.js";
 import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry } from "../_shared/accounts.js";
 import { getRouteOverride } from "../_shared/routes.js";
 import { getIssueSheetOverride, resolveWriteTab, promotionModuleId } from "../_shared/issueSubmissionSheets.js";
@@ -126,37 +126,14 @@ async function handleSubmit({ request, env, waitUntil }) {
   const store = resolveThreadsStore(env, brand.country);
   const { kv } = store;
 
-  if (idempotencyKey && kv) {
-    const dedupeKey = `submit_dedupe:${idempotencyKey}`;
-    const already = await kv.get(dedupeKey);
-    if (already) {
-      return new Response(already, { status: 200, headers: { "Content-Type": "application/json" } });
-    }
-    // Placeholder written immediately so a near-simultaneous duplicate
-    // sees SOMETHING rather than racing straight through too — overwritten
-    // with the real response (see the `return` at the very end of this
-    // function) once the actual Telegram/Sheet/thread work is done.
-    await kv.put(dedupeKey, JSON.stringify({ ok: true, duplicate: true, note: "Original submission was still processing — this is not a second ticket." }), { expirationTtl: 60 });
-  }
-
-  // 三国合并（2026-08-20）—— 按品牌所属国家选对应的 Bot Token，
-  // 不再是单一的 env.TELEGRAM_BOT_TOKEN。
-  let botToken;
-  try {
-    botToken = await resolveBotToken(env, brand.country);
-  } catch (e) {
-    return json({ ok: false, error: e.message }, 500);
-  }
-
   const meta = MODULE_META[moduleId];
   const fieldMap = Object.fromEntries(fields.map((f) => [f.key, f.value]));
   // MERGED (2026-08-20) — Deposit Request routes by CHANNEL, not by
   // module — each channel can point at a completely different Telegram
   // group (not just a different topic in the same group), via the
   // deposit_<channel> pseudo-module ids in routing.js (see MODULE_META's
-  // comment there for the full reasoning — ported from PHP's original
-  // submit.js, which had this and got left behind during the merge).
-  // Every other module routes by moduleId itself, same as always.
+  // comment there for the full reasoning). Every other module routes by
+  // moduleId itself, same as always.
   let routeModuleId = moduleId;
   if (moduleId === "deposit_request") {
     routeModuleId = depositChannelModuleId(fieldMap.channel);
@@ -164,37 +141,63 @@ async function handleSubmit({ request, env, waitUntil }) {
       return json({ ok: false, error: `Unknown deposit channel "${fieldMap.channel || ""}".` }, 400);
     }
   }
-  // Live-editable routing (TG Group / Channel admin page) takes priority
-  // over the hardcoded default — see _shared/routes.js. An empty/unset KV
-  // means every brand+module just falls back to brand.telegram as before,
-  // so this can't break anything that already works.
-  const routeOverride = await getRouteOverride(env, brandId, routeModuleId);
+
+  // 2026-10-10 — these four lookups used to run one after another; none
+  // depends on another, so they now run in parallel:
+  //   - duplicate-submission check (idempotency key)
+  //   - this country's bot token (三国合并：按品牌所属国家选 Bot Token)
+  //   - live TG Group/Channel routing override (see _shared/routes.js)
+  //   - live Issue Submission Sheet override (used after Telegram)
+  const dedupeKey = idempotencyKey && kv ? `submit_dedupe:${idempotencyKey}` : null;
+  const sheetOverrideModuleId = moduleId === "promotion_request" ? promotionModuleId(fieldMap.promotion) : moduleId;
+  const [already, botTokenResult, routeOverride, issueSheetOverrideResult] = await Promise.all([
+    dedupeKey ? kv.get(dedupeKey) : null,
+    resolveBotToken(env, brand.country).then((value) => ({ value }), (error) => ({ error })),
+    getRouteOverride(env, brandId, routeModuleId),
+    RECORD_TO_SHEET[moduleId]
+      ? getIssueSheetOverride(env, brandId, sheetOverrideModuleId).then((value) => ({ value }), (error) => ({ error }))
+      : { value: null },
+  ]);
+  if (already) {
+    return new Response(already, { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  if (botTokenResult.error) {
+    return json({ ok: false, error: botTokenResult.error.message }, 500);
+  }
+  const botToken = botTokenResult.value;
+  // Placeholder written before anything is sent, so a near-simultaneous
+  // duplicate sees SOMETHING rather than racing straight through too —
+  // overwritten with the real response at the very end of this function.
+  // Awaited just before the Telegram send (it overlaps the R2 uploads).
+  const dedupePlaceholder = dedupeKey
+    ? kv.put(dedupeKey, JSON.stringify({ ok: true, duplicate: true, note: "Original submission was still processing — this is not a second ticket." }), { expirationTtl: 60 })
+    : null;
+
   const route = routeOverride || brand.telegram[routeModuleId] || brand.telegram.default;
   const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
 
   // 1. Upload attachments to R2 first (if configured) so the message text
-  //    can include a real, directly-openable screenshot link.
-  // FIXED (2026-09-03) — this used to check `env.SCREENSHOTS_BUCKET`, a
-  // binding that stopped existing for ANY country the moment the merge
-  // split R2 into one bucket per country (SCREENSHOTS_BUCKET_INR/PKR/PHP —
-  // see wrangler.toml and _shared/countries.js's resolveScreenshotsBucket).
-  // The guard below was therefore always false and this whole block was a
-  // silent no-op — no error surfaced anywhere, tickets just went out with
-  // no screenshot link, for every country. See _shared/r2.js's file header
-  // for the fuller story (same class of bug functions/api/brand-config.js
-  // already found and fixed for brand-config.json on 2026-08-25).
+  //    can include a real, directly-openable screenshot link. One bucket per
+  //    country (see _shared/countries.js resolveScreenshotsBucket /
+  //    CHANGES-2026-09-03-r2-bucket-per-country-fix.md).
+  // 2026-10-10 — uploads now run in parallel (were one at a time); link
+  // order still follows the attachment order.
   const screenshotsBucket = resolveScreenshotsBucket(env, brand.country);
   const r2Links = [];
   const r2Errors = [];
   if (screenshotsBucket && SCREENSHOT_R2_ENABLED[moduleId] && Array.isArray(attachments) && attachments.length) {
     const origin = new URL(request.url).origin;
-    for (const att of attachments) {
-      try {
-        const key = await uploadAttachmentToR2(env, { moduleId, brandId, attachment: att, bucket: screenshotsBucket });
-        r2Links.push(screenshotUrl(origin, key));
-      } catch (e) {
-        r2Errors.push(`${att.name}: ${e.message || e}`);
-      }
+    const uploads = await Promise.all(
+      attachments.map((att) =>
+        uploadAttachmentToR2(env, { moduleId, brandId, attachment: att, bucket: screenshotsBucket }).then(
+          (key) => ({ key }),
+          (e) => ({ error: `${att.name}: ${e.message || e}` })
+        )
+      )
+    );
+    for (const u of uploads) {
+      if (u.error) r2Errors.push(u.error);
+      else r2Links.push(screenshotUrl(origin, u.key));
     }
   }
   const screenshotLink = r2Links.join(", ");
@@ -214,6 +217,41 @@ async function handleSubmit({ request, env, waitUntil }) {
 
   // 2. Send to Telegram — photo(s)/document(s) with the info as the caption,
   //    so it shows as one message instead of text + separate photo.
+  // 2026-10-10 — work out the Google Sheet target BEFORE the Telegram
+  // send, and start the Sheets-side lookups (tab-name resolution + Google
+  // access token) now, so they overlap the Telegram upload instead of
+  // running after it. Same targets/fallbacks as before:
+  //   "Issue Submission Gsheet" admin override (per brand+module, or per
+  //   promotion type via promotionModuleId()) first, else the hardcoded
+  //   default. Only sheetId/tab are ever overridden — columns stay as coded.
+  const promoConfig = moduleId === "promotion_request" ? PROMOTION_SHEET_CONFIG[`${brandId}|${fieldMap.promotion}`] : null;
+  const layoutEntry = moduleId === "promotion_request" ? null : SHEET_LAYOUT[moduleId];
+  const issueSheetOverride = issueSheetOverrideResult.value || null;
+  const effectiveSheetId = issueSheetOverride?.sheetId || (moduleId === "promotion_request" ? promoConfig?.sheetId : brand.sheetId);
+  let sheetAttempted = moduleId === "promotion_request"
+    ? !!(RECORD_TO_SHEET[moduleId] && (issueSheetOverride || promoConfig))
+    : !!(RECORD_TO_SHEET[moduleId] && effectiveSheetId);
+  let sheetLogged = false;
+  let sheetError = null;
+  let sheetRef = null;
+  if (issueSheetOverrideResult.error) {
+    // Couldn't read the override — don't guess (it might point elsewhere);
+    // skip the Sheet write and say so. Used to throw a 500 AFTER the
+    // Telegram message had already gone out (agents then re-submitted).
+    sheetAttempted = !!RECORD_TO_SHEET[moduleId];
+    sheetError = `Couldn't read the Issue Submission Sheet settings: ${String(issueSheetOverrideResult.error.message || issueSheetOverrideResult.error)}`;
+  }
+  const settle = (p) => p.then((value) => ({ value }), (error) => ({ error }));
+  const tabPromise = sheetAttempted && !sheetError
+    ? settle(resolveWriteTab(env, effectiveSheetId,
+        moduleId === "promotion_request"
+          ? (issueSheetOverride?.tabNames || [promoConfig?.tab])
+          : (issueSheetOverride?.tabNames || [layoutEntry?.tab])))
+    : null;
+  if (sheetAttempted && !sheetError) prewarmSheetsAccessToken(env).catch(() => {});
+
+  if (dedupePlaceholder) await dedupePlaceholder;
+
   let tgResult;
   const attachmentErrors = [];
   try {
@@ -221,10 +259,8 @@ async function handleSubmit({ request, env, waitUntil }) {
   } catch (e) {
     // Fall back to a plain text message so the ticket isn't lost even if
     // the attachment send fails (e.g. caption too long, bad file, etc).
-    // Logged (not just swallowed into attachmentErrors) so a Cloudflare
-    // Pages log tail actually shows WHY a ticket fell back to text-only —
-    // this was a real gap during the "整组消失" investigation (no server
-    // logs meant reconstructing everything from R2 file sizes instead).
+    // Logged so a Cloudflare Pages log tail shows WHY a ticket fell back
+    // to text-only (a real gap during the "整组消失" investigation).
     console.error(`[submit.js] Attachment send failed, falling back to text-only message: ${String(e.message || e)}`);
     attachmentErrors.push(String(e.message || e));
     const fallback = await sendTelegramMessage({ botToken, route, text });
@@ -235,85 +271,52 @@ async function handleSubmit({ request, env, waitUntil }) {
   }
   const attachmentLinks = tgResult.attachmentLinks;
 
-  // 2b. Optionally log to the brand's Google Sheet — moved BEFORE
-  //     createThread() below (used to run after it) so that, when this
-  //     write lands on a real trackable row, that exact row gets captured
-  //     into `sheetRef` and stored on the thread record. That's what lets
-  //     the dashboard's "📊 Sync to Sheet" edit action (see
-  //     functions/api/threads/[id].js) overwrite THIS row later instead
-  //     of appending a duplicate one. Doesn't fail the whole request if
-  //     the sheet write fails — Telegram already has the ticket.
-  let sheetLogged = false;
-  let sheetError = null;
-  let sheetRef = null;
-  const promoConfig = moduleId === "promotion_request" ? PROMOTION_SHEET_CONFIG[`${brandId}|${fieldMap.promotion}`] : null;
-  // "Issue Submission Gsheet" admin panel (Integration Portal) override —
-  // per brand+module Sheet ID/tab(s), live from THREADS_KV, falling back
-  // to the hardcoded default exactly as before when nothing's been
-  // overridden. Promotion Request (2026-08) reuses this exact same
-  // override layer via a synthetic moduleId (promotionModuleId()) keyed
-  // on the specific promotion type, instead of just brandId+moduleId —
-  // see _shared/issueSubmissionSheets.js's "PROMOTION REQUEST ROWS" file
-  // header note for why.
-  const issueSheetOverride = RECORD_TO_SHEET[moduleId]
-    ? await getIssueSheetOverride(env, brandId, moduleId === "promotion_request" ? promotionModuleId(fieldMap.promotion) : moduleId)
-    : null;
-  const effectiveSheetId = issueSheetOverride?.sheetId || (moduleId === "promotion_request" ? promoConfig?.sheetId : brand.sheetId);
-  const sheetAttempted = moduleId === "promotion_request"
-    ? !!(RECORD_TO_SHEET[moduleId] && (issueSheetOverride || promoConfig))
-    : !!(RECORD_TO_SHEET[moduleId] && effectiveSheetId);
-  if (sheetAttempted) {
+  // 2b. Log to the brand's Google Sheet. When this lands on a real
+  //     trackable row, that row is captured into `sheetRef` and stored on
+  //     the thread record — that's what lets the dashboard's "📊 Sync to
+  //     Sheet" edit (functions/api/threads/[id].js) overwrite THIS row
+  //     later instead of appending a duplicate. Doesn't fail the request
+  //     if the Sheet write fails — Telegram already has the ticket.
+  async function writeSheet() {
+    if (!sheetAttempted || sheetError) return;
     try {
+      const tabResult = await tabPromise;
+      if (tabResult.error) throw tabResult.error;
+      const tab = tabResult.value;
       if (moduleId === "promotion_request") {
-        // Only sheetId/tab are ever overridden — startColumn/columns
-        // stay exactly as coded (see the non-promotion branch's own
-        // comment below for the same reasoning).
-        const tab = await resolveWriteTab(env, effectiveSheetId, issueSheetOverride?.tabNames || [promoConfig?.tab]);
         const values = resolveColumnValues(promoConfig.columns, { fieldMap, brand, reporter, screenshotLink, attachmentLinks });
         const { row } = await appendRowByColumns(env, effectiveSheetId, tab, promoConfig.startColumn, values);
         if (row) sheetRef = { sheetId: effectiveSheetId, tab, startColumn: promoConfig.startColumn, columns: promoConfig.columns, row };
+      } else if (layoutEntry && layoutEntry.pairByDate) {
+        const values = resolveColumnValues(layoutEntry.columns, { fieldMap, brand, reporter, screenshotLink, attachmentLinks });
+        const dateValue = formatDateDDMMYYYY(fieldMap.reportDate || fieldMap.date);
+        const shiftValue = fieldMap[layoutEntry.selectorField];
+        const activeSide = shiftValue === layoutEntry.rightBlock.shiftValue ? "right" : "left";
+        await writeRowForDate(env, effectiveSheetId, tab, {
+          leftBlock: layoutEntry.leftBlock,
+          rightBlock: layoutEntry.rightBlock,
+          activeSide,
+          dateValue,
+          values,
+        });
+        // writeRowForDate() re-finds the matching-date row by scanning, so
+        // Daily Report intentionally gets no sheetRef (its 📊 edit can
+        // still sync the Telegram message, just not this Sheet row).
       } else {
-        const layoutEntry = SHEET_LAYOUT[moduleId];
-        // Only the tab name is ever overridden — startColumn/columns/
-        // leftBlock/rightBlock stay exactly as coded, since a different
-        // spreadsheet is still expected to have the SAME column layout,
-        // just possibly a different tab name (or a whole different
-        // workbook) than the brand's usual one.
-        const effectiveTab = await resolveWriteTab(env, effectiveSheetId, issueSheetOverride?.tabNames || [layoutEntry?.tab]);
-        if (layoutEntry && layoutEntry.pairByDate) {
-          const values = resolveColumnValues(layoutEntry.columns, { fieldMap, brand, reporter, screenshotLink, attachmentLinks });
-          const dateValue = formatDateDDMMYYYY(fieldMap.reportDate || fieldMap.date);
-          const shiftValue = fieldMap[layoutEntry.selectorField];
-          const activeSide = shiftValue === layoutEntry.rightBlock.shiftValue ? "right" : "left";
-          await writeRowForDate(env, effectiveSheetId, effectiveTab, {
-            leftBlock: layoutEntry.leftBlock,
-            rightBlock: layoutEntry.rightBlock,
-            activeSide,
-            dateValue,
-            values,
-          });
-          // writeRowForDate() re-finds the matching-date row by scanning
-          // instead of returning a fixed row number (see its comment in
-          // googleSheets.js) — so Daily Report intentionally gets no
-          // sheetRef. Its 📊 edit action can still sync the Telegram
-          // message, just not this Sheet row (sheetHasRef comes back
-          // false for it — see threads/[id].js's editDetails action).
+        const layout = resolveSheetLayout(layoutEntry, fieldMap);
+        if (layout) {
+          const values = resolveColumnValues(layout.columns, { fieldMap, brand, reporter, screenshotLink, attachmentLinks });
+          const { row } = await appendRowByColumns(env, effectiveSheetId, tab, layout.startColumn, values);
+          if (row) sheetRef = { sheetId: effectiveSheetId, tab, startColumn: layout.startColumn, columns: layout.columns, row };
         } else {
-          const layout = resolveSheetLayout(layoutEntry, fieldMap);
-          if (layout) {
-            const values = resolveColumnValues(layout.columns, { fieldMap, brand, reporter, screenshotLink, attachmentLinks });
-            const { row } = await appendRowByColumns(env, effectiveSheetId, effectiveTab, layout.startColumn, values);
-            if (row) sheetRef = { sheetId: effectiveSheetId, tab: effectiveTab, startColumn: layout.startColumn, columns: layout.columns, row };
-          } else {
-            const row = {
-              timestamp,
-              brand: brand.name,
-              reporter,
-              ...Object.fromEntries(fields.map((f) => [f.key, f.value])),
-              attachments: (attachments || []).map((a) => a.name).join(", "),
-            };
-            await appendRowToSheet(env, effectiveSheetId, moduleId, row);
-          }
+          const row = {
+            timestamp,
+            brand: brand.name,
+            reporter,
+            ...Object.fromEntries(fields.map((f) => [f.key, f.value])),
+            attachments: (attachments || []).map((a) => a.name).join(", "),
+          };
+          await appendRowToSheet(env, effectiveSheetId, moduleId, row);
         }
       }
       sheetLogged = true;
@@ -322,14 +325,16 @@ async function handleSubmit({ request, env, waitUntil }) {
     }
   }
 
-  // 2c. Create a TG Reply Threads record so agent replies to this exact
-  //     Telegram message can be tracked in the dashboard. Optional feature —
-  //     skipped silently until this brand's country's THREADS_KV_<CODE>
-  //     is bound (see wrangler.toml).
+  // 2c. Create the TG Reply Threads record so replies to this exact
+  //     Telegram message are tracked in the dashboard.
+  //     2026-10-10 — runs IN PARALLEL with the Sheet write (both only need
+  //     the Telegram result); the Sheet row reference is attached right
+  //     after, once both are done (setThreadSheetRef).
   let threadId = null;
   let threadTrackingFailed = false;
   let threadTrackingError = null;
-  if (kv) {
+  async function trackThread() {
+    if (!kv) return;
     try {
       const { title, summary } = buildTitleAndSummary({ meta, brand, fieldMap, fields });
       const thread = await createThread(store, {
@@ -351,40 +356,30 @@ async function handleSubmit({ request, env, waitUntil }) {
         summary,
         fieldMap,
         screenshotLink,
-        sheetRef,
+        sheetRef: null,
       });
       threadId = thread.id;
     } catch (e) {
-      // 2026-08-29 — this used to be a bare `catch {}`: the Telegram
-      // message and sheet row ARE already the source of truth, so a
-      // failure here was treated as fully non-fatal and thrown away —
-      // including the error itself, with no console.error anywhere.
-      // That's exactly why a TID like this could reach Telegram fine but
-      // never appear in the dashboard, AND the agent submitting it saw a
-      // plain green "Submitted" success with no indication anything had
-      // gone wrong (createThread's error handling in threads.js has its
-      // own logging fix — see that file — this is the other half: the
-      // agent-facing side). Still non-fatal — we do NOT fail the
-      // request, since the ticket genuinely did go out — but now (a) the
-      // real error lands in the Functions log so it's actually
-      // diagnosable, and (b) the response carries enough for the
-      // frontend (see app.js) to show a visible warning instead of
-      // silence, so the agent knows to flag it instead of assuming
-      // everything's fine.
+      // Non-fatal (the ticket genuinely went out), but logged AND reported
+      // to the frontend (app.js shows a visible warning) — see
+      // CHANGES-2026-08-29-thread-visibility-silent-failure.md.
       threadTrackingFailed = true;
       threadTrackingError = String(e && e.message || e);
       console.error(`[submit.js] createThread failed for module=${moduleId} brand=${brandId} tgMessageId=${tgResult.messageId}: ${threadTrackingError}`);
     }
   }
 
-  // "Ticket Created" activity-log entries were removed (2026-08) — this
-  // is the single highest-volume action in the whole system (every
-  // routine issue submission), and it was drowning out the audit
-  // trail's actual purpose (auth/account/config changes, and the
-  // meaningful thread actions: solve/delete/recall/edit — see logThread
-  // calls in functions/api/threads/[id].js). Ticket creation itself is
-  // already fully tracked via the ticket/thread record itself, so
-  // nothing is lost by not duplicating it into Activity Logs too.
+  await Promise.all([writeSheet(), trackThread()]);
+  if (threadId && sheetRef) {
+    try {
+      await setThreadSheetRef(store, threadId, sheetRef);
+    } catch (e) {
+      console.error(`[submit.js] setThreadSheetRef failed for thread ${threadId}: ${String((e && e.message) || e)} — "Sync to Sheet" edits will fall back to Telegram-only for this ticket.`);
+    }
+  }
+
+  // ("Ticket Created" activity-log entries were removed 2026-08 — see git
+  // history / CHANGES-activity-logs.md for why.)
   const finalResponse = {
     ok: true,
     telegramMessageId: tgResult.messageId,
@@ -399,14 +394,14 @@ async function handleSubmit({ request, env, waitUntil }) {
     r2Errors: r2Errors.length ? r2Errors : undefined,
   };
 
-  // Overwrite the placeholder from the duplicate-submission guard above
-  // with the REAL result, so a duplicate request arriving even a moment
-  // late still gets back this exact ticket's info (not "still processing")
-  // instead of silently creating a second one. Longer TTL than the
-  // placeholder's 60s — 10 minutes is generous enough to cover any
-  // realistically-delayed retransmit while not lingering in KV forever.
-  if (idempotencyKey && kv) {
-    await kv.put(`submit_dedupe:${idempotencyKey}`, JSON.stringify(finalResponse), { expirationTtl: 600 });
+  // Overwrite the duplicate-guard placeholder with the REAL result, so a
+  // late duplicate request gets back this exact ticket instead of creating
+  // a second one (10 min TTL). 2026-10-10 — in the background (waitUntil):
+  // the agent doesn't need to wait for this write.
+  if (dedupeKey) {
+    const p = kv.put(dedupeKey, JSON.stringify(finalResponse), { expirationTtl: 600 });
+    if (waitUntil) waitUntil(p.catch(() => {}));
+    else await p;
   }
   return json(finalResponse);
 }

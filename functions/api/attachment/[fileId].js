@@ -148,7 +148,12 @@ async function handleGet({ request, env, params }) {
     // URL; no reason for a shared/public cache to hold onto it, but a
     // brief cache is harmless if someone reopens the same image within
     // a few minutes (e.g. re-opening the lightbox).
-    "Cache-Control": "private, max-age=300",
+    // 2026-10-10 — raised 5 min -> 7 days. A Telegram file_id always
+    // refers to the same bytes, so re-opening a chat later (or after a
+    // page refresh) can reuse the browser's copy instead of going back
+    // through getFile + a Telegram download for every image again.
+    // Still `private` (only this agent's browser, never a shared cache).
+    "Cache-Control": "private, max-age=604800, immutable",
   };
 
   // Layers 1–3 already produced a trustworthy type — stream the body

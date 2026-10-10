@@ -100,7 +100,7 @@
 
 import {
   ensureThreadListSchema, upsertListRowStmt, deleteListRowStmt,
-  isThreadListReady, queryThreadList, runThreadListBackfillStep,
+  isThreadListReady, queryThreadList, runThreadListBackfillStep, recoverFromMissingListTable,
 } from "./threadList.js";
 
 // Solved tickets older than this many days are auto-deleted.
@@ -148,10 +148,11 @@ async function d1UpsertWithRetry(store, id, json, attempts = 4) {
   const { db } = store;
   // 2026-10-10 — the sidebar's thread_list row is recomputed from this
   // exact `threads` row in the same transaction (see threadList.js).
-  const withList = await ensureThreadListSchema(store);
   let lastErr;
+  let listRecovered = false;
   for (let i = 0; i < attempts; i++) {
     try {
+      const withList = await ensureThreadListSchema(store);
       const upsert = db.prepare(
         `INSERT INTO threads (id, data) VALUES (?1, ?2)
          ON CONFLICT(id) DO UPDATE SET data = excluded.data`
@@ -161,6 +162,9 @@ async function d1UpsertWithRetry(store, id, json, attempts = 4) {
       return;
     } catch (e) {
       lastErr = e;
+      // thread_list vanished under us: re-create it and retry right away,
+      // once (doesn't consume one of the normal attempts).
+      if (!listRecovered && recoverFromMissingListTable(store, e)) { listRecovered = true; i--; continue; }
       // 2026-08-29 — this used to fail silently: 3 short retries (max
       // ~600ms total) then throw with NOTHING logged anywhere. Under a
       // burst of concurrent submissions D1 can return SQLITE_BUSY /
@@ -535,8 +539,14 @@ async function healLegacyIntoD1(store, legacyThread, raw) {
       ).bind(String(legacyThread.chatId), mid, legacyThread.id)
     ),
   ];
-  if (await ensureThreadListSchema(store)) stmts.push(upsertListRowStmt(db, legacyThread.id));
-  await db.batch(stmts);
+  const withList = await ensureThreadListSchema(store);
+  try {
+    await db.batch(withList ? [...stmts, upsertListRowStmt(db, legacyThread.id)] : stmts);
+  } catch (e) {
+    if (!recoverFromMissingListTable(store, e)) throw e;
+    const again = await ensureThreadListSchema(store);
+    await db.batch(again ? [...stmts, upsertListRowStmt(db, legacyThread.id)] : stmts);
+  }
 }
 
 // Used by the thread_list backfill: "ok" (healed or already in D1),
@@ -892,6 +902,7 @@ export async function listThreads(store, { q, waitUntil } = {}) {
         results = await queryThreadList(store);
       } catch (e) {
         console.error(`[threads.js] D1 thread_list query failed for ${store.country}, falling back to KV: ${String((e && e.message) || e)}`);
+        recoverFromMissingListTable(store, e);
       }
     } else {
       const step = runThreadListBackfillStep(store, (id) => healLegacyThread(store, id)).catch((e) =>
@@ -1145,8 +1156,18 @@ export async function appendMessage(store, threadId, message) {
         ).bind(threadId)
       );
     }
-    if (await ensureThreadListSchema(store)) appendStmts.push(upsertListRowStmt(db, threadId));
-    await saveWithRetry(() => db.batch(appendStmts), `thread ${threadId} append (D1)`);
+    let listRecovered = false;
+    await saveWithRetry(async () => {
+      const stmts = (await ensureThreadListSchema(store)) ? [...appendStmts, upsertListRowStmt(db, threadId)] : appendStmts;
+      try {
+        return await db.batch(stmts);
+      } catch (e) {
+        if (listRecovered || !recoverFromMissingListTable(store, e)) throw e;
+        listRecovered = true;
+        const again = (await ensureThreadListSchema(store)) ? [...appendStmts, upsertListRowStmt(db, threadId)] : appendStmts;
+        return db.batch(again);
+      }
+    }, `thread ${threadId} append (D1)`);
 
     await Promise.all(
       allIds.map((mid) =>
@@ -1277,6 +1298,25 @@ export async function updateThreadDetails(store, threadId, { fieldMap, rootText,
 // is clickable to jump straight to the new ticket. Doesn't call
 // patchListCache() — forwardedTo isn't part of the sidebar's summary/
 // title, so there's nothing there that would go stale.
+// 2026-10-10 — submit.js now creates the thread in parallel with the
+// Google Sheet write, then attaches the Sheet row reference here. D1: one
+// atomic json_set (can't clobber a reply that landed in between), retried.
+export async function setThreadSheetRef(store, threadId, sheetRef) {
+  const { db } = store;
+  if (db) {
+    await saveWithRetry(
+      () => db.prepare(`UPDATE threads SET data = json_set(data, '$.sheetRef', json(?1)) WHERE id = ?2`)
+        .bind(JSON.stringify(sheetRef), threadId).run(),
+      `thread ${threadId} sheetRef`
+    );
+    return;
+  }
+  const thread = await getThread(store, threadId);
+  if (!thread) return;
+  thread.sheetRef = sheetRef;
+  await saveThread(store, thread);
+}
+
 export async function addForwardedToLink(store, threadId, link) {
   const thread = await getThread(store, threadId);
   if (!thread) return null;
