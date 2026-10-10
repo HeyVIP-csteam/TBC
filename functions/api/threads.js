@@ -44,7 +44,7 @@
 import { verifyRequest, canSeeBrand, canSeeCountry } from "../_shared/accounts.js";
 import { resolveAllowedCountries } from "../_shared/countryAccess.js";
 import { COUNTRY_CODES, isValidCountry, resolveThreadsStore } from "../_shared/countries.js";
-import { listThreads } from "../_shared/threads.js";
+import { listThreads, listThreadsSync } from "../_shared/threads.js";
 
 export async function onRequestGet(context) {
   try {
@@ -102,83 +102,78 @@ async function handleGet({ request, env }, waitUntil) {
   // THREADS_KV_PHP namespace is created — see wrangler.toml) is skipped
   // with a soft warning rather than throwing and taking down the whole
   // merged response for the countries that DO work.
+  // 2026-10-10 — incremental sync. The sidebar sends `since=INR:123,PKR:45`
+  // (the versions it already has, see _shared/threadList.js). Each country
+  // then answers "unchanged" (nothing to send), "delta" (only the threads
+  // that changed) or "full". Search (`q`) and the Home page's `counts`
+  // always get a full answer. Requests without `since` get the original
+  // { active, solved } shape (+ a `sync` token to start delta polling with).
+  const fieldsCounts = url.searchParams.get("fields") === "counts";
+  const sinceParam = url.searchParams.get("since");
+  const wantsSync = sinceParam !== null && !q && !fieldsCounts;
+  const sinceMap = {};
+  for (const part of String(sinceParam || "").split(",")) {
+    const [c, v] = part.split(":");
+    if (c && v !== undefined && v !== "") sinceMap[c] = v;
+  }
+  const visible = (t, country) =>
+    canSeeCountry(account, country) && (canSeeBrand(account, t.brandId, country) || canSeeBrand(account, t.brand, country));
+  const forClient = ({ extraSearchText, deleted, ...t }, country) => ({ ...t, country });
+
+  // Query each allowed country's own storage in parallel. A country whose
+  // storage isn't bound is skipped with a soft warning instead of failing
+  // the whole response. The brand check prefers brandId (unambiguous across
+  // countries) and falls back to the display name for older threads.
   const perCountryResults = await Promise.all(
     allowedCountries.map(async (country) => {
       const store = resolveThreadsStore(env, country);
-      if (!store.kv) {
-        return { country, threads: [], notConfigured: true };
+      if (!store.kv) return { country, mode: "full", version: null, rows: [], notConfigured: true };
+      if (q) {
+        return { country, mode: "full", version: null, rows: await listThreads(store, { q, waitUntil }) };
       }
-      const threads = await listThreads(store, { q, waitUntil });
-      // Tag every thread with which country it came from — the
-      // frontend needs this to show a country badge/filter, and it's
-      // also what a future canSeeCountry() re-check downstream (e.g.
-      // GET /api/threads/[id] opening a single thread) keys off.
-      // extraSearchText is only used for the server-side `q` match above —
-      // dropping it roughly halves the response the browser downloads
-      // every 30s (2026-10-10).
-      return {
-        country,
-        threads: threads.map(({ extraSearchText, ...t }) => ({ ...t, country })),
-        notConfigured: false,
-      };
+      const r = await listThreadsSync(store, { since: wantsSync ? (sinceMap[country] ?? null) : null, waitUntil });
+      return { country, ...r };
     })
   );
 
-  const anyNotConfigured = perCountryResults.some((r) => r.notConfigured);
-  const all = perCountryResults
-    .flatMap((r) => r.threads)
-    // Belt-and-suspenders: canSeeCountry() re-check even though we only
-    // queried allowed countries above — cheap, and guards against a
-    // future refactor accidentally widening the query set without
-    // updating this filter too.
-    // Prefer brandId (unambiguous BRANDS key) when the thread has one —
-    // a bare brand NAME like "Crickex" exists in both INR and PKR, so an
-    // account scoped to a specific id (e.g. allowedBrands: ["crickex_pkr"])
-    // can't be matched reliably by name alone. Threads old enough to
-    // predate the brandId field fall back to the name check, same as
-    // before (2026-09-01).
-    // BUGFIX (2026-09-01) — was `canSeeBrand(account, t.brandId ||
-    // t.brand, t.country)`: `||` means the moment `brandId` is truthy AT
-    // ALL, `brand` (the name) never even gets tried — including when
-    // `brandId` is a stale/garbage value that doesn't match anything in
-    // ROUTING_BRANDS (e.g. a pre-merge legacy id like bare "crickex"
-    // with no country suffix, found on a real ticket via direct D1
-    // inspection). A non-admin account then fails outright even though
-    // the SAME thread's `brand` name ("Crickex") would have resolved
-    // just fine via the country-scoped fallback above. Try brandId
-    // first (the fast, unambiguous path for clean modern threads), and
-    // if that specific check fails, fall back to trying the name too —
-    // covers "no brandId", "unresolvable brandId", and "flat-out wrong
-    // brandId" all the same way, without ever trusting a corrupt id to
-    // veto a name that's actually fine.
-    .filter((t) => canSeeCountry(account, t.country) && (canSeeBrand(account, t.brandId, t.country) || canSeeBrand(account, t.brand, t.country)));
+  const syncToken = perCountryResults
+    .filter((r) => r.version != null)
+    .map((r) => `${r.country}:${r.version}`)
+    .join(",");
+  const timing = { "Server-Timing": `auth;dur=${tAuth - tStart}, list;dur=${Date.now() - tAuth}` };
 
-  // BUGFIX (2026-09-27) — listThreads() sorts each COUNTRY's own
-  // results by lastActivity before this ever runs, but merging several
-  // countries with flatMap just concatenates those already-sorted
-  // arrays one after another — every INR thread first, then every PKR
-  // thread, etc. — not a single list interleaved by real time across
-  // countries. An account allowed to see multiple countries got what
-  // looked like "grouped by currency, then time within that", which
-  // wasn't intentional (see the 2026-09-27 conversation this was
-  // caught in: a PKR thread from 5:04 PM sitting BELOW several INR
-  // threads from earlier that same day). Re-sorting the merged set here
-  // makes the final order pure recency, regardless of which country
-  // each thread came from — the permission filtering above is
-  // untouched, only the ordering changes.
+  if (wantsSync) {
+    const countries = {};
+    for (const r of perCountryResults) {
+      if (r.mode === "unchanged") {
+        countries[r.country] = { mode: "unchanged" };
+      } else if (r.mode === "delta") {
+        const changed = [];
+        const removed = [];
+        for (const t of r.changed) {
+          if (!t.deleted && visible(t, r.country)) changed.push(forClient(t, r.country));
+          else removed.push(t.id);
+        }
+        countries[r.country] = { mode: "delta", changed, removed };
+      } else {
+        countries[r.country] = { mode: "full", threads: r.rows.filter((t) => visible(t, r.country)).map((t) => forClient(t, r.country)) };
+      }
+    }
+    return json({ ok: true, sync: syncToken, countries }, 200, timing);
+  }
+
+  const anyNotConfigured = perCountryResults.some((r) => r.notConfigured);
+  // Merging several countries just concatenates already-sorted lists, so
+  // re-sort the merged set by recency (2026-09-27 fix).
+  const all = perCountryResults
+    .flatMap((r) => r.rows.filter((t) => visible(t, r.country)).map((t) => forClient(t, r.country)));
   all.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
-  // 2026-10-10 — `?fields=counts`: the Home page's TG Reply Threads card
-  // only needs [id, replyCount] per thread to compute its unread badge and
-  // unsolved count. It used to download every full summary (all countries,
-  // 180 days of solved) every 15s from every open tab.
-  if (url.searchParams.get("fields") === "counts") {
+  // `?fields=counts`: the Home page's TG Reply Threads card only needs
+  // [id, replyCount] to compute its unread badge and unsolved count.
+  if (fieldsCounts) {
     const slim = (t) => [t.id, t.replyCount || 0];
-    return json({
-      ok: true,
-      active: all.filter((t) => !t.solved).map(slim),
-      solved: all.filter((t) => t.solved).map(slim),
-    }, 200, { "Server-Timing": `auth;dur=${tAuth - tStart}, list;dur=${Date.now() - tAuth}` });
+    return json({ ok: true, active: all.filter((t) => !t.solved).map(slim), solved: all.filter((t) => t.solved).map(slim) }, 200, timing);
   }
 
   return json({
@@ -186,7 +181,8 @@ async function handleGet({ request, env }, waitUntil) {
     active: all.filter((t) => !t.solved),
     solved: all.filter((t) => t.solved),
     notConfigured: anyNotConfigured,
-  }, 200, { "Server-Timing": `auth;dur=${tAuth - tStart}, list;dur=${Date.now() - tAuth}` });
+    sync: syncToken,
+  }, 200, timing);
 }
 
 function json(obj, status = 200, extraHeaders = {}) {

@@ -100,7 +100,8 @@
 
 import {
   ensureThreadListSchema, listUpsertStmts, listDeleteStmts,
-  isThreadListReady, queryThreadList, runThreadListBackfillStep, recoverFromMissingListTable,
+  isThreadListReady, queryThreadList, queryThreadListSince, pruneListTombstones,
+  runThreadListBackfillStep, recoverFromMissingListTable,
 } from "./threadList.js";
 
 // Solved tickets older than this many days are auto-deleted.
@@ -899,7 +900,7 @@ export async function listThreads(store, { q, waitUntil } = {}) {
   if (store.db) {
     if (await isThreadListReady(store)) {
       try {
-        results = await queryThreadList(store);
+        results = (await queryThreadList(store)).rows;
       } catch (e) {
         console.error(`[threads.js] D1 thread_list query failed for ${store.country}, falling back to KV: ${String((e && e.message) || e)}`);
         recoverFromMissingListTable(store, e);
@@ -945,6 +946,34 @@ export async function listThreads(store, { q, waitUntil } = {}) {
 //
 // KV shape: mention-registry:<brandId>:<moduleId> -> JSON
 //   { "@handle": { from, lastSeen }, ... }
+/**
+ * 2026-10-10 — incremental version of listThreads() for the sidebar poll.
+ * `since` = the version this browser already has for this country (or
+ * null). Returns { mode: "unchanged" | "delta" | "full", version, ... }
+ * — see threadList.js queryThreadListSince(). Countries whose D1 list isn't
+ * ready yet always answer "full" with version null (old behaviour).
+ */
+const TOMBSTONE_PRUNE_RATE = 0.01;
+export async function listThreadsSync(store, { since, waitUntil } = {}) {
+  if (store.db && (await isThreadListReady(store))) {
+    try {
+      const r = await queryThreadListSince(store, since);
+      if (r.mode === "full") {
+        r.rows = (await sweepExpired(store, r.rows, waitUntil)).filter((t) => !t.deleted);
+      }
+      if (Math.random() < TOMBSTONE_PRUNE_RATE) {
+        const p = pruneListTombstones(store).catch(() => {});
+        if (waitUntil) waitUntil(p); else await p;
+      }
+      return r;
+    } catch (e) {
+      console.error(`[threads.js] incremental list failed for ${store.country}, serving full list: ${String((e && e.message) || e)}`);
+      recoverFromMissingListTable(store, e);
+    }
+  }
+  return { mode: "full", version: null, rows: await listThreads(store, { waitUntil }) };
+}
+
 function mentionRegistryKey(brandId, moduleId) {
   return `mention-registry:${brandId}:${moduleId}`;
 }

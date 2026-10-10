@@ -51,11 +51,18 @@ const SCHEMA_STATEMENTS = [
      solved_at     TEXT,
      deleted       INTEGER NOT NULL DEFAULT 0,
      reply_count   INTEGER NOT NULL DEFAULT 0,
-     search_text   TEXT
+     search_text   TEXT,
+     ver           INTEGER NOT NULL DEFAULT 0
    )`,
   `CREATE INDEX IF NOT EXISTS idx_thread_list_activity ON thread_list (deleted, last_activity)`,
   `CREATE TABLE IF NOT EXISTS thread_list_meta (k TEXT PRIMARY KEY, v TEXT)`,
 ];
+// Tables created before the `ver` column existed get it added here (the
+// ALTER fails harmlessly with "duplicate column" when it's already there).
+const VER_COLUMN_SQL = `ALTER TABLE thread_list ADD COLUMN ver INTEGER NOT NULL DEFAULT 0`;
+const VER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_thread_list_ver ON thread_list (ver)`;
+// Current version, read inside the same transaction that just bumped it.
+const CURRENT_VER = `coalesce((SELECT CAST(v AS INTEGER) FROM thread_list_meta WHERE k = 'version'), 0)`;
 
 // Mirrors threads.js summarize(): title clipped to 200 chars, submitter to
 // 100, search text = every non-empty summary[].value joined by spaces,
@@ -63,7 +70,7 @@ const SCHEMA_STATEMENTS = [
 // ASCII-only).
 const UPSERT_SELECT = `
   INSERT INTO thread_list (id, module, module_name, icon, accent, brand, brand_id, title, submitter,
-                           submitted_at, last_activity, solved, solved_at, deleted, reply_count, search_text)
+                           submitted_at, last_activity, solved, solved_at, deleted, reply_count, search_text, ver)
   SELECT t.id,
          json_extract(t.data, '$.module'),
          json_extract(t.data, '$.moduleName'),
@@ -82,7 +89,8 @@ const UPSERT_SELECT = `
          (SELECT substr(group_concat(v, ' '), 1, 300)
             FROM (SELECT json_extract(j.value, '$.value') AS v
                     FROM json_each(t.data, '$.summary') AS j)
-           WHERE v IS NOT NULL AND v <> '')
+           WHERE v IS NOT NULL AND v <> ''),
+         ${CURRENT_VER}
     FROM threads AS t
    WHERE %WHERE%
   ON CONFLICT(id) DO UPDATE SET
@@ -90,7 +98,8 @@ const UPSERT_SELECT = `
     accent = excluded.accent, brand = excluded.brand, brand_id = excluded.brand_id,
     title = excluded.title, submitter = excluded.submitter, submitted_at = excluded.submitted_at,
     last_activity = excluded.last_activity, solved = excluded.solved, solved_at = excluded.solved_at,
-    deleted = excluded.deleted, reply_count = excluded.reply_count, search_text = excluded.search_text`;
+    deleted = excluded.deleted, reply_count = excluded.reply_count, search_text = excluded.search_text,
+    ver = excluded.ver`;
 
 const UPSERT_ONE_SQL = UPSERT_SELECT.replace("%WHERE%", "t.id = ?1");
 const BACKFILL_BATCH = 100; // small slices: never hold the country's D1 for long
@@ -112,7 +121,15 @@ export function ensureThreadListSchema(store) {
   if (!db) return Promise.resolve(false);
   let p = schemaPromise.get(country);
   if (!p) {
-    p = db.batch(SCHEMA_STATEMENTS.map((s) => db.prepare(s))).then(
+    p = (async () => {
+      await db.batch(SCHEMA_STATEMENTS.map((s) => db.prepare(s)));
+      try {
+        await db.prepare(VER_COLUMN_SQL).run();
+      } catch (e) {
+        if (!/duplicate column/i.test(String((e && e.message) || e))) throw e;
+      }
+      await db.prepare(VER_INDEX_SQL).run();
+    })().then(
       () => true,
       (e) => {
         console.error(`[threadList] schema setup failed for ${country}: ${String((e && e.message) || e)}`);
@@ -146,8 +163,10 @@ export function upsertListRowStmt(db, id) {
   return db.prepare(UPSERT_ONE_SQL).bind(id);
 }
 
+// A purged thread leaves a tombstone (deleted = 1, new ver) instead of
+// vanishing, so incremental syncs can tell agents to drop it.
 export function deleteListRowStmt(db, id) {
-  return db.prepare(`DELETE FROM thread_list WHERE id = ?1`).bind(id);
+  return db.prepare(`UPDATE thread_list SET deleted = 1, ver = ${CURRENT_VER} WHERE id = ?1`).bind(id);
 }
 
 // ---- change version (keeps D1 "rows read" low) ---------------------------
@@ -166,14 +185,14 @@ export function bumpListVersionStmt(db) {
   );
 }
 
-/** [upsert row, bump version] — use with db.batch(). */
+/** [bump version, upsert row stamped with it] — use with db.batch(). */
 export function listUpsertStmts(db, id) {
-  return [upsertListRowStmt(db, id), bumpListVersionStmt(db)];
+  return [bumpListVersionStmt(db), upsertListRowStmt(db, id)];
 }
 
-/** [delete row, bump version] — use with db.batch(). */
+/** [bump version, tombstone row] — use with db.batch(). */
 export function listDeleteStmts(db, id) {
-  return [deleteListRowStmt(db, id), bumpListVersionStmt(db)];
+  return [bumpListVersionStmt(db), deleteListRowStmt(db, id)];
 }
 
 const listMemo = new Map(); // country -> { version, rows }
@@ -199,6 +218,10 @@ export async function isThreadListReady(store) {
 export async function queryThreadList(store) {
   const vrow = await store.db.prepare(`SELECT v FROM thread_list_meta WHERE k = 'version'`).first();
   const version = vrow ? String(vrow.v) : "0";
+  return { version, rows: await fullListAt(store, version) };
+}
+
+async function fullListAt(store, version) {
   const memo = listMemo.get(store.country);
   if (memo && memo.version === version) return memo.rows; // 1 row read instead of the whole list
   const rows = await scanThreadList(store);
@@ -208,17 +231,68 @@ export async function queryThreadList(store) {
   return rows;
 }
 
+/**
+ * 2026-10-10 — incremental sync. `since` is the version the browser already
+ * has. Returns one of:
+ *   { mode: "unchanged", version }                 — 1-2 rows read
+ *   { mode: "delta", version, changed: [...] }      — only rows whose ver > since
+ *       (each with `deleted` true/false; deleted ones mean "drop it")
+ *   { mode: "full", version, rows: [...] }          — first load, or since too old
+ */
+export async function queryThreadListSince(store, since) {
+  const { results } = await store.db
+    .prepare(`SELECT k, v FROM thread_list_meta WHERE k IN ('version', 'min_ver')`)
+    .all();
+  const meta = Object.fromEntries((results || []).map((r) => [r.k, Number(r.v) || 0]));
+  const version = meta.version || 0;
+  const minVer = meta.min_ver || 0;
+  const sinceNum = Number(since);
+  if (since != null && since !== "" && Number.isFinite(sinceNum)) {
+    if (sinceNum === version) return { mode: "unchanged", version: String(version) };
+    if (sinceNum >= minVer && sinceNum < version) {
+      const { results: rows } = await store.db
+        .prepare(`SELECT ${LIST_COLUMNS}, deleted FROM thread_list WHERE ver > ?1`)
+        .bind(sinceNum)
+        .all();
+      return { mode: "delta", version: String(version), changed: (rows || []).map(rowToSummary) };
+    }
+  }
+  return { mode: "full", version: String(version), rows: await fullListAt(store, String(version)) };
+}
+
+/**
+ * Tombstones only need to live long enough for every open browser to have
+ * synced past them. Drops those more than KEEP_VERSIONS changes old and
+ * records min_ver, so a browser that's older than that just reloads fully.
+ */
+const KEEP_TOMBSTONE_VERSIONS = 20000;
+export async function pruneListTombstones(store) {
+  const row = await store.db.prepare(`SELECT v FROM thread_list_meta WHERE k = 'version'`).first();
+  const cut = (Number(row && row.v) || 0) - KEEP_TOMBSTONE_VERSIONS;
+  if (cut <= 0) return;
+  await store.db.batch([
+    store.db.prepare(`DELETE FROM thread_list WHERE deleted = 1 AND ver <= ?1`).bind(cut),
+    setMetaStmt(store.db, "min_ver", String(cut)),
+  ]);
+}
+
+const LIST_COLUMNS = `id, module, module_name, icon, accent, brand, brand_id, title, submitter, submitted_at,
+              last_activity, solved, solved_at, reply_count, search_text`;
+
 async function scanThreadList(store) {
   const { results } = await store.db
     .prepare(
-      `SELECT id, module, module_name, icon, accent, brand, brand_id, title, submitter, submitted_at,
-              last_activity, solved, solved_at, reply_count, search_text
+      `SELECT ${LIST_COLUMNS}
          FROM thread_list
         WHERE deleted = 0
         ORDER BY last_activity DESC`
     )
     .all();
-  return (results || []).map((r) => ({
+  return (results || []).map(rowToSummary);
+}
+
+function rowToSummary(r) {
+  return {
     id: r.id,
     module: r.module,
     moduleName: r.module_name,
@@ -232,10 +306,10 @@ async function scanThreadList(store) {
     lastActivity: r.last_activity,
     solved: !!r.solved,
     solvedAt: r.solved_at || null,
-    deleted: false,
+    deleted: !!r.deleted,
     replyCount: r.reply_count || 0,
     extraSearchText: (r.search_text || "").toLowerCase(),
-  }));
+  };
 }
 
 // ---- backfill -------------------------------------------------------------
@@ -291,7 +365,7 @@ export async function runThreadListBackfillStep(store, healFn, { kvPageSize = 30
 
     // phase 1
     for (let i = 0; i < 5; i++) {
-      const [res] = await db.batch([db.prepare(UPSERT_MISSING_SQL), bumpListVersionStmt(db)]);
+      const [, res] = await db.batch([bumpListVersionStmt(db), db.prepare(UPSERT_MISSING_SQL)]);
       const changes = (res && res.meta && res.meta.changes) || 0;
       if (changes < BACKFILL_BATCH) break;
     }
@@ -329,7 +403,7 @@ export async function runThreadListBackfillStep(store, healFn, { kvPageSize = 30
 
     if (page.list_complete) {
       // Catch anything written between phase 1 and now, then flip the switch.
-      await db.batch([db.prepare(UPSERT_MISSING_SQL), bumpListVersionStmt(db), setMetaStmt(db, "kv_cursor", ""), setMetaStmt(db, "ready", "1")]);
+      await db.batch([bumpListVersionStmt(db), db.prepare(UPSERT_MISSING_SQL), setMetaStmt(db, "kv_cursor", ""), setMetaStmt(db, "ready", "1")]);
       readyMemo.add(country);
       console.log(`[threadList] ${country}: thread_list backfill complete`);
       return true;
