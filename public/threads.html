@@ -32,7 +32,7 @@ html[data-theme="light"] {
 <script src="/assets/country-modules.js?v=7cb5b511"></script>
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
-<script src="/assets/announcement-banner.js?v=69ebab10" defer></script>
+<script src="/assets/announcement-banner.js?v=3ccef02f" defer></script>
 <script src="/assets/schemas.js?v=c135f22f"></script>
 </head>
 <body class="threads-page">
@@ -167,21 +167,63 @@ html[data-theme="light"] {
       // headcount grew (see the Cloudflare cost estimate this session) —
       // ~40% fewer refreshOpenThread calls per shift with a barely
       // noticeable difference in how "live" an open ticket feels.
-      // 2026-10-10 — polls skip while the tab is in the background (the
-      // visibilitychange handler at the bottom refreshes on return).
+      // 2026-10-10 — one scheduler instead of two fixed timers, to keep
+      // the whole team inside the $5 Workers plan's request allowance:
+      //   - background tab: nothing (visibilitychange refreshes on return)
+      //   - agent active (input in the last 3 min): list every 10s
+      //   - agent idle: list every 60s; while searching: every 30s
+      //   - the open chat is re-fetched only when the list sync reports
+      //     that ticket changed (see loadList), plus a 2-min safety refresh
+      //   - Recall log (admins): every 60s
       pollTimer = setInterval(() => {
-        if (!document.hidden) refreshOpenThread();
-      }, 10000);
-      listPollTimer = setInterval(() => {
         if (document.hidden) return;
-        if (!listInFlight) loadList(document.getElementById("threadSearch").value);
-        if (isAdmin) loadRecallLog();
-      }, 30000);
+        const now = Date.now();
+        const searchVal = document.getElementById("threadSearch").value;
+        const every = searchVal ? 30000 : (agentIsIdle() ? LIST_POLL_IDLE_MS : LIST_POLL_ACTIVE_MS);
+        if (!listInFlight && now - lastListPollAt >= every - 1000) loadList(searchVal);
+        if (isAdmin && now - lastRecallPollAt >= 60000) { lastRecallPollAt = now; loadRecallLog(); }
+        if (selectedThread && now - lastOpenRefreshAt >= OPEN_THREAD_SAFETY_MS) refreshOpenThread();
+      }, 5000);
     }
 
     let activeThreads = [];
     let solvedThreads = [];
     // List load state — see loadList()'s 2026-10-10 comment.
+    const LIST_POLL_ACTIVE_MS = 10000;
+    const LIST_POLL_IDLE_MS = 60000;
+    const IDLE_AFTER_MS = 3 * 60 * 1000;
+    const OPEN_THREAD_SAFETY_MS = 2 * 60 * 1000;
+    let lastListPollAt = 0;
+    let lastRecallPollAt = 0;
+    let lastOpenRefreshAt = 0;
+    // Server's view of the list (before local optimistic patches), plus the
+    // incremental-sync token it belongs to (see functions/api/threads.js).
+    let serverById = new Map();
+    let listSync = "";
+    let listSyncKey = null;
+    function agentIsIdle() {
+      // authguard.js stamps this on every click/keypress/mouse move.
+      const last = parseInt(localStorage.getItem("agentLastActivity") || "0", 10);
+      return !last || Date.now() - last > IDLE_AFTER_MS;
+    }
+    function rebuildFromServerState() {
+      const all = Array.from(serverById.values()).sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+      activeThreads = all.filter((t) => !t.solved);
+      solvedThreads = all.filter((t) => t.solved);
+    }
+    // Re-fetch the open chat only if the list says that ticket changed.
+    function refreshOpenThreadIfChanged(changedIds) {
+      if (!selectedThread || !selectedId) return;
+      if (changedIds) {
+        if (changedIds.has(selectedId)) refreshOpenThread();
+        return;
+      }
+      const s = serverById.get(selectedId);
+      if (!s) return;
+      if (s.lastActivity !== selectedThread.lastActivity || s.replyCount !== (selectedThread.messages || []).length || !!s.solved !== !!selectedThread.solved) {
+        refreshOpenThread();
+      }
+    }
     let listState = "loading"; // "loading" | "ok" | "error"
     let listReqSeq = 0;
     let listInFlight = false;
@@ -1045,10 +1087,13 @@ html[data-theme="light"] {
 
     async function loadList(q, opts) {
       const seq = ++listReqSeq;
+      lastListPollAt = Date.now();
       if (opts && opts.reset) {
         listState = "loading";
         activeThreads = [];
         solvedThreads = [];
+        serverById = new Map();
+        listSync = "";
         renderLists();
       }
       listInFlight = true;
@@ -1067,6 +1112,10 @@ html[data-theme="light"] {
         const params = new URLSearchParams();
         if (q) params.set("q", q);
         if (country && !(window.AgentCountry && AgentCountry.isAll(country))) params.set("country", country);
+        // 2026-10-10 — incremental sync: send the versions we already have
+        // so the server only returns what changed (usually nothing).
+        const syncKey = params.get("country") || "ALL";
+        if (!q && listSync && listSyncKey === syncKey) params.set("since", listSync);
         const qs = params.toString();
         const res = await authFetch(`/api/threads${qs ? "?" + qs : ""}`, { cache: "no-store" });
         const data = await res.json().catch(() => null);
@@ -1075,10 +1124,30 @@ html[data-theme="light"] {
         listState = "ok";
         listRetryDelay = 2000;
         clearTimeout(listRetryTimer);
-        activeThreads = data.active || [];
-        solvedThreads = data.solved || [];
+        let changedIds = null; // null = unknown (full answer) -> compare instead
+        if (data.countries) {
+          changedIds = new Set();
+          for (const [c, r] of Object.entries(data.countries)) {
+            if (r.mode === "full") {
+              for (const [id, t] of serverById) if (t.country === c) serverById.delete(id);
+              for (const t of r.threads || []) serverById.set(t.id, t);
+              changedIds = null;
+            } else if (r.mode === "delta") {
+              for (const id of r.removed || []) { serverById.delete(id); if (changedIds) changedIds.add(id); }
+              for (const t of r.changed || []) { serverById.set(t.id, t); if (changedIds) changedIds.add(t.id); }
+            }
+          }
+          listSync = data.sync || "";
+        } else {
+          serverById = new Map([...(data.active || []), ...(data.solved || [])].map((t) => [t.id, t]));
+          // A search result is a filtered list — never delta-sync on top of it.
+          listSync = q ? "" : (data.sync || "");
+          listSyncKey = syncKey;
+        }
+        rebuildFromServerState();
         applyLocalPatches();
         renderLists();
+        refreshOpenThreadIfChanged(changedIds);
       } catch (e) {
         if (seq !== listReqSeq) return;
         console.warn("[threads] list load failed:", e && e.message);
@@ -1150,6 +1219,7 @@ html[data-theme="light"] {
 
     async function openThread(id, country) {
       const seq = ++openSeq;
+      lastOpenRefreshAt = Date.now();
       if (id !== selectedId) cancelPendingAttachments(); // free connections for this ticket
       selectedId = id;
       renderLists();
@@ -1226,6 +1296,7 @@ html[data-theme="light"] {
       if (!selectedId || !selectedThread) return;
       if (openThreadRefreshInFlight) return; // previous poll still waiting on a slow server
       openThreadRefreshInFlight = true;
+      lastOpenRefreshAt = Date.now();
       const refreshingId = selectedId;
       try {
         const res = await authFetch(`/api/threads/${selectedId}?country=${encodeURIComponent((selectedThread && selectedThread.country) || "")}`, { cache: "no-store" });

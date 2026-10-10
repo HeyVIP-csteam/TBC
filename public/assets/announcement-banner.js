@@ -28,7 +28,10 @@
  * refresh to bring reminders back, not hide them forever.)
  */
 (function () {
-  const POLL_MS = 60000;
+  // 2026-10-10 — 60s -> 5 min (request budget). Announcements change rarely;
+  // an admin's own Save/Delete still refreshes their banner immediately via
+  // window.refreshAnnouncementBanner, and every page load fetches fresh.
+  const POLL_MS = 5 * 60 * 1000;
   const TRANSITION_MS = 2200;
   let rotateMs = 6000; // overwritten by the server's configured value once loaded — see Settings tab
 

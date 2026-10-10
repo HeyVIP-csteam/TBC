@@ -44,7 +44,7 @@ html[data-theme="light"] {
 <script src="/assets/country-modules.js?v=7cb5b511"></script>
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
-<script src="/assets/announcement-banner.js?v=69ebab10" defer></script>
+<script src="/assets/announcement-banner.js?v=3ccef02f" defer></script>
 </head>
 <body class="hub-page">
   <header class="topbar">
@@ -483,10 +483,19 @@ html[data-theme="light"] {
     // the background (refreshing as soon as it's visible again). This
     // shell page stays loaded the whole session, so the old 15s full-list
     // download ran in every open tab all day long.
+    // The badge lives on the Home card only, so (2026-10-10, to stay inside
+    // the $5 plan's request allowance) it refreshes every 60s while Home is
+    // the visible view, and right away when the agent comes back to Home.
     let threadsSummaryInFlight = false;
+    let threadsSummaryAt = 0;
+    function homeIsVisible() {
+      const home = document.getElementById("viewHome");
+      return !document.hidden && !!home && home.style.display !== "none";
+    }
     async function loadThreadsSummary() {
-      if (document.hidden || threadsSummaryInFlight) return;
+      if (!homeIsVisible() || threadsSummaryInFlight) return;
       threadsSummaryInFlight = true;
+      threadsSummaryAt = Date.now();
       try {
         const res = await window.AgentAuth.authFetch("/api/threads?fields=counts", { cache: "no-store" });
         const data = await res.json();
@@ -509,8 +518,16 @@ html[data-theme="light"] {
       }
     }
     loadThreadsSummary();
-    setInterval(loadThreadsSummary, 15000);
+    setInterval(loadThreadsSummary, 60000);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) loadThreadsSummary(); });
+    // spa-shell.js shows/hides #viewHome via its style — refresh on return to Home.
+    (() => {
+      const home = document.getElementById("viewHome");
+      if (!home || !window.MutationObserver) return;
+      new MutationObserver(() => {
+        if (homeIsVisible() && Date.now() - threadsSummaryAt > 15000) loadThreadsSummary();
+      }).observe(home, { attributes: true, attributeFilter: ["style"] });
+    })();
 
     // Old per-pill "Edit modal" (openEditModal/closeEditModal/#editSave)
     // removed 2026-08 — editing a brand's pill link now only happens via
