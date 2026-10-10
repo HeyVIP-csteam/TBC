@@ -598,6 +598,13 @@ function lockKey(username) {
 // doesn't exist yet — covers every account that predates this change
 // and has never been locked/unlocked since, so a never-locked account
 // doesn't spuriously need a migration step.
+// Same merge as mergeLockState() below, from an already-fetched raw value.
+function mergeLockRaw(account, lockRaw) {
+  if (!account || !lockRaw) return account;
+  const lock = JSON.parse(lockRaw);
+  return { ...account, locked: !!lock.locked, lockedAt: lock.lockedAt || null, lockedReason: lock.lockedReason || null };
+}
+
 async function mergeLockState(env, account) {
   if (!account) return account;
   const raw = await accountsStore(env).get(lockKey(account.username));
@@ -824,6 +831,20 @@ async function touchLastActive(env, account) {
   const now = Date.now();
   const last = account.lastActiveAt ? new Date(account.lastActiveAt).getTime() : 0;
   if (now - last < 5 * 60 * 1000) return;
+  // 2026-10-10 — one atomic UPDATE instead of re-reading the whole account
+  // (2 queries) and writing it back: faster, and can't clobber a
+  // concurrent saveAccount() with a stale copy.
+  if (env.ACCOUNTS_DB) {
+    try {
+      const res = await env.ACCOUNTS_DB
+        .prepare(`UPDATE kv SET data = json_set(data, '$.lastActiveAt', ?1) WHERE key = ?2`)
+        .bind(new Date(now).toISOString(), `account:${account.username.toLowerCase()}`)
+        .run();
+      if (res && res.meta && res.meta.changes === 1) return;
+    } catch {
+      // fall through to the original read-modify-write
+    }
+  }
   const fresh = await getAccount(env, account.username);
   if (!fresh) return;
   fresh.lastActiveAt = new Date(now).toISOString();
@@ -842,10 +863,10 @@ async function touchLastActive(env, account) {
  * verifyRequest() since there's no verified identity yet at that point)
  * so the two can never drift out of sync with each other.
  */
-export async function officeIpCheckPasses(env, account, request) {
+export async function officeIpCheckPasses(env, account, request, preloadedOffice) {
   if (account.role === "owner") return true;
   if (!account.officeId) return false;
-  const office = await getOffice(env, account.officeId);
+  const office = preloadedOffice !== undefined ? preloadedOffice : await getOffice(env, account.officeId);
   const ip = requestIP(request);
   return !!(office && office.allowedIPs.length && office.allowedIPs.includes(ip));
 }
@@ -867,8 +888,17 @@ export async function verifyRequest(request, env) {
   const payload = await verifyToken(env, token);
   if (!payload) return null;
 
-  const account = await getAccount(env, payload.u);
-  if (!account) return null;
+  // 2026-10-10 — account + lock + office in ONE D1 round trip (was 3-4
+  // sequential reads, plus a guaranteed KV miss on `lock:` for every
+  // never-locked account). Same data, same checks, same order as before.
+  const bundle = await accountsStore(env).getAuthBundle(String(payload.u).toLowerCase());
+  if (!bundle.account) return null;
+  const account = mergeLockRaw(JSON.parse(bundle.account), bundle.lock);
+  let office; // undefined = let officeIpCheckPasses() fetch it itself
+  if (bundle.office !== undefined && account.officeId) {
+    const parsed = JSON.parse(bundle.office);
+    if (parsed && parsed.id === account.officeId) office = parsed;
+  }
 
   // Checked BEFORE anything else — a locked account should be rejected
   // on every single request, and a browser holding a still-unexpired
@@ -879,7 +909,7 @@ export async function verifyRequest(request, env) {
   // is stale even if its signature and expiry are both still valid.
   if ((account.tokenVersion || 0) !== payload.v) return null;
 
-  if (!(await officeIpCheckPasses(env, account, request))) return null;
+  if (!(await officeIpCheckPasses(env, account, request, office))) return null;
 
   await touchLastActive(env, account);
   return stripSecret(account);

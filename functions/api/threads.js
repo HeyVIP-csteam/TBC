@@ -48,13 +48,16 @@ import { listThreads } from "../_shared/threads.js";
 
 export async function onRequestGet(context) {
   try {
-    return await handleGet(context);
+    // Wrapped (not destructured) so `this` stays bound — see
+    // CHANGES-2026-09-11-waitUntil-binding-bug.md.
+    const waitUntil = typeof context.waitUntil === "function" ? (p) => context.waitUntil(p) : null;
+    return await handleGet(context, waitUntil);
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String((e && e.message) || e)}` }, 500);
   }
 }
 
-async function handleGet({ request, env }) {
+async function handleGet({ request, env }, waitUntil) {
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
 
@@ -101,12 +104,19 @@ async function handleGet({ request, env }) {
       if (!store.kv) {
         return { country, threads: [], notConfigured: true };
       }
-      const threads = await listThreads(store, { q });
+      const threads = await listThreads(store, { q, waitUntil });
       // Tag every thread with which country it came from — the
       // frontend needs this to show a country badge/filter, and it's
       // also what a future canSeeCountry() re-check downstream (e.g.
       // GET /api/threads/[id] opening a single thread) keys off.
-      return { country, threads: threads.map((t) => ({ ...t, country })), notConfigured: false };
+      // extraSearchText is only used for the server-side `q` match above —
+      // dropping it roughly halves the response the browser downloads
+      // every 30s (2026-10-10).
+      return {
+        country,
+        threads: threads.map(({ extraSearchText, ...t }) => ({ ...t, country })),
+        notConfigured: false,
+      };
     })
   );
 

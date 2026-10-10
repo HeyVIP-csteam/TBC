@@ -98,6 +98,11 @@
  * sits alongside.
  */
 
+import {
+  ensureThreadListSchema, upsertListRowStmt, deleteListRowStmt,
+  isThreadListReady, queryThreadList, runThreadListBackfillStep,
+} from "./threadList.js";
+
 // Solved tickets older than this many days are auto-deleted.
 const SOLVED_RETENTION_DAYS = 180;
 // Any ticket (solved or not) with zero activity for this many days is
@@ -139,14 +144,20 @@ function sleep(ms) {
 // row, 404ing the instant an agent opened it — see saveThread()'s own
 // comment on why the two writes are now sequenced, not parallel, to
 // prevent exactly that).
-async function d1UpsertWithRetry(db, id, json, attempts = 4) {
+async function d1UpsertWithRetry(store, id, json, attempts = 4) {
+  const { db } = store;
+  // 2026-10-10 — the sidebar's thread_list row is recomputed from this
+  // exact `threads` row in the same transaction (see threadList.js).
+  const withList = await ensureThreadListSchema(store);
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
-      await db.prepare(
+      const upsert = db.prepare(
         `INSERT INTO threads (id, data) VALUES (?1, ?2)
          ON CONFLICT(id) DO UPDATE SET data = excluded.data`
-      ).bind(id, json).run();
+      ).bind(id, json);
+      if (withList) await db.batch([upsert, upsertListRowStmt(db, id)]);
+      else await upsert.run();
       return;
     } catch (e) {
       lastErr = e;
@@ -267,7 +278,7 @@ async function saveThread(store, thread) {
   const { kv, db } = store;
   const json = JSON.stringify(thread);
   if (db) {
-    await d1UpsertWithRetry(db, thread.id, json);
+    await d1UpsertWithRetry(store, thread.id, json);
     await kv.put(`thread:${thread.id}`, "1", { metadata: summarize(thread) });
   } else {
     await kv.put(`thread:${thread.id}`, json, { metadata: summarize(thread) });
@@ -293,7 +304,8 @@ async function purgeThread(store, thread) {
   if (db) {
     deletes.push(
       db.prepare(`DELETE FROM threads WHERE id = ?1`).bind(thread.id).run(),
-      db.prepare(`DELETE FROM message_index WHERE thread_id = ?1`).bind(thread.id).run()
+      db.prepare(`DELETE FROM message_index WHERE thread_id = ?1`).bind(thread.id).run(),
+      deleteListRowStmt(db, thread.id).run().catch(() => {})
     );
   }
   await Promise.all(deletes);
@@ -315,8 +327,10 @@ function isExpired(t, now) {
 // extra KV round-trips on every single sidebar refresh.
 const SWEEP_SAMPLE_RATE = 0.05;
 
-async function sweepExpired(store, list) {
-  if (Math.random() >= SWEEP_SAMPLE_RATE) return list;
+// 2026-10-10 — expired entries are now always hidden from the result,
+// and the actual purge (sampled) runs in the background via waitUntil when
+// the caller provides one, so a sidebar refresh never waits on deletes.
+async function sweepExpired(store, list, waitUntil) {
   const now = Date.now();
   const keep = [];
   const expiredIds = [];
@@ -324,13 +338,15 @@ async function sweepExpired(store, list) {
     if (!t.deleted && isExpired(t, now)) expiredIds.push(t.id);
     else keep.push(t);
   }
-  if (expiredIds.length) {
-    await Promise.all(
+  if (expiredIds.length && Math.random() < SWEEP_SAMPLE_RATE) {
+    const purge = Promise.all(
       expiredIds.map(async (id) => {
         const thread = await getThread(store, id);
         if (thread) await purgeThread(store, thread);
       })
-    );
+    ).catch((e) => console.error(`[threads.js] expired-thread purge failed: ${String((e && e.message) || e)}`));
+    if (waitUntil) waitUntil(purge);
+    else await purge;
   }
   return keep;
 }
@@ -484,7 +500,7 @@ export async function createThread(store, { module: moduleId, moduleName, icon, 
     }
   }
 
-  await patchListCache(kv, thread); // instant sidebar visibility — see that function's comment for why
+  await patchListCache(store, thread); // instant sidebar visibility — see that function's comment for why
   return thread;
 }
 
@@ -504,6 +520,48 @@ export async function createThread(store, { module: moduleId, moduleName, icon, 
 // has no row for this id (e.g. its write failed) rather than "just needs
 // healing" — nothing to reconstruct from KV in that case, so this
 // returns null rather than guessing.
+// Copies a legacy KV-only thread (full JSON value, pre-D1) into D1: the
+// record, its message_index rows and its thread_list row, atomically.
+async function healLegacyIntoD1(store, legacyThread, raw) {
+  const { db } = store;
+  const ids = (legacyThread.msgIds && legacyThread.msgIds.length ? legacyThread.msgIds : [legacyThread.rootMessageId]).filter(Boolean);
+  const stmts = [
+    db.prepare(
+      `INSERT INTO threads (id, data) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET data = excluded.data`
+    ).bind(legacyThread.id, raw),
+    ...ids.map((mid) =>
+      db.prepare(
+        `INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`
+      ).bind(String(legacyThread.chatId), mid, legacyThread.id)
+    ),
+  ];
+  if (await ensureThreadListSchema(store)) stmts.push(upsertListRowStmt(db, legacyThread.id));
+  await db.batch(stmts);
+}
+
+// Used by the thread_list backfill: "ok" (healed or already in D1),
+// "orphan" (KV has only the "1" placeholder / garbage — nothing to copy),
+// "failed" (real legacy data, but the D1 write failed — retry later).
+async function healLegacyThread(store, id) {
+  const { kv } = store;
+  const raw = await kv.get(`thread:${id}`);
+  if (!raw) return "orphan";
+  let t;
+  try {
+    t = JSON.parse(raw);
+  } catch {
+    return "orphan";
+  }
+  if (!t || typeof t !== "object" || Array.isArray(t) || !t.id) return "orphan";
+  try {
+    await healLegacyIntoD1(store, t, raw);
+    return "ok";
+  } catch (e) {
+    console.error(`[threads.js] healLegacyThread failed for ${id}: ${String((e && e.message) || e)}`);
+    return "failed";
+  }
+}
+
 export async function getThread(store, id) {
   const { kv, db } = store;
   if (db) {
@@ -520,17 +578,7 @@ export async function getThread(store, id) {
     if (!legacyThread || typeof legacyThread !== "object" || Array.isArray(legacyThread)) return null;
     if (legacyThread.id) {
       try {
-        const ids = (legacyThread.msgIds && legacyThread.msgIds.length ? legacyThread.msgIds : [legacyThread.rootMessageId]).filter(Boolean);
-        await Promise.all([
-          db.prepare(
-            `INSERT INTO threads (id, data) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET data = excluded.data`
-          ).bind(legacyThread.id, raw).run(),
-          ...ids.map((mid) =>
-            db.prepare(
-              `INSERT OR IGNORE INTO message_index (chat_id, message_id, thread_id) VALUES (?1, ?2, ?3)`
-            ).bind(legacyThread.chatId, mid, legacyThread.id).run()
-          ),
-        ]);
+        await healLegacyIntoD1(store, legacyThread, raw);
       } catch {
         // Non-fatal — it'll just get healed again on a future read.
       }
@@ -765,7 +813,12 @@ async function getCachedScan(kv) {
 // problem the cron interval was raised to fix. If there's no cache yet
 // (nobody's loaded the sidebar since the last full scan), this is a
 // harmless no-op — the next real scan builds it fresh anyway.
-async function patchListCache(kv, thread, { remove } = {}) {
+async function patchListCache(store, thread, { remove } = {}) {
+  // 2026-10-10 — once this country's sidebar is served from D1's
+  // thread_list (see threadList.js), this KV blob isn't read by anyone;
+  // skipping the multi-MB read+rewrite makes every reply/solve faster.
+  if (await isThreadListReady(store)) return;
+  const { kv } = store;
   try {
     const cached = await getCachedScan(kv);
     if (!cached) return; // nothing to patch yet — fine, next real scan builds it
@@ -826,10 +879,31 @@ async function getFreshOrCachedEntries(kv) {
 // Takes `store` now (not bare `kv`) — sweepExpired() below needs the
 // full store to purge an expired thread from D1 too, on a D1-backed
 // country; the list-cache read/scan itself stays on store.kv, unchanged.
-export async function listThreads(store, { q } = {}) {
-  const results = await getFreshOrCachedEntries(store.kv);
+//
+// 2026-10-10 — when the country's D1 thread_list is ready (see
+// threadList.js) the list is one indexed SQL query instead. Until then
+// the KV path below is used unchanged, and a bounded slice of the
+// backfill runs in the background (waitUntil) on each call.
+export async function listThreads(store, { q, waitUntil } = {}) {
+  let results = null;
+  if (store.db) {
+    if (await isThreadListReady(store)) {
+      try {
+        results = await queryThreadList(store);
+      } catch (e) {
+        console.error(`[threads.js] D1 thread_list query failed for ${store.country}, falling back to KV: ${String((e && e.message) || e)}`);
+      }
+    } else {
+      const step = runThreadListBackfillStep(store, (id) => healLegacyThread(store, id)).catch((e) =>
+        console.error(`[threads.js] thread_list backfill step failed for ${store.country}: ${String((e && e.message) || e)}`)
+      );
+      if (waitUntil) waitUntil(step);
+      else await step;
+    }
+  }
+  if (!results) results = await getFreshOrCachedEntries(store.kv);
 
-  const swept = await sweepExpired(store, results);
+  const swept = await sweepExpired(store, results, waitUntil);
   const visible = swept.filter((t) => !t.deleted);
   visible.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
 
@@ -1071,6 +1145,7 @@ export async function appendMessage(store, threadId, message) {
         ).bind(threadId)
       );
     }
+    if (await ensureThreadListSchema(store)) appendStmts.push(upsertListRowStmt(db, threadId));
     await saveWithRetry(() => db.batch(appendStmts), `thread ${threadId} append (D1)`);
 
     await Promise.all(
@@ -1132,7 +1207,7 @@ export async function appendMessage(store, threadId, message) {
     await Promise.all(indexWrites);
   }
 
-  await patchListCache(kv, thread); // instant sidebar update — reply count / reopened status
+  await patchListCache(store, thread); // instant sidebar update — reply count / reopened status
 
   // D1 path's mention-candidate remembering happens here instead of
   // inside the `writes` array above (that array only exists on the
@@ -1151,7 +1226,7 @@ export async function setSolved(store, threadId, solved) {
   thread.solved = solved;
   thread.solvedAt = solved ? new Date().toISOString() : null;
   await saveThread(store, thread);
-  await patchListCache(store.kv, thread); // instant sidebar update — solved/unsolved toggle
+  await patchListCache(store, thread); // instant sidebar update — solved/unsolved toggle
   return thread;
 }
 
@@ -1191,7 +1266,7 @@ export async function updateThreadDetails(store, threadId, { fieldMap, rootText,
   if (summary !== undefined) thread.summary = summary;
   thread.lastActivity = new Date().toISOString();
   await saveThread(store, thread);
-  await patchListCache(store.kv, thread);
+  await patchListCache(store, thread);
   return thread;
 }
 
@@ -1298,7 +1373,7 @@ export async function editIncomingMessageInThread(store, threadId, messageId, te
     thread.solvedAt = null;
   }
   await saveThread(store, thread);
-  await patchListCache(store.kv, thread); // instant sidebar update — lastActivity / reopened status
+  await patchListCache(store, thread); // instant sidebar update — lastActivity / reopened status
   return thread;
 }
 
@@ -1344,7 +1419,7 @@ export async function softDeleteThread(store, threadId, deletedBy) {
   thread.deletedAt = new Date().toISOString();
   thread.deletedBy = deletedBy || null;
   await saveThread(store, thread);
-  await patchListCache(store.kv, thread, { remove: true }); // instant sidebar update — drop it immediately, don't wait for the next scan to notice it's gone
+  await patchListCache(store, thread, { remove: true }); // instant sidebar update — drop it immediately, don't wait for the next scan to notice it's gone
   return thread;
 }
 
