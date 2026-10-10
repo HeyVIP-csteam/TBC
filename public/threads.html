@@ -1029,26 +1029,83 @@ html[data-theme="light"] {
       } catch {}
     }
 
+    // 2026-10-10 — opening a chat room used to show nothing at all until
+    // the server answered. Now: a thread opened earlier in this session
+    // renders instantly from memory (then refreshes in place), and a new
+    // one shows its title + "Loading conversation…" straight away from
+    // the sidebar data. openSeq drops a slow response for a thread the
+    // agent has already clicked away from (it used to overwrite the
+    // newer one).
+    const threadDetailCache = new Map(); // "COUNTRY:id" -> full thread
+    const THREAD_DETAIL_CACHE_MAX = 30;
+    let openSeq = 0;
+
+    function rememberThreadDetail(t) {
+      if (!t || !t.id || !t.country) return;
+      const key = `${t.country}:${t.id}`;
+      threadDetailCache.delete(key);
+      threadDetailCache.set(key, t);
+      if (threadDetailCache.size > THREAD_DETAIL_CACHE_MAX) {
+        threadDetailCache.delete(threadDetailCache.keys().next().value);
+      }
+    }
+
+    function renderLoadingDetail(id, country) {
+      const s = [...activeThreads, ...solvedThreads].find((t) => t.id === id && (!country || t.country === country));
+      if (!s) {
+        main.innerHTML = `<div class="threads-placeholder">Loading conversation…</div>`;
+        return;
+      }
+      main.innerHTML = `
+        <div class="thread-top-fixed">
+          <div class="thread-detail-header">
+            <div>
+              <div class="thread-detail-title"><span>${s.icon || "🔔"}</span> ${escapeHtml(s.title)}</div>
+              <div class="thread-detail-sub">👤 ${escapeHtml(s.submitter)} &nbsp;·&nbsp; 📅 ${timeAgo(s.submittedAt)} &nbsp;·&nbsp; ${escapeHtml(s.brand)}${s.country ? ` (${escapeHtml(s.country)})` : ""}</div>
+            </div>
+          </div>
+          <hr class="thread-divider" />
+        </div>
+        <div class="threads-placeholder">Loading conversation…</div>
+      `;
+      polishEmoji(main);
+    }
+
     async function openThread(id, country) {
+      const seq = ++openSeq;
       selectedId = id;
       renderLists();
       if (!country) {
         main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — missing country.</div>`;
         return;
       }
+      const cached = threadDetailCache.get(`${country}:${id}`);
+      if (cached) {
+        selectedThread = cached;
+        renderDetail();
+      } else {
+        selectedThread = null;
+        renderLoadingDetail(id, country);
+      }
       try {
         const res = await authFetch(`/api/threads/${id}?country=${encodeURIComponent(country)}`, { cache: "no-store" });
         const data = await res.json();
+        if (seq !== openSeq) return; // agent already opened another thread
         if (!data.ok) {
+          threadDetailCache.delete(`${country}:${id}`);
+          selectedThread = null;
           main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread.</div>`;
           return;
         }
         selectedThread = data.thread;
-        renderDetail();
+        rememberThreadDetail(selectedThread);
+        if (cached) updateThreadContent(selectedThread);
+        else renderDetail();
         markSeen(id, selectedThread.messages.length);
         renderLists();
       } catch {
-        main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — check your connection.</div>`;
+        if (seq !== openSeq) return;
+        if (!cached) main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — check your connection.</div>`;
       }
     }
 
@@ -1077,11 +1134,14 @@ html[data-theme="light"] {
       // underlying issue (stale sidebar cache, deleted thread, etc.) is
       // resolved.
       if (!selectedId || !selectedThread) return;
+      const refreshingId = selectedId;
       try {
         const res = await authFetch(`/api/threads/${selectedId}?country=${encodeURIComponent((selectedThread && selectedThread.country) || "")}`, { cache: "no-store" });
         const data = await res.json();
         if (!data.ok) return;
+        if (selectedId !== refreshingId) return; // agent switched threads mid-request
         selectedThread = data.thread;
+        rememberThreadDetail(selectedThread);
         updateThreadContent(selectedThread);
         markSeen(selectedId, selectedThread.messages.length);
         renderLists();
