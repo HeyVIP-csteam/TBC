@@ -1,6 +1,17 @@
 name = "hub-merged"
 pages_build_output_dir = "public"
 
+# 2026-10-10 — Smart Placement: lets Cloudflare run the Functions next to
+# the D1 databases / Telegram / Google instead of at the edge nearest each
+# agent. Almost every request makes several back-to-back database round
+# trips (auth, tickets, accounts); near the database each one costs a few
+# ms instead of a full cross-region round trip. Static pages are still
+# served from the edge nearest the agent (there is no functions/_middleware.js).
+# Takes effect a few minutes after deploy, once there's some traffic.
+# Docs: https://developers.cloudflare.com/pages/functions/smart-placement/
+[placement]
+mode = "smart"
+
 # 三国合并（2026-08-20）—— 真实的绑定配置，不是补丁说明。下面每一个
 # id / bucket_name / database_id 都是从三份原始 wrangler.toml 里原样
 # 抄过来的真实值，不是占位符（除了 ACCOUNTS_KV，这是全新概念，见下）。
