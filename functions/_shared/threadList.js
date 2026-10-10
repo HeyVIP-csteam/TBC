@@ -93,7 +93,7 @@ const UPSERT_SELECT = `
     deleted = excluded.deleted, reply_count = excluded.reply_count, search_text = excluded.search_text`;
 
 const UPSERT_ONE_SQL = UPSERT_SELECT.replace("%WHERE%", "t.id = ?1");
-const BACKFILL_BATCH = 300;
+const BACKFILL_BATCH = 100; // small slices: never hold the country's D1 for long
 const UPSERT_MISSING_SQL = UPSERT_SELECT.replace(
   "%WHERE%",
   `t.id IN (SELECT x.id FROM threads AS x
@@ -249,7 +249,7 @@ export async function runThreadListBackfillStep(store, healFn, { kvPageSize = 30
     }
 
     // phase 1
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 5; i++) {
       const res = await db.prepare(UPSERT_MISSING_SQL).run();
       const changes = (res && res.meta && res.meta.changes) || 0;
       if (changes < BACKFILL_BATCH) break;
