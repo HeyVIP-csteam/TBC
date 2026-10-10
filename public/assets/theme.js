@@ -5,6 +5,22 @@
   const theme = saved || (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   document.documentElement.setAttribute("data-theme", theme);
 
+  // 2026-10-10 — web fonts, added from script so they never block the
+  // first paint (used to be a render-blocking @import at the top of
+  // style.css). Guarded so the SPA shell doesn't add it twice.
+  if (!document.getElementById("hubWebFonts")) {
+    const pre = document.createElement("link");
+    pre.rel = "preconnect";
+    pre.href = "https://fonts.gstatic.com";
+    pre.crossOrigin = "anonymous";
+    const font = document.createElement("link");
+    font.id = "hubWebFonts";
+    font.rel = "stylesheet";
+    font.href = "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap";
+    document.head.appendChild(pre);
+    document.head.appendChild(font);
+  }
+
   window.initThemeToggle = function () {
     const btn = document.getElementById("themeToggle");
     if (!btn) return;

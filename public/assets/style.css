@@ -1,4 +1,7 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap");
+/* 2026-10-10 — Google Fonts @import removed from here: an @import inside a
+   stylesheet blocks rendering until fonts.googleapis.com answers (a serial
+   extra round trip on every page). theme.js now adds the same font link
+   from script, which doesn't block first paint (display=swap). */
 
 :root {
   --ink: #1b2559;
@@ -13,7 +16,7 @@
   --page-bg:
     radial-gradient(900px 500px at 90% 0%, #eaf1ff 0%, transparent 55%),
     linear-gradient(160deg, #dbe7fb 0%, #d9ceF4 45%, #cdbdf2 75%, #c4b2ee 100%);
-  --panel: rgba(255, 255, 255, 0.45);
+  --panel: rgba(255, 255, 255, 0.55);
   --panel-border: rgba(255, 255, 255, 0.6);
   --wordmark: #4338ca;
   --wordmark-gradient: linear-gradient(90deg, #4338ca, #6d5ce8, #8b7ff5, #6d5ce8, #4338ca);
@@ -23,12 +26,12 @@
      instead of showing the photo dark. */
   --sf-filter: brightness(1.4) saturate(0.85) contrast(0.95);
   --sf-shade: linear-gradient(180deg, rgba(234,241,255,0.55) 0%, rgba(217,206,244,0.62) 45%, rgba(196,178,238,0.72) 100%);
-  --sidebar-bg: rgba(255, 255, 255, 0.28);
+  --sidebar-bg: rgba(255, 255, 255, 0.36);
   --sidebar-item-bg: rgba(255, 255, 255, 0.65);
   --sidebar-item-hover: rgba(255, 255, 255, 0.85);
   --pill-bg: rgba(255, 255, 255, 0.6);
   --pill-border: rgba(255, 255, 255, 0.75);
-  --brand-row-bg: rgba(255, 255, 255, 0.3);
+  --brand-row-bg: rgba(255, 255, 255, 0.36);
   --accent-gold: #c8912f;
   --accent-glow: rgba(99, 102, 241, 0.35);
   --font-display: "Space Grotesk", "Inter", -apple-system, sans-serif;
@@ -66,7 +69,7 @@
      readable regardless of which part of the photo sits behind them. */
   --sf-filter: none;
   --sf-shade: linear-gradient(180deg, rgba(3,4,13,0.35) 0%, rgba(3,4,13,0.55) 55%, rgba(3,4,13,0.75) 100%);
-  --sidebar-bg: rgba(15, 19, 40, 0.75);
+  --sidebar-bg: rgba(15, 19, 40, 0.82);
   --sidebar-item-bg: rgba(15, 19, 40, 0.88);
   --sidebar-item-hover: rgba(28, 34, 66, 0.96);
   --pill-bg: rgba(255, 255, 255, 0.04);
@@ -239,8 +242,10 @@ a { color: inherit; text-decoration: none; }
   padding: 12px 24px;
   background: var(--panel);
   border-bottom: 1px solid var(--panel-border);
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  /* 2026-10-10 — backdrop-filter blur removed (was blur(16px) saturate(160%)).
+     Over the animated starfield it forced a full re-blur of this panel on
+     every frame: measured 24fps idle -> 59fps without it, no visible change
+     at these panel opacities. See CHANGES-2026-10-10-performance.md. */
 }
 .topbar-left { display: flex; align-items: center; gap: 10px; }
 
@@ -403,8 +408,10 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
   padding: 14px 0;
   border-bottom: 1px solid var(--panel-border);
   background: var(--brand-row-bg);
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  /* 2026-10-10 — backdrop-filter blur removed (was blur(16px) saturate(160%)).
+     Over the animated starfield it forced a full re-blur of this panel on
+     every frame: measured 24fps idle -> 59fps without it, no visible change
+     at these panel opacities. See CHANGES-2026-10-10-performance.md. */
   mask-image: linear-gradient(90deg, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%);
   -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%);
 }
@@ -1167,8 +1174,10 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
   border-right: 1px solid var(--panel-border);
   padding: 24px 16px 40px;
   overflow-y: auto;
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  /* 2026-10-10 — backdrop-filter blur removed (was blur(16px) saturate(160%)).
+     Over the animated starfield it forced a full re-blur of this panel on
+     every frame: measured 24fps idle -> 59fps without it, no visible change
+     at these panel opacities. See CHANGES-2026-10-10-performance.md. */
 }
 
 /* ---- HubNav small-screen behavior (2026-08) ---- Scoped to
@@ -2023,8 +2032,10 @@ body.subpage-fixed .topbar { flex-shrink: 0; }
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  /* 2026-10-10 — backdrop-filter blur removed (was blur(16px) saturate(160%)).
+     Over the animated starfield it forced a full re-blur of this panel on
+     every frame: measured 24fps idle -> 59fps without it, no visible change
+     at these panel opacities. See CHANGES-2026-10-10-performance.md. */
 }
 .threads-search {
   display: flex; align-items: center; gap: 8px;

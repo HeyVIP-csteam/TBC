@@ -188,7 +188,9 @@
   }
 
   load();
-  setInterval(load, POLL_MS);
+  // 2026-10-10 — skip polls in background tabs; catch up when shown again.
+  setInterval(() => { if (!document.hidden) load(); }, POLL_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
   // Lets a page that just changed something (Save/Delete on
   // announcements.html, or the rotation-speed setting in the Settings
   // tab) refresh THIS device's banner immediately instead of waiting up

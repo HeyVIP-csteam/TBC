@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TG Reply Threads</title>
-<script src="/assets/theme.js?v=c61fb537"></script>
+<script src="/assets/theme.js?v=bea0b54d"></script>
 <style>
 html {
   background-color: #090c1c;
@@ -23,7 +23,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=5ffcbdba" />
+<link rel="stylesheet" href="/assets/style.css?v=fbcd1e7e" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -32,9 +32,8 @@ html[data-theme="light"] {
 <script src="/assets/country-modules.js?v=7cb5b511"></script>
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
-<script src="/assets/announcement-banner.js?v=26c15118" defer></script>
-<script src="/assets/schemas.js?v=0d6207ba"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/twemoji.min.js"></script>
+<script src="/assets/announcement-banner.js?v=69ebab10" defer></script>
+<script src="/assets/schemas.js?v=c135f22f"></script>
 </head>
 <body class="threads-page">
   <div class="attach-lightbox" id="attachLightbox">
@@ -121,7 +120,7 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <script src="/assets/hub-nav.js?v=5cd0d791"></script>
+  <script src="/assets/hub-nav.js?v=c712b8aa"></script>
   <script src="/assets/brand-row.js?v=ea371f55"></script>
   <script>
     window.HubNav.mount("hubNavMount", {});
@@ -159,7 +158,8 @@ html[data-theme="light"] {
     // gap where the old list lingers on screen while the new fetch is
     // in flight — loadList() only swaps activeThreads/solvedThreads
     // once the new response actually arrives.
-    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => { loadList(document.getElementById("threadSearch").value); window.refreshAnnouncementBanner?.(); });
+    if (window.AgentCountry) window.AgentCountry.renderSwitcher("countrySwitcherMount", () => { loadList(document.getElementById("threadSearch").value, { reset: true }); window.refreshAnnouncementBanner?.(); });
+      renderLists(); // shows "Loading threads…" until the first response lands
       loadList();
       if (isAdmin) loadRecallLog();
       polishEmoji();
@@ -167,17 +167,27 @@ html[data-theme="light"] {
       // headcount grew (see the Cloudflare cost estimate this session) —
       // ~40% fewer refreshOpenThread calls per shift with a barely
       // noticeable difference in how "live" an open ticket feels.
+      // 2026-10-10 — polls skip while the tab is in the background (the
+      // visibilitychange handler at the bottom refreshes on return).
       pollTimer = setInterval(() => {
-        refreshOpenThread();
+        if (!document.hidden) refreshOpenThread();
       }, 10000);
       listPollTimer = setInterval(() => {
-        loadList(document.getElementById("threadSearch").value);
+        if (document.hidden) return;
+        if (!listInFlight) loadList(document.getElementById("threadSearch").value);
         if (isAdmin) loadRecallLog();
       }, 30000);
     }
 
     let activeThreads = [];
     let solvedThreads = [];
+    // List load state — see loadList()'s 2026-10-10 comment.
+    let listState = "loading"; // "loading" | "ok" | "error"
+    let listReqSeq = 0;
+    let listInFlight = false;
+    let listRetryTimer = null;
+    let listRetryDelay = 2000;
+    let openThreadRefreshInFlight = false;
     let recallEntries = [];
     let selectedId = null;
     let selectedThread = null;
@@ -932,18 +942,31 @@ html[data-theme="light"] {
       loadList(document.getElementById("threadSearch").value);
     }
 
-    function polishEmoji(root) {
-      if (window.twemoji) window.twemoji.parse(root || document.body, { folder: "svg", ext: ".svg" });
+    // 2026-10-10 — Twemoji removed. Its default image host
+    // (twemoji.maxcdn.com) died with MaxCDN, so every parse swapped each
+    // emoji for an <img> that failed and fell back to the native emoji
+    // anyway — i.e. agents already saw native emoji, while every 10s poll
+    // re-parsed the whole page and fired hundreds of doomed image
+    // requests. Kept as a no-op so the existing call sites stay valid.
+    function polishEmoji() {}
+
+    function emptyListText(tab) {
+      // 2026-10-10 — "No active threads" used to show while the list was
+      // still loading (or after a failed load), which looked like data loss.
+      if (listState === "loading") return "Loading threads…";
+      if (listState === "error") return "Couldn't load threads — retrying…";
+      return tab === "active" ? "No active threads.<br/>Submit a form to start one." : "No solved threads yet.";
     }
 
     function renderSection(tab, container, threads) {
       const emptyEl = container.querySelector(".threads-empty");
       if (!threads.length) {
+        const text = emptyListText(tab);
         if (!emptyEl) {
-          container.innerHTML = tab === "active"
-            ? '<div class="threads-empty">No active threads.<br/>Submit a form to start one.</div>'
-            : '<div class="threads-empty">No solved threads yet.</div>';
+          container.innerHTML = `<div class="threads-empty">${text}</div>`;
           virtualScaffolds[tab].sizerEl = null;
+        } else if (emptyEl.innerHTML !== text) {
+          emptyEl.innerHTML = text;
         }
         return;
       }
@@ -1002,7 +1025,33 @@ html[data-theme="light"] {
       updateAllThreadsCard();
     }
 
-    async function loadList(q) {
+    // 2026-10-10 — list load state + recovery. A failed/timed-out request
+    // used to be swallowed silently (empty `catch {}`), leaving
+    // "No active threads" on screen until the next 30s poll. Now: show
+    // the real state, retry quickly with backoff, keep the last good list
+    // on screen during a failed background refresh, and ignore responses
+    // that arrive after a newer request (country switch / search).
+    // (list state variables are declared near the top — see activeThreads)
+
+    function scheduleListRetry() {
+      clearTimeout(listRetryTimer);
+      listRetryTimer = setTimeout(() => {
+        if (!document.body.contains(threadsSidebarEl)) return; // view was left (SPA)
+        const box = document.getElementById("threadSearch");
+        loadList(box ? box.value : "");
+      }, listRetryDelay);
+      listRetryDelay = Math.min(listRetryDelay * 2, 30000);
+    }
+
+    async function loadList(q, opts) {
+      const seq = ++listReqSeq;
+      if (opts && opts.reset) {
+        listState = "loading";
+        activeThreads = [];
+        solvedThreads = [];
+        renderLists();
+      }
+      listInFlight = true;
       try {
         // 2026-09-04 — now also sends the currently selected country as
         // a query param, so the SERVER only ever returns that one
@@ -1020,13 +1069,27 @@ html[data-theme="light"] {
         if (country && !(window.AgentCountry && AgentCountry.isAll(country))) params.set("country", country);
         const qs = params.toString();
         const res = await authFetch(`/api/threads${qs ? "?" + qs : ""}`, { cache: "no-store" });
-        const data = await res.json();
-        if (!data.ok) return;
+        const data = await res.json().catch(() => null);
+        if (seq !== listReqSeq) return; // superseded by a newer request
+        if (!data || !data.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+        listState = "ok";
+        listRetryDelay = 2000;
+        clearTimeout(listRetryTimer);
         activeThreads = data.active || [];
         solvedThreads = data.solved || [];
         applyLocalPatches();
         renderLists();
-      } catch {}
+      } catch (e) {
+        if (seq !== listReqSeq) return;
+        console.warn("[threads] list load failed:", e && e.message);
+        if (listState !== "ok") {
+          listState = "error";
+          renderLists();
+        }
+        scheduleListRetry();
+      } finally {
+        if (seq === listReqSeq) listInFlight = false;
+      }
     }
 
     // 2026-10-10 — opening a chat room used to show nothing at all until
@@ -1134,6 +1197,8 @@ html[data-theme="light"] {
       // underlying issue (stale sidebar cache, deleted thread, etc.) is
       // resolved.
       if (!selectedId || !selectedThread) return;
+      if (openThreadRefreshInFlight) return; // previous poll still waiting on a slow server
+      openThreadRefreshInFlight = true;
       const refreshingId = selectedId;
       try {
         const res = await authFetch(`/api/threads/${selectedId}?country=${encodeURIComponent((selectedThread && selectedThread.country) || "")}`, { cache: "no-store" });
@@ -1146,7 +1211,10 @@ html[data-theme="light"] {
         markSeen(selectedId, selectedThread.messages.length);
         renderLists();
         loadMentionCandidatesForThread(selectedThread);
-      } catch {}
+      } catch {
+      } finally {
+        openThreadRefreshInFlight = false;
+      }
     }
 
     function buildHeaderHTML(t) {
