@@ -1134,8 +1134,23 @@ html[data-theme="light"] {
       polishEmoji(main);
     }
 
+    // GET one thread with a timeout: a request stuck behind a dead
+    // connection used to leave "Loading conversation…" up forever.
+    const OPEN_TIMEOUT_MS = 15000;
+    async function fetchThreadDetail(id, country) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), OPEN_TIMEOUT_MS);
+      try {
+        const res = await authFetch(`/api/threads/${id}?country=${encodeURIComponent(country)}`, { cache: "no-store", signal: ctrl.signal });
+        return await res.json();
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     async function openThread(id, country) {
       const seq = ++openSeq;
+      if (id !== selectedId) cancelPendingAttachments(); // free connections for this ticket
       selectedId = id;
       renderLists();
       if (!country) {
@@ -1151,8 +1166,17 @@ html[data-theme="light"] {
         renderLoadingDetail(id, country);
       }
       try {
-        const res = await authFetch(`/api/threads/${id}?country=${encodeURIComponent(country)}`, { cache: "no-store" });
-        const data = await res.json();
+        let data;
+        try {
+          data = await fetchThreadDetail(id, country);
+        } catch (e) {
+          if (seq !== openSeq) return;
+          if (!(e && e.name === "AbortError")) throw e;
+          // Timed out once — say so and retry automatically.
+          const ph = main.querySelector(".threads-placeholder");
+          if (ph) ph.textContent = "Still loading — retrying…";
+          data = await fetchThreadDetail(id, country);
+        }
         if (seq !== openSeq) return; // agent already opened another thread
         if (!data.ok) {
           threadDetailCache.delete(`${country}:${id}`);
@@ -1168,7 +1192,10 @@ html[data-theme="light"] {
         renderLists();
       } catch {
         if (seq !== openSeq) return;
-        if (!cached) main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread — check your connection.</div>`;
+        if (!cached) {
+          main.innerHTML = `<div class="threads-placeholder">Couldn't load this thread. <button type="button" class="icon-btn labeled" id="retryOpenBtn">🔄 Retry</button></div>`;
+          document.getElementById("retryOpenBtn")?.addEventListener("click", () => openThread(id, country));
+        }
       }
     }
 
@@ -2221,27 +2248,79 @@ html[data-theme="light"] {
 
     const attachmentCache = new Map();
 
-    function getAttachmentUrl(fileId, name, country) {
+    // 2026-10-10 — attachment loading no longer starves everything else.
+    // Each attachment is proxied from Telegram and can take seconds; a
+    // ticket with 6+ images used to occupy every browser connection to
+    // this site (6 per host on HTTP/1.1, e.g. behind office proxies), so
+    // clicking the NEXT ticket sat on "Loading conversation…" until those
+    // images finished. Now: at most ATTACH_MAX_PARALLEL downloads at once,
+    // and switching tickets cancels the previous ticket's unfinished ones
+    // (they simply load again if that ticket is reopened).
+    const ATTACH_MAX_PARALLEL = 2;
+    let attachRunning = 0;
+    const attachWaiting = [];
+    let attachController = new AbortController();
+
+    function cancelPendingAttachments() {
+      attachController.abort();
+      attachController = new AbortController();
+    }
+
+    function acquireAttachSlot(signal, urgent) {
+      return new Promise((resolve, reject) => {
+        const job = { resolve, reject, signal };
+        if (urgent) attachWaiting.unshift(job); else attachWaiting.push(job);
+        signal.addEventListener("abort", () => {
+          const i = attachWaiting.indexOf(job);
+          if (i >= 0) { attachWaiting.splice(i, 1); reject(new DOMException("cancelled", "AbortError")); }
+        }, { once: true });
+        pumpAttachSlots();
+      });
+    }
+    function pumpAttachSlots() {
+      while (attachRunning < ATTACH_MAX_PARALLEL && attachWaiting.length) {
+        const job = attachWaiting.shift();
+        if (job.signal.aborted) { job.reject(new DOMException("cancelled", "AbortError")); continue; }
+        attachRunning++;
+        job.resolve();
+      }
+    }
+    function releaseAttachSlot() {
+      attachRunning--;
+      pumpAttachSlots();
+    }
+
+    function getAttachmentUrl(fileId, name, country, urgent) {
       const cacheKey = `${country || ""}:${fileId}`;
       if (!attachmentCache.has(cacheKey)) {
-        attachmentCache.set(cacheKey, (async () => {
-          const params = new URLSearchParams();
-          if (name) params.set("name", name);
-          if (country) params.set("country", country);
-          const qs = params.toString() ? `?${params.toString()}` : "";
-          const res = await authFetch(`/api/attachment/${encodeURIComponent(fileId)}${qs}`);
-          if (!res.ok) {
-            const msg = await res.text().catch(() => "");
-            throw new Error(msg || "Couldn't load this attachment.");
+        // The lightbox (urgent) isn't tied to the current ticket's cancel signal.
+        const signal = urgent ? new AbortController().signal : attachController.signal;
+        const p = (async () => {
+          await acquireAttachSlot(signal, urgent);
+          try {
+            const params = new URLSearchParams();
+            if (name) params.set("name", name);
+            if (country) params.set("country", country);
+            const qs = params.toString() ? `?${params.toString()}` : "";
+            const res = await authFetch(`/api/attachment/${encodeURIComponent(fileId)}${qs}`, { signal });
+            if (!res.ok) {
+              const msg = await res.text().catch(() => "");
+              throw new Error(msg || "Couldn't load this attachment.");
+            }
+            const blob = await res.blob();
+            let type = blob.type || "";
+            if (!type || type === "application/octet-stream") {
+              const sniffed = await sniffTypeFromBlob(blob).catch(() => null);
+              if (sniffed) type = sniffed;
+            }
+            return { url: URL.createObjectURL(blob), type };
+          } finally {
+            releaseAttachSlot();
           }
-          const blob = await res.blob();
-          let type = blob.type || "";
-          if (!type || type === "application/octet-stream") {
-            const sniffed = await sniffTypeFromBlob(blob).catch(() => null);
-            if (sniffed) type = sniffed;
-          }
-          return { url: URL.createObjectURL(blob), type };
-        })());
+        })();
+        // Never cache a failure/cancellation — the next render retries it.
+        p.catch(() => { if (attachmentCache.get(cacheKey) === p) attachmentCache.delete(cacheKey); });
+        attachmentCache.set(cacheKey, p);
       }
       return attachmentCache.get(cacheKey);
     }
@@ -2275,6 +2354,7 @@ html[data-theme="light"] {
           if (media) media.addEventListener("click", () => viewAttachment(fileId, name, country));
         }).catch((err) => {
           if (!document.body.contains(slot)) return;
+          if (err && err.name === "AbortError") { slot.removeAttribute("data-filled"); return; }
           slot.innerHTML = `<div class="inline-attach-error" title="${escapeAttr(String((err && err.message) || ""))}">⚠️ ${escapeHtml(String((err && err.message) || "Couldn't load this attachment."))}</div>`;
         });
       });
@@ -2284,7 +2364,7 @@ html[data-theme="light"] {
       attachLightbox.classList.add("is-open");
       attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Loading…</div>`;
       try {
-        const { url, type } = await getAttachmentUrl(fileId, name, country || (selectedThread && selectedThread.country));
+        const { url, type } = await getAttachmentUrl(fileId, name, country || (selectedThread && selectedThread.country), true);
         if (type.startsWith("video/")) {
           attachLightboxBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
         } else if (type.startsWith("image/")) {
