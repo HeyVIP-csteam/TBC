@@ -99,7 +99,7 @@
  */
 
 import {
-  ensureThreadListSchema, upsertListRowStmt, deleteListRowStmt,
+  ensureThreadListSchema, listUpsertStmts, listDeleteStmts,
   isThreadListReady, queryThreadList, runThreadListBackfillStep, recoverFromMissingListTable,
 } from "./threadList.js";
 
@@ -157,7 +157,7 @@ async function d1UpsertWithRetry(store, id, json, attempts = 4) {
         `INSERT INTO threads (id, data) VALUES (?1, ?2)
          ON CONFLICT(id) DO UPDATE SET data = excluded.data`
       ).bind(id, json);
-      if (withList) await db.batch([upsert, upsertListRowStmt(db, id)]);
+      if (withList) await db.batch([upsert, ...listUpsertStmts(db, id)]);
       else await upsert.run();
       return;
     } catch (e) {
@@ -309,7 +309,7 @@ async function purgeThread(store, thread) {
     deletes.push(
       db.prepare(`DELETE FROM threads WHERE id = ?1`).bind(thread.id).run(),
       db.prepare(`DELETE FROM message_index WHERE thread_id = ?1`).bind(thread.id).run(),
-      deleteListRowStmt(db, thread.id).run().catch(() => {})
+      db.batch(listDeleteStmts(db, thread.id)).catch(() => {})
     );
   }
   await Promise.all(deletes);
@@ -541,11 +541,11 @@ async function healLegacyIntoD1(store, legacyThread, raw) {
   ];
   const withList = await ensureThreadListSchema(store);
   try {
-    await db.batch(withList ? [...stmts, upsertListRowStmt(db, legacyThread.id)] : stmts);
+    await db.batch(withList ? [...stmts, ...listUpsertStmts(db, legacyThread.id)] : stmts);
   } catch (e) {
     if (!recoverFromMissingListTable(store, e)) throw e;
     const again = await ensureThreadListSchema(store);
-    await db.batch(again ? [...stmts, upsertListRowStmt(db, legacyThread.id)] : stmts);
+    await db.batch(again ? [...stmts, ...listUpsertStmts(db, legacyThread.id)] : stmts);
   }
 }
 
@@ -1158,13 +1158,13 @@ export async function appendMessage(store, threadId, message) {
     }
     let listRecovered = false;
     await saveWithRetry(async () => {
-      const stmts = (await ensureThreadListSchema(store)) ? [...appendStmts, upsertListRowStmt(db, threadId)] : appendStmts;
+      const stmts = (await ensureThreadListSchema(store)) ? [...appendStmts, ...listUpsertStmts(db, threadId)] : appendStmts;
       try {
         return await db.batch(stmts);
       } catch (e) {
         if (listRecovered || !recoverFromMissingListTable(store, e)) throw e;
         listRecovered = true;
-        const again = (await ensureThreadListSchema(store)) ? [...appendStmts, upsertListRowStmt(db, threadId)] : appendStmts;
+        const again = (await ensureThreadListSchema(store)) ? [...appendStmts, ...listUpsertStmts(db, threadId)] : appendStmts;
         return db.batch(again);
       }
     }, `thread ${threadId} append (D1)`);

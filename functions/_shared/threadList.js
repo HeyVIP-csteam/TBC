@@ -137,6 +137,7 @@ export function recoverFromMissingListTable(store, err) {
   if (!/no such table: thread_list/i.test(msg)) return false;
   schemaPromise.delete(store.country);
   readyMemo.delete(store.country);
+  listMemo.delete(store.country);
   return true;
 }
 
@@ -148,6 +149,34 @@ export function upsertListRowStmt(db, id) {
 export function deleteListRowStmt(db, id) {
   return db.prepare(`DELETE FROM thread_list WHERE id = ?1`).bind(id);
 }
+
+// ---- change version (keeps D1 "rows read" low) ---------------------------
+// D1 bills by rows SCANNED. Re-scanning the whole list on every agent's
+// 15s/30s poll would be ~(agents × polls × threads) rows — tens of
+// billions a month. Instead every change to thread_list also bumps a
+// per-country version number (same transaction), and queryThreadList()
+// reads just that one row: if it hasn't moved, the isolate's in-memory
+// copy of the list is returned as-is. A full scan only happens when a
+// ticket actually changed, and its result is shared by every agent whose
+// poll lands on the same isolate.
+export function bumpListVersionStmt(db) {
+  return db.prepare(
+    `INSERT INTO thread_list_meta (k, v) VALUES ('version', '1')
+     ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(v AS INTEGER) + 1 AS TEXT)`
+  );
+}
+
+/** [upsert row, bump version] — use with db.batch(). */
+export function listUpsertStmts(db, id) {
+  return [upsertListRowStmt(db, id), bumpListVersionStmt(db)];
+}
+
+/** [delete row, bump version] — use with db.batch(). */
+export function listDeleteStmts(db, id) {
+  return [deleteListRowStmt(db, id), bumpListVersionStmt(db)];
+}
+
+const listMemo = new Map(); // country -> { version, rows }
 
 /** True once this country's thread_list is complete and safe to serve. */
 export async function isThreadListReady(store) {
@@ -168,6 +197,18 @@ export async function isThreadListReady(store) {
 
 /** Every non-deleted thread, newest activity first, in summarize()'s shape. */
 export async function queryThreadList(store) {
+  const vrow = await store.db.prepare(`SELECT v FROM thread_list_meta WHERE k = 'version'`).first();
+  const version = vrow ? String(vrow.v) : "0";
+  const memo = listMemo.get(store.country);
+  if (memo && memo.version === version) return memo.rows; // 1 row read instead of the whole list
+  const rows = await scanThreadList(store);
+  // Version read BEFORE the scan: if a write slipped in between, the next
+  // poll sees a newer version and simply scans again (never serves stale).
+  listMemo.set(store.country, { version, rows });
+  return rows;
+}
+
+async function scanThreadList(store) {
   const { results } = await store.db
     .prepare(
       `SELECT id, module, module_name, icon, accent, brand, brand_id, title, submitter, submitted_at,
@@ -250,7 +291,7 @@ export async function runThreadListBackfillStep(store, healFn, { kvPageSize = 30
 
     // phase 1
     for (let i = 0; i < 5; i++) {
-      const res = await db.prepare(UPSERT_MISSING_SQL).run();
+      const [res] = await db.batch([db.prepare(UPSERT_MISSING_SQL), bumpListVersionStmt(db)]);
       const changes = (res && res.meta && res.meta.changes) || 0;
       if (changes < BACKFILL_BATCH) break;
     }
@@ -288,8 +329,7 @@ export async function runThreadListBackfillStep(store, healFn, { kvPageSize = 30
 
     if (page.list_complete) {
       // Catch anything written between phase 1 and now, then flip the switch.
-      await db.prepare(UPSERT_MISSING_SQL).run();
-      await db.batch([setMetaStmt(db, "kv_cursor", ""), setMetaStmt(db, "ready", "1")]);
+      await db.batch([db.prepare(UPSERT_MISSING_SQL), bumpListVersionStmt(db), setMetaStmt(db, "kv_cursor", ""), setMetaStmt(db, "ready", "1")]);
       readyMemo.add(country);
       console.log(`[threadList] ${country}: thread_list backfill complete`);
       return true;
@@ -305,4 +345,5 @@ export async function runThreadListBackfillStep(store, healFn, { kvPageSize = 30
 export function __resetThreadListMemo() {
   schemaPromise.clear();
   readyMemo.clear();
+  listMemo.clear();
 }
