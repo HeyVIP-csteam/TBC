@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=701d98dc" />
+<link rel="stylesheet" href="/assets/style.css?v=67bbfb2c" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -77,37 +77,57 @@ html[data-theme="light"] {
   <!-- Logo image editing removed for now (file upload wasn't working) — being
        revisited later; brand pills just show colored initials until then. -->
 
+  <!-- Account Management / Integration Portal popup — redesigned 2026-10-12
+       (same frame as Active Agents). Every id the script uses is unchanged;
+       the header icon + subtitle are set per mode by setAcctHeader(). -->
   <div class="edit-modal-backdrop" id="acctModalBackdrop">
-    <div class="edit-modal">
-      <button type="button" class="modal-close-btn" id="acctModalClose" title="Close" aria-label="Close">✕</button>
-      <div class="edit-modal-header-row">
-        <p class="edit-modal-title" id="acctModalTitle">Account Management</p>
-        <input type="text" id="acctProfileSearch" class="acct-profile-search" placeholder="🔍 Search username, full name, PSD…" autocomplete="off" style="display:none;" />
-        <div class="acct-profile-filters-group" id="acctProfileFiltersGroup">
-          <select id="acctProfileCountryFilter" class="acct-role-filter" style="display:none;">
-            <option value="all">All currencies</option>
-          </select>
-          <select id="acctProfileRoleFilter" class="acct-role-filter" style="display:none;">
-            <option value="all">All roles</option>
-            <option value="agent">Agent</option>
-            <option value="senior">Senior</option>
-            <option value="admin">Admin</option>
-            <option value="superadmin">SuperAdmin</option>
-          </select>
+    <div class="edit-modal am-modal" role="dialog" aria-modal="true" aria-labelledby="acctModalTitle">
+      <header class="aa-head am-head">
+        <div class="aa-head-icon" id="acctModalIcon" aria-hidden="true"></div>
+        <div class="aa-head-text">
+          <h2 class="edit-modal-title" id="acctModalTitle">Account Management</h2>
+          <p id="acctModalSub"></p>
         </div>
-        <div class="ipa-header-actions" id="ipaHeaderActions" style="display:none;">
-          <button type="button" class="ipa-header-btn" id="ipaManageOfficesBtn">+ Manage offices</button>
-          <button type="button" class="ipa-header-btn" id="ipaRecordBtn">🕒 Record</button>
+        <div class="am-head-tools">
+          <div class="edit-modal-header-row">
+            <input type="text" id="acctProfileSearch" class="acct-profile-search" placeholder="Search username, full name, PSD…" autocomplete="off" style="display:none;" />
+            <div class="acct-profile-filters-group" id="acctProfileFiltersGroup">
+              <select id="acctProfileCountryFilter" class="acct-role-filter" style="display:none;">
+                <option value="all">All currencies</option>
+              </select>
+              <select id="acctProfileRoleFilter" class="acct-role-filter" style="display:none;">
+                <option value="all">All roles</option>
+                <option value="agent">Agent</option>
+                <option value="senior">Senior</option>
+                <option value="admin">Admin</option>
+                <option value="superadmin">SuperAdmin</option>
+              </select>
+            </div>
+            <div class="ipa-header-actions" id="ipaHeaderActions" style="display:none;">
+              <button type="button" class="ipa-header-btn" id="ipaManageOfficesBtn">+ Manage offices</button>
+              <button type="button" class="ipa-header-btn" id="ipaRecordBtn">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                Record
+              </button>
+            </div>
+          </div>
         </div>
+        <button type="button" class="modal-close-btn" id="acctModalClose" title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div class="am-body">
+        <div id="acctModalBody"></div>
       </div>
-      <div id="acctModalBody"></div>
+      <footer class="am-foot">
+        <p class="edit-modal-note" id="acctModalNote"></p>
+        <div class="edit-modal-actions" id="acctModalActions">
+          <button type="button" class="btn-submit" id="acctModalSave">Save</button>
+        </div>
+      </footer>
       <div class="ipa-popover-scrim" id="ipaPopoverScrim" style="display:none;"></div>
       <div class="ipa-popover" id="ipaOfficesPopover" style="display:none;"></div>
       <div class="ipa-popover" id="ipaRecordPopover" style="display:none;"></div>
-      <p class="edit-modal-note" id="acctModalNote"></p>
-      <div class="edit-modal-actions" id="acctModalActions">
-        <button type="button" class="btn-submit" id="acctModalSave">Save</button>
-      </div>
     </div>
   </div>
 
@@ -992,10 +1012,61 @@ html[data-theme="light"] {
       return `${days}d ago`;
     }
 
+    // 2026-10-12 redesign — header icon + one-line subtitle per panel, a
+    // spinner while loading, and an error state if a load throws (before,
+    // a network error left the panel on "Loading…" forever). Visual only.
+    const AM_ICON = {
+      key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L20 3M17 6l3 3M14.5 8.5l2 2"/>',
+      send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
+      sheet: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>',
+      chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+      link: '<path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/>',
+      globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+      ticket: '<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v12" stroke-dasharray="2 2"/>',
+      userPlus: '<path d="M15 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/>',
+      shield: '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/>',
+      gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+      lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+      id: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.5 16a3.5 3.5 0 0 1 7 0M15 10h3M15 13h3"/>',
+    };
+    const AM_HEADER = {
+      bottoken: ["key", "Per-country Telegram bot credentials · write-only"],
+      tgroutes: ["send", "Telegram chat & topic each brand's tickets are posted to"],
+      issuesheets: ["sheet", "Google Sheet & tab each submission is written to"],
+      depositsheets: ["chart", "Sheets used by Deposit Issue search and Deposit Backup"],
+      bettinglinks: ["link", "Links on the HeyVIP Betting Rules home card"],
+      weblink: ["globe", "Link each brand pill opens on the Home page"],
+      promosheet: ["ticket", "Shared sheet searched by Promo Code Search"],
+      create: ["userPlus", "New staff account — role, office and access"],
+      whitelist: ["shield", "Office IP allow-list, pending requests and blocks"],
+      settings: ["gear", "Mention backfill and announcement rotation"],
+      reset: ["lock", null],
+      profile: ["id", "All staff accounts — click a username to edit"],
+    };
+    const AM_LOADING_HTML = '<div class="am-state"><span class="aa-spinner" aria-hidden="true"></span><span>Loading…</span></div>';
+    function setAcctHeader(mode) {
+      const [icon, sub] = AM_HEADER[mode] || ["id", ""];
+      acctBackdrop.querySelector(".edit-modal").dataset.mode = mode;
+      document.getElementById("acctModalIcon").innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${AM_ICON[icon]}</svg>`;
+      document.getElementById("acctModalSub").textContent = mode === "reset"
+        ? (isSenior ? "Reset a password for yourself or a lower-ranked account" : "Change your own password")
+        : (sub || "");
+    }
+
     async function openAcctModal(mode) {
+      try {
+        await openAcctModalInner(mode);
+      } catch (e) {
+        if (acctMode !== mode) return; // user already switched panels
+        acctBody.innerHTML = `<div class="am-state"><span class="aa-state-icon" style="color:var(--aa-danger)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg></span><span>Couldn't load this panel</span><small style="color:var(--aa-ink-3);font-weight:500;">${acctEsc((e && e.message) || "Network error")} — close and open it again.</small></div>`;
+      }
+    }
+
+    async function openAcctModalInner(mode) {
       acctMode = mode;
       setAcctNote("");
-      acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
+      setAcctHeader(mode);
+      acctBody.innerHTML = AM_LOADING_HTML;
       acctBackdrop.classList.add("is-open");
       const modalEl = acctBackdrop.querySelector(".edit-modal");
       modalEl.classList.toggle("wide", mode === "profile" || mode === "tgroutes" || mode === "depositsheets" || mode === "settings" || mode === "whitelist" || mode === "bettinglinks" || mode === "weblink" || mode === "promosheet" || mode === "issuesheets" || mode === "bottoken");
@@ -1904,7 +1975,7 @@ html[data-theme="light"] {
     let acctWebLinkCountriesToShow = [];
 
     async function loadWebLinks() {
-      acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
+      acctBody.innerHTML = AM_LOADING_HTML;
       try {
         const res = await fetch("/api/brand-config");
         const data = await res.json();
@@ -2050,7 +2121,7 @@ html[data-theme="light"] {
     let acctPromoSheetData = null; // { sheetId, tabNames, isOverride }
 
     async function loadPromoSheet() {
-      acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
+      acctBody.innerHTML = AM_LOADING_HTML;
       const res = await window.AgentAuth.authFetch("/api/admin/promo-sheet");
       const data = await res.json();
       if (!data.ok) {
@@ -2165,7 +2236,7 @@ html[data-theme="light"] {
 
     async function loadBotTokenStatusForSelected() {
       const country = acctBotTokenSelectedCountry;
-      acctBody.innerHTML = '<p class="edit-modal-note">Loading…</p>';
+      acctBody.innerHTML = AM_LOADING_HTML;
       try {
         const res = await window.AgentAuth.authFetch(`/api/admin/bot-token?country=${encodeURIComponent(country)}`);
         const data = await res.json();
@@ -2185,11 +2256,11 @@ html[data-theme="light"] {
     // a while ago" without requiring a blind re-paste to find out.
     function botTokenStatusLineHtml(status) {
       if (!status || !status.configured) {
-        return `<p class="edit-modal-note" style="opacity:0.6; margin-top:6px; font-size:11.5px;">Not set here — using the Cloudflare secret default.</p>`;
+        return `<p class="edit-modal-note bt-status">Not set here — using the Cloudflare secret default.</p>`;
       }
       const when = status.updatedAt ? new Date(status.updatedAt).toLocaleString() : "unknown time";
       const who = status.updatedBy ? acctEsc(status.updatedBy) : "unknown";
-      return `<p class="edit-modal-note" style="opacity:0.75; margin-top:6px; font-size:11.5px;">Configured, ending in <code>••${acctEsc(status.last4 || "????")}</code> — set ${acctEsc(when)} by ${who}</p>`;
+      return `<p class="edit-modal-note bt-status">Configured, ending in <code>••${acctEsc(status.last4 || "????")}</code> — set ${acctEsc(when)} by ${who}</p>`;
     }
 
     // Live webhook health banner (2026-08-30) — this is the piece that
@@ -2204,28 +2275,28 @@ html[data-theme="light"] {
     // fetchWebhookInfo() shape server-side, so one renderer covers both.
     function botTokenWebhookInfoHtml(info, expectedUrl) {
       if (!info) {
-        return `<p class="edit-modal-note" style="opacity:0.6; margin-top:2px; font-size:11.5px;">No bot token configured for this country yet — nothing to check.</p>`;
+        return `<div class="bt-webhook"><div class="bt-webhook-title">Webhook status</div><p>No bot token configured for this country yet — nothing to check.</p></div>`;
       }
       if (!info.ok) {
-        return `<p class="edit-modal-note err" style="margin-top:2px; font-size:11.5px;">Couldn't read webhook status from Telegram: ${acctEsc(info.error || "unknown error")}</p>`;
+        return `<div class="bt-webhook"><div class="bt-webhook-title">Webhook status</div><p class="bt-bad">Couldn't read webhook status from Telegram: ${acctEsc(info.error || "unknown error")}</p></div>`;
       }
       const registeredUrl = info.url || "";
       const urlMatches = registeredUrl === expectedUrl;
       const urlLine = registeredUrl
-        ? `<code style="font-size:11px; word-break:break-all;">${acctEsc(registeredUrl)}</code>${urlMatches ? "" : ` <span style="color:#f87171;">— does not match the expected ${acctEsc(expectedUrl)}, re-save to fix</span>`}`
-        : `<span style="color:#f87171;">not registered — no webhook URL on file with Telegram at all</span>`;
+        ? `<code class="bt-url">${acctEsc(registeredUrl)}</code>${urlMatches ? ' <span class="bt-ok">✓ matches</span>' : ` <span class="bt-bad">— does not match the expected ${acctEsc(expectedUrl)}, re-save to fix</span>`}`
+        : `<span class="bt-bad">not registered — no webhook URL on file with Telegram at all</span>`;
       const pending = info.pendingUpdateCount || 0;
       const pendingLine = pending > 0
-        ? `<span style="color:#fbbf24;">${pending} update${pending === 1 ? "" : "s"} waiting to be delivered</span>`
-        : `<span style="color:#34d399;">0 pending</span>`;
+        ? `<span class="bt-warn">${pending} update${pending === 1 ? "" : "s"} waiting to be delivered</span>`
+        : `<span class="bt-ok">0 pending</span>`;
       const errorLine = info.lastErrorMessage
-        ? `<p class="edit-modal-note" style="opacity:0.85; margin-top:4px; font-size:11.5px; color:#f87171;">Last delivery error (${info.lastErrorDate ? new Date(info.lastErrorDate).toLocaleString() : "unknown time"}): ${acctEsc(info.lastErrorMessage)}</p>`
+        ? `<p class="bt-bad">Last delivery error (${info.lastErrorDate ? new Date(info.lastErrorDate).toLocaleString() : "unknown time"}): ${acctEsc(info.lastErrorMessage)}</p>`
         : "";
       return `
-        <div style="margin-top:2px; margin-bottom:12px; padding:10px 12px; border:1px solid var(--panel-border); border-radius:8px; background:rgba(255,255,255,0.03);">
-          <div class="edit-modal-note" style="font-size:11.5px; margin-bottom:4px;"><strong>Webhook status (live from Telegram):</strong></div>
-          <p class="edit-modal-note" style="opacity:0.85; margin:2px 0; font-size:11.5px;">Registered URL: ${urlLine}</p>
-          <p class="edit-modal-note" style="opacity:0.85; margin:2px 0; font-size:11.5px;">${pendingLine}</p>
+        <div class="bt-webhook">
+          <div class="bt-webhook-title">Webhook status · live from Telegram</div>
+          <p>Registered URL: ${urlLine}</p>
+          <p>${pendingLine}</p>
           ${errorLine}
         </div>`;
     }
@@ -2264,39 +2335,39 @@ html[data-theme="light"] {
         const expectedWebhookUrl = `${location.origin}/api/telegram-webhook/${country.toLowerCase()}`;
         rightPanelHtml = `
           <div class="tgroute-row" data-country="${acctEsc(country)}">
-            <div class="tgroute-mod-name" style="margin-bottom:14px;">🔐 ${acctEsc(countryName)} (${acctEsc(country)})</div>
+            <div class="tgroute-mod-name bt-title">🔐 ${acctEsc(countryName)} <span class="brand-toggle-country">${acctEsc(country)}</span></div>
             ${botTokenWebhookInfoHtml(d.webhookInfo, expectedWebhookUrl)}
-            <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px;">
+            <div class="bt-grid">
               <div>
-                <div class="tgroute-mod-name" style="font-size:13px;">Bot Token</div>
+                <div class="bt-label">Bot Token</div>
                 <div class="tgroute-fields">
-                  <input type="password" id="botTokenInput" placeholder="Paste a new Bot Token" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%;" />
+                  <input type="password" id="botTokenInput" placeholder="Paste a new Bot Token" ${canEditThis ? "" : "disabled"} autocomplete="off" />
                 </div>
                 ${botTokenStatusLineHtml(s)}
               </div>
               <div>
-                <div class="tgroute-mod-name" style="font-size:13px;">Webhook Secret</div>
+                <div class="bt-label">Webhook Secret</div>
                 <div class="tgroute-fields">
-                  <input type="password" id="webhookSecretInput" placeholder="Paste the webhook secret" ${canEditThis ? "" : "disabled"} autocomplete="off" style="width:100%;" />
+                  <input type="password" id="webhookSecretInput" placeholder="Paste the webhook secret" ${canEditThis ? "" : "disabled"} autocomplete="off" />
                 </div>
                 ${botTokenStatusLineHtml(ws)}
               </div>
             </div>
 
-            ${canEditThis ? `<div class="tgroute-row-actions" style="margin-top:14px;">
+            ${canEditThis ? `<div class="tgroute-row-actions bt-actions">
               <button type="button" class="tgroute-action-btn" id="botTokenSaveBoth">Save</button>
               ${canClear ? '<button type="button" class="tgroute-action-btn tgroute-action-secondary" id="botTokenClearBoth">Revert both to Cloudflare secrets</button>' : ""}
             </div>` : '<p class="edit-modal-note">View only.</p>'}
-            <p class="edit-modal-note" style="opacity:0.75; margin-top:10px;">Leave a field blank to keep what's already configured for it. Saving re-registers the Telegram webhook automatically.</p>
-            <details class="bot-token-manual-fallback" style="margin-top:10px;">
-              <summary style="cursor:pointer; color:var(--ink-soft); font-size:12px;">If Save's automatic webhook registration fails, run this manually instead</summary>
-              <p class="edit-modal-note" style="opacity:0.75; margin-top:6px; margin-bottom:4px;">Paste your own Bot Token and Webhook Secret into the URL below (same values as the fields above), then open it in a browser tab. A response containing <code>"ok":true</code> means it worked — the Bot Token itself still needs to be saved above separately, this URL only tells Telegram where to send messages.</p>
-              <code style="display:block; font-family:var(--font-mono); font-size:11.5px; line-height:1.5; color:var(--ink); background:rgba(255,255,255,0.04); border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px; word-break:break-all; user-select:all;">https://api.telegram.org/bot&lt;BOT_TOKEN&gt;/setWebhook?url=${acctEsc(location.origin)}/api/telegram-webhook/${acctEsc(country.toLowerCase())}&amp;secret_token=&lt;WEBHOOK_SECRET&gt;</code>
-              <p class="edit-modal-note" style="opacity:0.6; margin-top:8px; margin-bottom:2px; font-size:11.5px;">Example (with a real token and secret filled in):</p>
-              <code style="display:block; font-family:var(--font-mono); font-size:11.5px; line-height:1.5; color:var(--ink-soft); background:rgba(255,255,255,0.02); border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px; word-break:break-all; user-select:all;">https://api.telegram.org/bot123:xxxxxxxxxx/setWebhook?url=${acctEsc(location.origin)}/api/telegram-webhook/${acctEsc(country.toLowerCase())}&amp;secret_token=tbcxxxx</code>
-              <p class="edit-modal-note" style="opacity:0.75; margin-top:10px; margin-bottom:2px;">A successful run looks like this — <code>"ok":true</code> confirms Telegram accepted the registration and will now deliver replies to this webhook:</p>
-              <code style="display:block; font-family:var(--font-mono); font-size:11.5px; line-height:1.5; color:#34d399; background:rgba(255,255,255,0.04); border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px; word-break:break-all;">{"ok":true,"result":true,"description":"Webhook was set"}</code>
-              <p class="edit-modal-note" style="opacity:0.6; margin-top:6px;">If <code>"ok"</code> is <code>false</code> instead, the response's <code>"description"</code> field explains why (wrong token, malformed URL, etc.) — fix that and reopen the URL to retry.</p>
+            <p class="edit-modal-note bt-help">Leave a field blank to keep what's already configured for it. Saving re-registers the Telegram webhook automatically.</p>
+            <details class="bot-token-manual-fallback">
+              <summary>If Save's automatic webhook registration fails, run this manually instead</summary>
+              <p class="edit-modal-note">Paste your own Bot Token and Webhook Secret into the URL below (same values as the fields above), then open it in a browser tab. A response containing <code>"ok":true</code> means it worked — the Bot Token itself still needs to be saved above separately, this URL only tells Telegram where to send messages.</p>
+              <code class="bt-code">https://api.telegram.org/bot&lt;BOT_TOKEN&gt;/setWebhook?url=${acctEsc(location.origin)}/api/telegram-webhook/${acctEsc(country.toLowerCase())}&amp;secret_token=&lt;WEBHOOK_SECRET&gt;</code>
+              <p class="edit-modal-note">Example (with a real token and secret filled in):</p>
+              <code class="bt-code is-muted">https://api.telegram.org/bot123:xxxxxxxxxx/setWebhook?url=${acctEsc(location.origin)}/api/telegram-webhook/${acctEsc(country.toLowerCase())}&amp;secret_token=tbcxxxx</code>
+              <p class="edit-modal-note">A successful run looks like this — <code>"ok":true</code> confirms Telegram accepted the registration and will now deliver replies to this webhook:</p>
+              <code class="bt-code is-ok">{"ok":true,"result":true,"description":"Webhook was set"}</code>
+              <p class="edit-modal-note">If <code>"ok"</code> is <code>false</code> instead, the response's <code>"description"</code> field explains why (wrong token, malformed URL, etc.) — fix that and reopen the URL to retry.</p>
             </details>
           </div>`;
       }
@@ -2915,21 +2986,26 @@ html[data-theme="light"] {
 
       overlay.innerHTML = `
         <div class="edit-details-modal">
-          <button type="button" class="modal-close-btn" id="agentProfileClose" title="Close" aria-label="Close">✕</button>
-          <div class="edit-details-title">🪪 Agent personal profile</div>
-          <div class="edit-details-sub">Last active ${timeAgoLocal(a.lastActiveAt)} · Password changed ${pwBy}</div>
+          <header class="aa-head am-head">
+            <div class="aa-head-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.5 16a3.5 3.5 0 0 1 7 0M15 10h3M15 13h3"/></svg></div>
+            <div class="aa-head-text">
+              <div class="edit-details-title">${acctEsc(a.username)} <span class="role-tag" style="vertical-align:3px;">${acctEsc(a.role)}</span></div>
+              <div class="edit-details-sub">Agent personal profile · Last active ${timeAgoLocal(a.lastActiveAt)} · Password changed ${pwBy}</div>
+            </div>
+            <button type="button" class="modal-close-btn" id="agentProfileClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </header>
 
           <div class="edit-details-fields">
             <p class="agent-profile-section-label">Edit profile</p>
             <div class="field"><label>Username</label><input type="text" value="${acctEsc(a.username)}" disabled /></div>
             <div class="field"><label>Full name</label><input type="text" id="ap_fullname" value="${acctEsc(a.fullName || "")}" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
             <div class="field"><label>Agent PSD</label><input type="text" id="ap_pid" value="${acctEsc(a.pid || "")}" placeholder="e.g. PSD-014" autocomplete="off" ${canEditProfileFields ? "" : "disabled"} /></div>
-            <div style="display:flex; gap:10px;">
-              <div class="field" style="flex:1;">
+            <div class="am-two">
+              <div class="field">
                 <label>Role</label>
                 ${canManageAccess ? `<select id="ap_role">${roleOptions}</select>` : `<input type="text" value="${acctEsc(a.role)}" disabled />`}
               </div>
-              <div class="field" style="flex:1;">
+              <div class="field">
                 <label>Status</label>
                 <div class="agent-profile-status-row">
                   <span class="agent-profile-status-text ${a.locked ? "is-locked" : "is-active"}">${a.locked ? "🔒 Locked" : "Active"}</span>
@@ -2995,8 +3071,8 @@ html[data-theme="light"] {
 
           <div class="edit-details-status" id="agentProfileStatus"></div>
           <div class="edit-details-actions">
-            <button type="button" class="icon-btn" id="agentProfileCancel" style="width:auto; height:auto; padding:14px 22px; font-size:14px; font-weight:800; display:flex; align-items:center; justify-content:center;">Cancel</button>
-            <button type="button" class="btn-submit" id="agentProfileSave" style="width:auto; padding:10px 22px;">Save</button>
+            <button type="button" class="am-btn-secondary" id="agentProfileCancel">Cancel</button>
+            <button type="button" class="btn-submit" id="agentProfileSave">Save</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
