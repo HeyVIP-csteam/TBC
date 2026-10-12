@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>CS Team - TBC</title>
-<script src="/assets/theme.js?v=bea0b54d"></script>
+<script src="/assets/theme.js?v=db2f7fed"></script>
 <style>
 /* Inline placeholder canvas background — first thing the browser parses
    in <head>, so it paints before any network request (external CSS, the
@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=fbcd1e7e" />
+<link rel="stylesheet" href="/assets/style.css?v=383f329b" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -111,40 +111,57 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <!-- Active Agents popup — replaces the old dedicated /active-agents.html
-       full page as the way this gets viewed. That standalone page has
-       since been DELETED (see the "record.js API shape changed" note
-       further down in this project — the old page's inline script
-       called the pre-throttling API shape and would have thrown on
-       every open, so it was removed rather than left as broken dead
-       code once the popup covered everything it did). -->
-  <div class="edit-modal-backdrop" id="aaModalBackdrop">
-    <div class="edit-modal wide">
-      <button type="button" class="modal-close-btn" id="aaModalClose" title="Close" aria-label="Close">✕</button>
-      <div class="aa-modal-header">
-        <div class="aa-modal-header-icon">👥</div>
-        <div class="aa-modal-header-text">
-          <p class="edit-modal-title" style="margin:0;">Active Agents</p>
-          <p class="aa-modal-subtitle">Tab switch = inactive · Auto-refreshes every 10s</p>
+  <!-- Active Agents popup (redesigned 2026-10-12) — same data and endpoints
+       as before (/api/presence/list every 10s while open, /api/presence/record
+       for the Record view); see active-agents-modal.js. -->
+  <div class="edit-modal-backdrop aa-backdrop" id="aaModalBackdrop">
+    <div class="aa-modal" role="dialog" aria-modal="true" aria-labelledby="aaTitle">
+      <header class="aa-head">
+        <div class="aa-head-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         </div>
-        <span class="aa-online-badge" id="aaOnlineBadge">0 online</span>
-        <button type="button" class="ipa-header-btn" id="aaRefreshBtn" title="Refresh">↻</button>
-        <button type="button" class="ipa-header-btn" id="aaRecordBtn" title="Record">🕒 Record</button>
+        <div class="aa-head-text">
+          <h2 id="aaTitle">Active Agents</h2>
+          <p>Online = active in the last 7 min · tab switched away = inactive</p>
+        </div>
+        <div class="aa-head-actions">
+          <span class="aa-pill is-loading" id="aaOnlineBadge">Loading…</span>
+          <button type="button" class="aa-btn" id="aaRecordBtn" title="Online-time record">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span>Record</span>
+          </button>
+          <button type="button" class="aa-btn aa-btn-icon" id="aaRefreshBtn" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
+          <button type="button" class="aa-btn aa-btn-icon aa-btn-close" id="aaModalClose" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="aa-toolbar">
+        <label class="aa-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input type="text" id="aaSearch" placeholder="Search by username or office…" autocomplete="off" aria-label="Search agents" />
+        </label>
+        <div class="aa-filters" id="aaStats" role="tablist" aria-label="Filter by status"></div>
       </div>
 
-      <div style="position:relative; margin:14px 0;">
-        <span style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--ink-soft); font-size:13px;">🔍</span>
-        <input type="text" id="aaSearch" placeholder="Search by username or office..." autocomplete="off"
-          style="width:100%; box-sizing:border-box; height:36px; background:var(--field-bg); border:1.5px solid var(--border); border-radius:8px; padding:0 12px 0 34px; color:var(--ink); font-size:12.5px; font-family:inherit;" />
+      <div class="aa-body">
+        <div class="aa-state" id="aaLoading">
+          <span class="aa-spinner" aria-hidden="true"></span>
+          <span>Loading active agents…</span>
+        </div>
+        <div id="aaList" class="aa-list"></div>
+        <div class="aa-state" id="aaEmpty" hidden></div>
       </div>
 
-      <div class="ipa-stats" id="aaStats"></div>
+      <footer class="aa-foot">
+        <span class="aa-foot-live"><span class="aa-dot is-online" aria-hidden="true"></span><span id="aaFootStatus">Live presence · refreshes every 10s</span></span>
+        <span id="aaFootUpdated"></span>
+      </footer>
 
-      <div id="aaList" class="aa-list"></div>
-      <p id="aaEmpty" class="ipa-empty" style="display:none; text-align:center; padding:24px;">No agents match.</p>
-
-      <div class="ipa-popover-scrim" id="aaPopoverScrim" style="display:none;"></div>
-      <div class="ipa-popover" id="aaRecordPopover" style="display:none; max-width:820px;"></div>
+      <div class="aa-record" id="aaRecordPopover" hidden></div>
     </div>
   </div>
 
@@ -296,7 +313,7 @@ html[data-theme="light"] {
   </div>
 
   <script src="/assets/schemas.js?v=c135f22f"></script>
-  <script src="/assets/active-agents-modal.js?v=2d846145"></script>
+  <script src="/assets/active-agents-modal.js?v=91cc9ca0"></script>
   <script src="/assets/spa-shell.js?v=b5a78ef0"></script>
   <script>
     // MERGED (2026-08-21) — mirrors _shared/accounts.js's

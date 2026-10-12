@@ -1,35 +1,46 @@
 /**
  * active-agents-modal.js  (index.html ONLY)
  *
- * Renders the Active Agents feature (list + search + stats + Record
- * drill-down) as a popup instead of a dedicated page — replaces the old
- * click-through to what used to be /active-agents.html. Same backend
- * (/api/presence/list, /api/presence/record, /api/presence/heartbeat),
- * same canViewActiveAgents gate, same underlying data — only the
- * container changed. The old standalone /public/active-agents.html has
- * since been DELETED (it called the pre-throttling record.js response
- * shape and would have thrown on open, so it wasn't worth keeping as
- * dead/broken code once this popup covered everything it did).
+ * Active Agents popup: list + search + status filter + Record drill-down.
+ * Backend unchanged: GET /api/presence/list (on open, then every 10s ONLY
+ * while the popup is open) and GET /api/presence/record?username=… when an
+ * agent is picked in Record. Visibility is still decided by the server
+ * (canViewActiveAgents in functions/api/presence/list.js) — this file never
+ * acts as a permission check.
  *
- * Requires (must be loaded first): authguard.js (window.AgentAuth), and
- * the #aaModalBackdrop markup block in index.html.
+ * 2026-10-12 redesign (visual only, same data):
+ *   - header with icon tile, live "N online" pill, Record / Refresh / Close
+ *   - status filter as a segmented control (All / Online / Inactive / Offline)
+ *     — same filter semantics as the old stat cards
+ *   - rows: avatar tile + status dot, role / office / device chips, status,
+ *     "seen …" and today's online time (already in the list response)
+ *   - real loading, empty and error states (the old popup opened on a blank
+ *     "0 online" and swallowed errors)
+ *   - Record opens as a panel inside the modal; same search → detail flow
+ *   - "N sec ago" instead of the old "0 mins ago"
  *
- * Exposes window.ActiveAgentsModal = { open, close }.
+ * Requires: authguard.js (window.AgentAuth) and the #aaModalBackdrop markup
+ * in index.html. Exposes window.ActiveAgentsModal = { open, close }.
  */
 (function () {
   const authFetch = () => window.AgentAuth.authFetch;
 
-  // ---- Formatting helpers — copied verbatim from the old
-  // active-agents.html (single source of truth was already established
-  // there per ACTIVE-AGENTS-SPEC.md §5; kept identical here on purpose). ----
+  // ---- formatting ----
   function fmtDuration(totalSeconds) {
-    const s = Math.max(0, Math.round(totalSeconds));
+    const s = Math.max(0, Math.round(totalSeconds || 0));
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
     if (h > 0) return `${h}h ${m}m ${sec}s`;
     if (m > 0) return `${m}m ${sec}s`;
     return `${sec}s`;
+  }
+  function fmtShortDuration(totalSeconds) {
+    const s = Math.max(0, Math.round(totalSeconds || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+    return `${m}m`;
   }
   function fmtClock(iso) {
     if (!iso) return "—";
@@ -42,70 +53,112 @@
     const then = new Date(iso).getTime();
     if (isNaN(then)) return "—";
     const diffSec = Math.max(0, Math.round((Date.now() - then) / 1000));
-    if (diffSec < 30) return "just now";
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} mins ago`;
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} hours ago`;
-    return `${Math.floor(diffSec / 86400)} days ago`;
+    if (diffSec < 10) return "just now";
+    if (diffSec < 60) return `${diffSec} sec ago`;
+    if (diffSec < 3600) { const m = Math.floor(diffSec / 60); return `${m} min ago`; }
+    if (diffSec < 86400) { const h = Math.floor(diffSec / 3600); return `${h} ${h === 1 ? "hour" : "hours"} ago`; }
+    const d = Math.floor(diffSec / 86400);
+    return `${d} ${d === 1 ? "day" : "days"} ago`;
   }
   function roleLabel(role) {
     if (!role) return "—";
+    if (role === "superadmin") return "SuperAdmin";
     return role.charAt(0).toUpperCase() + role.slice(1);
   }
-  function deviceLabel(device) {
-    return device === "mobile" ? "📱 Mobile" : "💻 Desktop";
-  }
-  function escAttr(s) { return String(s == null ? "" : s).replace(/"/g, "&quot;"); }
+  function escAttr(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;"); }
   function escHtml(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  const ICON = {
+    role: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/></svg>',
+    office: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16"/><path d="M16 9h2a2 2 0 0 1 2 2v10"/><path d="M8 7h4M8 11h4M8 15h4M3 21h18"/></svg>',
+    desktop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+    mobile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18h2"/></svg>',
+    back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+    close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
+    users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>',
+  };
+  const STATUS_LABEL = { online: "Online", inactive: "Inactive", offline: "Offline" };
+
+  function deviceText(a) {
+    const kind = a.device === "mobile" ? "Mobile" : a.device === "desktop" ? "Desktop" : null;
+    const extra = [a.browser, a.os].filter(Boolean).join(" · ");
+    if (!kind && !extra) return null;
+    return [kind, extra].filter(Boolean).join(" · ");
+  }
+  function avatarHtml(name, status) {
+    return `<span class="aa-avatar" aria-hidden="true">${escHtml((name || "?").charAt(0).toUpperCase())}<span class="aa-dot is-${status}"></span></span>`;
+  }
 
   let aaData = null;
   let aaSearchTerm = "";
-  let aaStatusFilter = null; // null = show all; "online"|"inactive"|"offline" when a stat card is active
+  let aaStatusFilter = null; // null = all; "online" | "inactive" | "offline"
   let aaPollTimer = null;
+  let aaLoading = false;
+  let aaLastError = null;
+  let aaUpdatedAt = null;
   let aaRecordSelectedUsername = null;
 
   function el(id) { return document.getElementById(id); }
 
   async function aaLoadList() {
+    if (aaLoading) return;
+    aaLoading = true;
+    el("aaRefreshBtn")?.classList.add("is-spinning");
+    // 15s cap so one hung request can't block every later refresh.
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 15000) : null;
     try {
-      const res = await authFetch()("/api/presence/list", { cache: "no-store" });
-      const data = await res.json();
-      if (!data.ok) return; // modal only opens once canSeeActiveAgents is already true, so a 403 here is unexpected — leave last-known state up rather than blank the popup
-      aaData = data;
-      aaRenderBadgeAndStats();
-      aaRenderList();
-    } catch {
-      // best-effort — leave the last-known list showing, try again next tick
+      const res = await authFetch()("/api/presence/list", ctrl ? { cache: "no-store", signal: ctrl.signal } : { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        aaLastError = data.error || `Couldn't load active agents (HTTP ${res.status}).`;
+      } else {
+        aaData = data;
+        aaLastError = null;
+        aaUpdatedAt = new Date();
+      }
+    } catch (e) {
+      aaLastError = e && e.name === "AbortError" ? "The server took too long to answer." : "Network error — couldn't reach the server.";
+    } finally {
+      if (timer) clearTimeout(timer);
+      aaLoading = false;
+      el("aaRefreshBtn")?.classList.remove("is-spinning");
+      aaRender();
     }
   }
 
+  function aaRender() {
+    aaRenderBadgeAndStats();
+    aaRenderList();
+    aaRenderFooter();
+  }
+
   function aaRenderBadgeAndStats() {
+    const badge = el("aaOnlineBadge");
+    if (!aaData) {
+      badge.className = "aa-pill is-loading";
+      badge.textContent = aaLastError ? "Unavailable" : "Loading…";
+      el("aaStats").innerHTML = "";
+      return;
+    }
     const s = aaData.stats;
-    el("aaOnlineBadge").innerHTML = `<span class="aa-dot-online" style="width:7px;height:7px;border-radius:50%;display:inline-block;"></span> ${s.online} online`;
-    // Clickable filter cards — same pattern as .ipa-stat-card on the IP
-    // Access page (see ipaStatCard()/ipaWire() in index.html): a <button>
-    // per stat, "active" class on whichever one is the current filter,
-    // clicking the already-active one again clears the filter.
-    el("aaStats").innerHTML = `
-      <button type="button" class="ipa-stat-card${aaStatusFilter === null ? " active" : ""}" data-stat="all" style="${aaStatusFilter === null ? "border-color:var(--accent-gold);" : ""}">
-        <span class="ipa-stat-label">Total</span>
-        <span class="ipa-stat-value">${s.total}</span>
-      </button>
-      <button type="button" class="ipa-stat-card${aaStatusFilter === "online" ? " active" : ""}" data-stat="online">
-        <span class="ipa-stat-label">Online</span>
-        <span class="ipa-stat-value ipa-green">${s.online}</span>
-      </button>
-      <button type="button" class="ipa-stat-card${aaStatusFilter === "inactive" ? " active" : ""}" data-stat="inactive">
-        <span class="ipa-stat-label">Inactive</span>
-        <span class="ipa-stat-value">${s.inactive}</span>
-      </button>
-      <button type="button" class="ipa-stat-card${aaStatusFilter === "offline" ? " active" : ""}" data-stat="offline">
-        <span class="ipa-stat-label">Offline</span>
-        <span class="ipa-stat-value">${s.offline}</span>
-      </button>
-    `;
-    el("aaStats").querySelectorAll(".ipa-stat-card").forEach((card) => {
-      card.addEventListener("click", () => {
-        const key = card.dataset.stat;
+    badge.className = "aa-pill";
+    badge.innerHTML = `<span class="aa-dot is-online" aria-hidden="true"></span>${s.online} online`;
+    const items = [
+      { key: null, label: "All", n: s.total },
+      { key: "online", label: "Online", n: s.online },
+      { key: "inactive", label: "Inactive", n: s.inactive },
+      { key: "offline", label: "Offline", n: s.offline },
+    ];
+    el("aaStats").innerHTML = items.map((it) => `
+      <button type="button" class="aa-filter" role="tab" data-stat="${it.key || "all"}" aria-selected="${aaStatusFilter === it.key}">
+        ${it.key ? `<span class="aa-dot is-${it.key}" aria-hidden="true"></span>` : ""}${it.label}<span class="n">${it.n}</span>
+      </button>`).join("");
+    el("aaStats").querySelectorAll(".aa-filter").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.stat;
         aaStatusFilter = (key === "all" || key === aaStatusFilter) ? null : key;
         aaRenderBadgeAndStats();
         aaRenderList();
@@ -113,7 +166,28 @@
     });
   }
 
+  function aaShowState(kind, html) {
+    const loading = el("aaLoading"), empty = el("aaEmpty");
+    loading.hidden = kind !== "loading";
+    empty.hidden = !(kind === "empty" || kind === "error");
+    if (!empty.hidden) {
+      empty.className = "aa-state" + (kind === "error" ? " is-error" : "");
+      empty.innerHTML = html;
+    }
+  }
+
   function aaRenderList() {
+    const listEl = el("aaList");
+    if (!aaData) {
+      listEl.innerHTML = "";
+      if (aaLastError) {
+        aaShowState("error", `<span class="aa-state-icon">${ICON.alert}</span><span>Couldn't load active agents<small>${escHtml(aaLastError)}</small></span><button type="button" class="aa-btn" id="aaRetryBtn">Try again</button>`);
+        el("aaRetryBtn").addEventListener("click", () => { aaLastError = null; aaRender(); aaLoadList(); });
+      } else {
+        aaShowState("loading");
+      }
+      return;
+    }
     const term = aaSearchTerm.trim().toLowerCase();
     const agents = aaData.agents
       .filter((a) => !aaStatusFilter || a.status === aaStatusFilter)
@@ -124,92 +198,81 @@
         return (b.statusSince || "").localeCompare(a.statusSince || "");
       });
 
-    const listEl = el("aaList");
-    const emptyEl = el("aaEmpty");
     if (!agents.length) {
       listEl.innerHTML = "";
-      emptyEl.textContent = aaStatusFilter ? `No ${aaStatusFilter} agents match.` : "No agents match.";
-      emptyEl.style.display = "";
+      const what = aaStatusFilter ? `${aaStatusFilter} agents` : "agents";
+      aaShowState("empty", `<span class="aa-state-icon">${ICON.users}</span><span>${term ? `No ${what} match “${escHtml(aaSearchTerm.trim())}”.` : `No ${what} right now.`}</span>`);
       return;
     }
-    emptyEl.style.display = "none";
+    aaShowState("list");
 
     listEl.innerHTML = agents.map((a) => {
-      const initial = a.username.charAt(0).toUpperCase();
-      const isOnline = a.status === "online";
-      const isInactive = a.status === "inactive";
-      const dotClass = isOnline ? "aa-dot-online" : "aa-dot-gray";
-      const statusLabel = isOnline ? "Online" : isInactive ? "Inactive" : "Offline";
-      const statusColor = isOnline ? "#34d399" : "var(--ink-soft)";
-      const timeText = isOnline || isInactive ? fmtRelative(a.statusSince) : fmtRelative(a.lastActiveAt);
+      const st = STATUS_LABEL[a.status] ? a.status : "offline";
+      const seen = st === "offline" ? fmtRelative(a.lastActiveAt) : fmtRelative(a.statusSince);
+      const dev = deviceText(a);
+      const role = String(a.role || "").toLowerCase();
       return `
-        <div class="aa-row${isOnline ? "" : " is-offline"}">
-          <div class="aa-row-avatar">
-            <div class="aa-row-avatar-circle" style="color:${isOnline ? "#34d399" : "var(--ink-soft)"};">${escHtml(initial)}</div>
-            <span class="aa-row-badge ${dotClass}"></span>
-          </div>
-          <div class="aa-row-main">
-            <div class="aa-row-name">${escHtml(a.username)}</div>
-            <div class="aa-tags">
-              <span class="aa-tag">🪪 ${escHtml(roleLabel(a.role))}</span>
-              <span class="aa-tag">${deviceLabel(a.device)}</span>
-              ${a.officeName ? `<span class="aa-tag">🏢 ${escHtml(a.officeName)}</span>` : ""}
+        <div class="aa-row is-${st}">
+          ${avatarHtml(a.username, st)}
+          <div class="aa-main">
+            <div class="aa-name" title="${escAttr(a.username)}">${escHtml(a.username)}</div>
+            <div class="aa-chips">
+              <span class="aa-chip role-${escAttr(role)}">${ICON.role}${escHtml(roleLabel(a.role))}</span>
+              ${a.officeName ? `<span class="aa-chip" title="Office">${ICON.office}${escHtml(a.officeName)}</span>` : ""}
+              ${dev ? `<span class="aa-chip" title="Device">${a.device === "mobile" ? ICON.mobile : ICON.desktop}${escHtml(dev)}</span>` : ""}
             </div>
           </div>
-          <div class="aa-row-status">
-            <div class="aa-row-status-line">
-              <span class="${dotClass}" style="width:7px; height:7px; border-radius:50%; flex-shrink:0;"></span>
-              <span style="color:${statusColor}; font-size:11.5px; font-weight:700;">${statusLabel}</span>
-            </div>
-            <div class="aa-row-status-time">${escHtml(timeText)}</div>
+          <div class="aa-side">
+            <span class="aa-status is-${st}"><span class="aa-dot is-${st}" aria-hidden="true"></span>${STATUS_LABEL[st]}</span>
+            <span class="aa-seen">${st === "offline" ? (a.lastActiveAt ? "last seen " + escHtml(seen) : "not seen today") : escHtml(seen)}</span>
+            ${a.totalOnlineSecondsToday ? `<span class="aa-today">Today <b>${escHtml(fmtShortDuration(a.totalOnlineSecondsToday))}</b></span>` : ""}
           </div>
-        </div>
-      `;
+        </div>`;
     }).join("");
   }
 
-  // ---- Record popover: search-first, then a detail view (unchanged
-  // from the old page's version, just re-scoped to #aaRecordPopover /
-  // #aaPopoverScrim so it can't collide with #acctModalBackdrop's own
-  // Record popover for IP Access). ----
+  function aaRenderFooter() {
+    const foot = el("aaFootStatus")?.closest(".aa-foot");
+    if (!foot) return;
+    const stale = !!aaLastError;
+    foot.classList.toggle("is-stale", stale);
+    el("aaFootStatus").textContent = stale ? (aaData ? "Couldn't refresh — showing last list, retrying every 10s" : "Not connected — retrying every 10s") : "Live presence · refreshes every 10s";
+    el("aaFootUpdated").textContent = aaUpdatedAt ? "Updated " + aaUpdatedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }) : "";
+  }
+
+  // ---- Record: search first, then one agent's detail (same API as before) ----
+  function aaRecordShell(titleHtml, bodyHtml, withBack) {
+    const pop = el("aaRecordPopover");
+    pop.innerHTML = `
+      <header class="aa-head">
+        ${withBack ? `<button type="button" class="aa-back" id="aaBackToSearch">${ICON.back}<span>Back</span></button>` : ""}
+        <div class="aa-record-title">${titleHtml}</div>
+        <button type="button" class="aa-btn aa-btn-icon aa-btn-close" id="aaRecordClose" title="Close record" aria-label="Close record">${ICON.close}</button>
+      </header>
+      <div class="aa-record-body">${bodyHtml}</div>`;
+    el("aaRecordClose").addEventListener("click", aaCloseRecord);
+    if (withBack) el("aaBackToSearch").addEventListener("click", () => aaRenderRecordSearch(""));
+  }
+
   function aaOpenRecord() {
     aaRecordSelectedUsername = null;
-    el("aaPopoverScrim").style.display = "";
-    el("aaRecordPopover").style.display = "";
+    el("aaRecordPopover").hidden = false;
     aaRenderRecordSearch("");
   }
   function aaCloseRecord() {
-    el("aaPopoverScrim").style.display = "none";
-    el("aaRecordPopover").style.display = "none";
+    const pop = el("aaRecordPopover");
+    if (pop) pop.hidden = true;
   }
 
   function aaRenderRecordSearch(term) {
-    const pop = el("aaRecordPopover");
-    pop.innerHTML = `
-      <div class="ipa-popover-header">
-        <p class="ipa-popover-title">🕒 Record</p>
-        <span style="color:var(--ink-soft); cursor:pointer;" id="aaRecordClose">✕</span>
-      </div>
-      <div style="position:relative; margin-bottom:12px;">
-        <span style="position:absolute; left:11px; top:50%; transform:translateY(-50%); color:var(--ink-soft); font-size:12px;">🔍</span>
-        <input type="text" id="aaRecordSearchInput" placeholder="Search agent by name..." autocomplete="off" value="${escAttr(term)}"
-          style="width:100%; box-sizing:border-box; height:36px; background:var(--field-bg); border:1.5px solid var(--border); border-radius:8px; padding:0 12px 0 32px; color:var(--ink); font-size:12.5px; font-family:inherit;" />
-      </div>
-      <div id="aaRecordMatches" style="display:flex; flex-direction:column; gap:5px; max-height:280px; overflow-y:auto;"></div>
-    `;
-    el("aaRecordClose").addEventListener("click", aaCloseRecord);
-    // Only the matches list (#aaRecordMatches) re-renders on every
-    // keystroke below — the <input> element itself is created ONCE here
-    // and never touched again while typing. The previous version rebuilt
-    // this whole popover's innerHTML (input included) on every "input"
-    // event, which destroys and recreates the <input> DOM node each
-    // time — the browser has nothing to keep focused, so it silently
-    // drops focus after every single character and the agent has to
-    // click back into the box to keep typing. Updating a separate child
-    // container instead leaves the input element (and its focus/cursor
-    // position) completely untouched.
-    el("aaRecordSearchInput").addEventListener("input", (e) => aaRenderRecordMatches(e.target.value));
+    aaRecordShell("Online-time record",
+      `<label class="aa-search">${ICON.search}<input type="text" id="aaRecordSearchInput" placeholder="Search agent by name…" autocomplete="off" value="${escAttr(term)}" aria-label="Search agent" /></label>
+       <div class="aa-picks" id="aaRecordMatches"></div>`, false);
+    // Only the match list re-renders while typing, so the input keeps focus.
+    const input = el("aaRecordSearchInput");
+    input.addEventListener("input", (e) => aaRenderRecordMatches(e.target.value));
     aaRenderRecordMatches(term);
+    setTimeout(() => input.focus(), 0);
   }
 
   function aaRenderRecordMatches(term) {
@@ -218,129 +281,113 @@
       .filter((a) => !t || a.username.toLowerCase().includes(t))
       .slice(0, 30);
     const matchesEl = el("aaRecordMatches");
-    if (!matchesEl) return; // popover may have been closed/replaced mid-keystroke
+    if (!matchesEl) return;
     matchesEl.innerHTML = matches.map((a) => {
-      const dotColor = a.status === "online" ? "#34d399" : "var(--ink-soft)";
-      return `
-        <div class="aa-record-pick" data-username="${escAttr(a.username)}" style="display:flex; align-items:center; gap:10px; padding:8px 9px; border-radius:7px; cursor:pointer;">
-          <div style="width:26px; height:26px; border-radius:7px; background:var(--field-bg); display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-weight:700; font-size:11px; flex-shrink:0;">${escHtml(a.username.charAt(0).toUpperCase())}</div>
-          <span style="color:var(--ink); font-size:12.5px; flex:1;">${escHtml(a.username)}</span>
-          <span style="width:6px; height:6px; border-radius:50%; background:${dotColor};"></span>
-        </div>
-      `;
-    }).join("") || '<p class="ipa-hint" style="text-align:center;">No matches.</p>';
-    matchesEl.querySelectorAll(".aa-record-pick").forEach((elx) => {
-      elx.addEventListener("click", () => aaOpenRecordDetail(elx.dataset.username));
-    });
+      const st = STATUS_LABEL[a.status] ? a.status : "offline";
+      return `<button type="button" class="aa-pick is-${st}" data-username="${escAttr(a.username)}">
+          ${avatarHtml(a.username, st)}<span class="nm">${escHtml(a.username)}</span><span class="st">${STATUS_LABEL[st]}</span>
+        </button>`;
+    }).join("") || `<div class="aa-state" style="min-height:140px;">${aaData ? "No matches." : "Agent list is still loading…"}</div>`;
+    matchesEl.querySelectorAll(".aa-pick").forEach((b) => b.addEventListener("click", () => aaOpenRecordDetail(b.dataset.username)));
   }
 
   async function aaOpenRecordDetail(username) {
     aaRecordSelectedUsername = username;
-    const pop = el("aaRecordPopover");
-    pop.innerHTML = `<div class="ipa-popover-header"><p class="ipa-popover-title">🕒 Loading…</p></div>`;
+    aaRecordShell(escHtml(username), `<div class="aa-state"><span class="aa-spinner" aria-hidden="true"></span><span>Loading record…</span></div>`, true);
     try {
-      const url = "/api/presence/record?username=" + encodeURIComponent(username);
-      const res = await authFetch()(url);
-      const data = await res.json();
+      const res = await authFetch()("/api/presence/record?username=" + encodeURIComponent(username));
+      const data = await res.json().catch(() => ({}));
+      if (aaRecordSelectedUsername !== username) return; // user picked someone else meanwhile
       if (!data.ok) {
-        pop.innerHTML = `<div class="ipa-popover-header"><p class="ipa-popover-title">🕒 Record</p><span style="color:var(--ink-soft); cursor:pointer;" id="aaRecordClose2">✕</span></div><p class="ipa-hint">${escHtml(data.error || "Couldn't load this agent's record.")}</p>`;
-        el("aaRecordClose2").addEventListener("click", aaCloseRecord);
+        aaRecordShell(escHtml(username), `<div class="aa-state is-error"><span class="aa-state-icon">${ICON.alert}</span><span>${escHtml(data.error || "Couldn't load this agent's record.")}</span></div>`, true);
         return;
       }
       aaRenderRecordDetail(data);
     } catch {
-      pop.innerHTML = `<p class="ipa-hint">Couldn't load this agent's record. Try again.</p>`;
+      if (aaRecordSelectedUsername !== username) return;
+      aaRecordShell(escHtml(username), `<div class="aa-state is-error"><span class="aa-state-icon">${ICON.alert}</span><span>Couldn't load this agent's record. Try again.</span></div>`, true);
     }
   }
 
   function aaRenderRecordDetail(data) {
-    const pop = el("aaRecordPopover");
-    const t = data.today;
-    const isOnline = t.status === "online";
-    const isInactive = t.status === "inactive";
-    const statusColor = isOnline ? "#34d399" : isInactive ? "var(--ink-soft)" : "#5f5e5a";
-    const statusLabel = isOnline ? "Online" : isInactive ? "Inactive" : "Offline";
-    const statusTime = isOnline || isInactive ? fmtRelative(t.statusSince) : fmtRelative(t.lastActiveAt);
-    // No more per-day timeline table — see the module note at the top of
-    // _shared/presence.js for why that was removed (KV write cost). This
-    // now shows just the current status + today's total + Last 7 days,
-    // which is the only history that's still cheaply available.
-    pop.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-        <span style="color:var(--ink-soft); font-size:12px; cursor:pointer;" id="aaBackToSearch">← Back to search</span>
-        <span style="color:var(--ink-soft); cursor:pointer;" id="aaRecordClose3">✕</span>
+    const t = data.today || {};
+    const st = STATUS_LABEL[t.status] ? t.status : "offline";
+    const since = st === "offline" ? fmtRelative(t.lastActiveAt) : fmtRelative(t.statusSince);
+    const max = Math.max(1, ...data.last7.map((d) => d.totalOnlineSeconds || 0));
+    aaRecordShell("Online-time record", `
+      <div class="aa-profile">
+        ${avatarHtml(data.username, st)}
+        <div style="min-width:0;flex:1;">
+          <div class="aa-name">${escHtml(data.username)}</div>
+          <div style="margin-top:6px;"><span class="aa-status is-${st}"><span class="aa-dot is-${st}" aria-hidden="true"></span>${STATUS_LABEL[st]}</span>
+          <span class="aa-seen" style="margin-left:8px;">${escHtml(since)}</span></div>
+        </div>
       </div>
-      <div style="display:flex; align-items:center; gap:10px; margin:10px 0 4px;">
-        <div style="width:30px; height:30px; border-radius:8px; background:var(--field-bg); display:flex; align-items:center; justify-content:center; color:#34d399; font-weight:700; font-size:12px; flex-shrink:0;">${escHtml(data.username.charAt(0).toUpperCase())}</div>
-        <span style="color:var(--ink); font-weight:600; font-size:14.5px; flex:1;">${escHtml(data.username)}</span>
-        <span style="display:inline-flex; align-items:center; gap:5px;">
-          <span style="width:7px; height:7px; border-radius:50%; background:${statusColor}; flex-shrink:0;"></span>
-          <span style="color:${statusColor}; font-size:12px; font-weight:700;">${statusLabel}</span>
-        </span>
+      <div class="aa-kpis">
+        <div class="aa-kpi"><div class="k">Today online</div><div class="v">${escHtml(fmtDuration(t.totalOnlineSecondsToday))}</div></div>
+        <div class="aa-kpi"><div class="k">Last active</div><div class="v">${escHtml(fmtClock(t.lastActiveAt))}</div></div>
+        <div class="aa-kpi"><div class="k">Last seen</div><div class="v">${escHtml(since)}</div></div>
       </div>
-      <div style="color:var(--ink-soft); font-size:11.5px; margin:2px 0 16px;">${escHtml(statusTime)} · Today online: ${escHtml(fmtDuration(t.totalOnlineSecondsToday))} · Last active: ${escHtml(fmtClock(t.lastActiveAt))}</div>
-
-      <div style="color:var(--label-blue); font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; margin-bottom:8px;">Last 7 days</div>
-      <div style="border:1px solid var(--border); border-radius:10px;">
-        <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
-          <thead><tr>
-            <th style="text-align:left; padding:7px 12px; color:var(--ink-soft); font-size:9.5px; text-transform:uppercase; background:var(--card-bg); border-bottom:1.5px solid var(--border); border-right:1px solid var(--panel-border);">Date</th>
-            <th style="text-align:right; padding:7px 12px; color:var(--ink-soft); font-size:9.5px; text-transform:uppercase; background:var(--card-bg); border-bottom:1.5px solid var(--border); border-right:1px solid var(--panel-border);">Total online time</th>
-            <th style="text-align:right; padding:7px 12px; color:var(--ink-soft); font-size:9.5px; text-transform:uppercase; background:var(--card-bg); border-bottom:1.5px solid var(--border);">Last active time</th>
-          </tr></thead>
+      <p class="aa-section-label">Last 7 days</p>
+      <div class="aa-days">
+        <table>
+          <thead><tr><th>Date</th><th class="bar-col" aria-hidden="true"></th><th class="num">Total online time</th><th class="num">Last active time</th></tr></thead>
           <tbody>
-            ${data.last7.map((d, i) => {
-              const isLast = i === data.last7.length - 1;
-              const bb = isLast ? "" : "border-bottom:1px solid var(--panel-border);";
-              return `
-                <tr style="${i === 0 ? "background:rgba(200,145,47,0.08);" : ""}">
-                  <td style="padding:8px 12px; color:${i === 0 ? "var(--accent-gold)" : "var(--ink)"}; font-weight:${i === 0 ? "700" : "400"}; ${bb} border-right:1px solid var(--panel-border);">${escHtml(d.label)}</td>
-                  <td style="padding:8px 12px; color:var(--ink); text-align:right; font-family:var(--font-mono); ${bb} border-right:1px solid var(--panel-border); white-space:nowrap;">${escHtml(fmtDuration(d.totalOnlineSeconds))}</td>
-                  <td style="padding:8px 12px; color:var(--ink-soft); text-align:right; font-family:var(--font-mono); ${bb} white-space:nowrap;">${escHtml(fmtClock(d.lastActiveAt))}</td>
-                </tr>
-              `;
-            }).join("")}
+            ${data.last7.map((d, i) => `
+              <tr class="${i === 0 ? "is-today" : ""}">
+                <td>${escHtml(d.label)}</td>
+                <td class="bar-col" aria-hidden="true"><div class="bar"><span style="width:${Math.round(((d.totalOnlineSeconds || 0) / max) * 100)}%"></span></div></td>
+                <td class="num${d.totalOnlineSeconds ? "" : " muted"}">${escHtml(fmtDuration(d.totalOnlineSeconds))}</td>
+                <td class="num muted">${escHtml(fmtClock(d.lastActiveAt))}</td>
+              </tr>`).join("")}
           </tbody>
         </table>
-      </div>
-    `;
-    el("aaRecordClose3").addEventListener("click", aaCloseRecord);
-    el("aaBackToSearch").addEventListener("click", () => aaRenderRecordSearch(""));
+      </div>`, true);
   }
 
-  // ---- Open/close (mirrors the existing #acctModalBackdrop pattern in
-  // index.html — .is-open toggles opacity/pointer-events via CSS). ----
+  // ---- open / close ----
+  function onKey(e) {
+    if (e.key !== "Escape") return;
+    if (!el("aaRecordPopover").hidden) aaCloseRecord(); else close();
+  }
   function open() {
     const backdrop = el("aaModalBackdrop");
     if (!backdrop) return;
     backdrop.classList.add("is-open");
     aaSearchTerm = "";
     aaStatusFilter = null;
+    aaLastError = null;
     el("aaSearch").value = "";
+    aaCloseRecord();
+    aaRender(); // shows the last list instantly if we have one, otherwise the loading state
     aaLoadList();
     if (aaPollTimer) clearInterval(aaPollTimer);
-    aaPollTimer = setInterval(aaLoadList, 10000); // only polls while the popup is actually open
+    aaPollTimer = setInterval(aaLoadList, 10000); // only polls while the popup is open
+    document.addEventListener("keydown", onKey);
   }
   function close() {
     const backdrop = el("aaModalBackdrop");
     if (backdrop) backdrop.classList.remove("is-open");
     if (aaPollTimer) { clearInterval(aaPollTimer); aaPollTimer = null; }
     aaCloseRecord();
+    document.removeEventListener("keydown", onKey);
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
+  function wire() {
     const backdrop = el("aaModalBackdrop");
-    if (!backdrop) return; // this markup only exists on index.html
+    if (!backdrop || backdrop.dataset.wired) return; // markup only exists on index.html
+    backdrop.dataset.wired = "1";
     el("aaModalClose").addEventListener("click", close);
     backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
     el("aaRefreshBtn").addEventListener("click", aaLoadList);
     el("aaRecordBtn").addEventListener("click", aaOpenRecord);
-    el("aaPopoverScrim").addEventListener("click", aaCloseRecord);
     el("aaSearch").addEventListener("input", (e) => {
       aaSearchTerm = e.target.value;
       if (aaData) aaRenderList();
     });
-  });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wire);
+  else wire();
 
   window.ActiveAgentsModal = { open, close };
 })();

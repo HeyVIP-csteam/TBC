@@ -72,4 +72,19 @@
     el.dataset.wired = "1";
     setInterval(tick, 1000);
   };
+  // 2026-10-12 — publish the top bar's real height as --topbar-h so the
+  // off-canvas nav drawer (style.css, "top: var(--topbar-h, 61px)") starts
+  // exactly below it. The bar is 61px only when "CS TEAM - TBC" fits on one
+  // line; on narrower windows the title wraps and the bar grows (70–94px),
+  // and the fixed 61px drawer used to cover the bar's bottom edge.
+  function trackTopbarHeight() {
+    const bar = document.querySelector(".topbar");
+    if (!bar) return;
+    const set = () => document.documentElement.style.setProperty("--topbar-h", Math.round(bar.getBoundingClientRect().height) + "px");
+    set();
+    if (window.ResizeObserver) new ResizeObserver(set).observe(bar);
+    else window.addEventListener("resize", set);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", trackTopbarHeight);
+  else trackTopbarHeight();
 })();
