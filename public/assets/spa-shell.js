@@ -85,7 +85,7 @@
   const SHELL_OWNED_SCRIPTS = new Set([
     "/assets/theme.js", "/assets/toast.js", "/assets/starfield.js",
     "/assets/authguard.js", "/assets/announcement-banner.js",
-    "/assets/schemas.js",
+    "/assets/schemas.js", "/assets/reply-sound.js",
   ]);
   // NOTE: /assets/hub-nav.js is deliberately NOT in this set. index.html
   // (the shell) has its own separate, hand-written sidebar and never

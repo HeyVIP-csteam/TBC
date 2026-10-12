@@ -26,7 +26,10 @@
     if (!btn) return;
     const setLabel = () => {
       const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-      btn.innerHTML = isDark ? "☀️ Light" : "🌙 Dark";
+      // Icon and word in their own spans so very narrow top bars can hide
+      // the word (style.css, ≤440px) — same "☀️ Light" / "🌙 Dark" text.
+      btn.innerHTML = isDark ? '<span class="tp-ico">☀️</span><span class="tp-txt">Light</span>' : '<span class="tp-ico">🌙</span><span class="tp-txt">Dark</span>';
+      btn.title = isDark ? "Switch to light theme" : "Switch to dark theme";
     };
     setLabel();
     // Guard against wiring a second click listener onto the SAME button —

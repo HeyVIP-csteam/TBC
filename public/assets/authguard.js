@@ -16,8 +16,9 @@
  *     back to login on a 401 from the server (e.g. account deleted/
  *     locked, IP changed, password changed elsewhere, or the token
  *     simply expired).
- *   - renderWhoami(elementId) — fills in the "User: name ROLE [logout]"
- *     pill, wherever a page has an element with that id.
+ *   - renderWhoami(elementId) — fills in the user chip (avatar, name,
+ *     role, ▾ menu with Log out), wherever a page has an element with
+ *     that id.
  *   - logout() — clears the saved token and goes to /login.html.
  *
  * SECURITY NOTE: this used to store the plaintext password in
@@ -87,20 +88,72 @@
     return String(str == null ? "" : str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // 2026-10-12 — user chip: avatar + username + role, with a ▾ menu that
+  // holds Log out (was "User: name [ROLE] [logout]" as plain text).
+  const ROLE_LABEL = { owner: "Owner", superadmin: "Super Admin", admin: "Admin", senior: "Senior", agent: "Agent" };
+  const AVATAR_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="8.2" r="4.2"/><path d="M3.8 20.6c.9-4.2 4.2-6.6 8.2-6.6s7.3 2.4 8.2 6.6c.1.5-.3.9-.8.9H4.6c-.5 0-.9-.4-.8-.9z"/></svg>';
+  const CARET_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  const LOGOUT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>';
+
+  function closeUserMenus(except) {
+    document.querySelectorAll(".uc-menu").forEach(function (m) {
+      if (m === except) return;
+      m.hidden = true;
+      const b = m.parentNode && m.parentNode.querySelector(".uc-btn");
+      if (b) b.setAttribute("aria-expanded", "false");
+    });
+  }
+
   function renderWhoami(elId) {
     const el = document.getElementById(elId || "agentWhoami");
     if (!el) return;
     const a = getAuth();
     if (!a) { el.innerHTML = ""; return; }
-    const logoutIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>';
-    el.innerHTML = "User: " + escapeHtml(a.username) +
-      '<span class="role-badge">' + escapeHtml(a.role) + "</span>" +
-      '<span class="logout-icon-btn" id="__agentLogoutBtn" title="Log out">' + logoutIcon + "</span>";
+    const role = String(a.role || "").toLowerCase();
+    const roleText = ROLE_LABEL[role] || a.role || "";
+    const roleCls = ROLE_LABEL[role] ? role : "agent";
+    el.classList.add("uc");
+    el.innerHTML =
+      '<button type="button" class="uc-btn" aria-haspopup="menu" aria-expanded="false" title="' + escapeHtml(a.username) + " · " + escapeHtml(roleText) + '">' +
+        '<span class="uc-avatar">' + AVATAR_SVG + "</span>" +
+        '<span class="uc-txt"><span class="uc-name">' + escapeHtml(a.username) + '</span><span class="uc-role uc-role--' + roleCls + '">' + escapeHtml(roleText) + "</span></span>" +
+        '<span class="uc-caret">' + CARET_SVG + "</span>" +
+      "</button>" +
+      '<div class="uc-menu" role="menu" hidden>' +
+        '<div class="uc-menu-head"><span class="uc-avatar">' + AVATAR_SVG + '</span><span class="uc-txt"><span class="uc-name">' + escapeHtml(a.username) + '</span><span class="uc-role uc-role--' + roleCls + '">' + escapeHtml(roleText) + "</span></span></div>" +
+        '<button type="button" class="uc-item uc-logout" role="menuitem" id="__agentLogoutBtn">' + LOGOUT_SVG + "<span>Log out</span></button>" +
+      "</div>";
+    const btn = el.querySelector(".uc-btn");
+    const menu = el.querySelector(".uc-menu");
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      const open = menu.hidden;
+      closeUserMenus(menu);
+      menu.hidden = !open;
+      btn.setAttribute("aria-expanded", String(open));
+      if (open) document.getElementById("__agentLogoutBtn").focus({ preventScroll: true });
+    });
     document.getElementById("__agentLogoutBtn").addEventListener("click", function () {
       clearAuth();
       location.href = "/login.html";
     });
+    // One document-level listener for the whole page (renderWhoami runs
+    // again on every SPA view switch).
+    if (!window.__ucWired) {
+      window.__ucWired = true;
+      document.addEventListener("click", function (e) {
+        if (!(e.target.closest && e.target.closest(".uc"))) closeUserMenus(null);
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key !== "Escape") return;
+        const open = document.querySelector(".uc-menu:not([hidden])");
+        if (!open) return;
+        closeUserMenus(null);
+        const b = open.parentNode.querySelector(".uc-btn");
+        if (b) b.focus();
+      });
+    }
   }
 
   window.AgentAuth = {

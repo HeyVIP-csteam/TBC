@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TG Reply Threads</title>
-<script src="/assets/theme.js?v=db2f7fed"></script>
+<script src="/assets/theme.js?v=18873f8b"></script>
 <style>
 html {
   background-color: #090c1c;
@@ -23,15 +23,16 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=42d456ae" />
+<link rel="stylesheet" href="/assets/style.css?v=0e3fe096" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
-<script src="/assets/authguard.js?v=101bd636"></script>
+<script src="/assets/authguard.js?v=f4ea6b2b"></script>
 <script src="/assets/countries.js?v=78bdc076"></script>
 <script src="/assets/country-modules.js?v=7cb5b511"></script>
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
+<script src="/assets/reply-sound.js?v=a889f48f"></script>
 <script src="/assets/announcement-banner.js?v=3ccef02f" defer></script>
 <script src="/assets/schemas.js?v=c135f22f"></script>
 </head>
@@ -1148,6 +1149,12 @@ html[data-theme="light"] {
         applyLocalPatches();
         renderLists();
         refreshOpenThreadIfChanged(changedIds);
+        // 2026-10-12 — Telegram reply sound (assets/reply-sound.js): hand the
+        // same list update over so the sound comes together with the list.
+        if (window.ReplySound) {
+          if (changedIds) window.ReplySound.observe(Array.from(changedIds, (id) => serverById.get(id)).filter(Boolean), { full: false });
+          else window.ReplySound.observe(Array.from(serverById.values()), { full: true });
+        }
       } catch (e) {
         if (seq !== listReqSeq) return;
         console.warn("[threads] list load failed:", e && e.message);
@@ -1798,6 +1805,8 @@ html[data-theme="light"] {
           return;
         }
         selectedThread = data.thread;
+        // Own reply — the reply sound must not ring for it (assets/reply-sound.js).
+        window.ReplySound?.noteOwnReply(selectedThread.id, (selectedThread.messages || []).length);
         input.value = "";
         pendingAttachments = [];
         replyTarget = null;
