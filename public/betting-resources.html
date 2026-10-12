@@ -26,7 +26,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=67bbfb2c" />
+<link rel="stylesheet" href="/assets/style.css?v=80210056" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -58,9 +58,16 @@ html[data-theme="light"] {
       <div id="announcementBanner"></div>
 
       <main class="hub-main" style="padding-top:30px;">
-        <div class="inner br-inner">
-          <p class="edit-modal-title" style="margin-bottom:4px;">🎲 HeyVIP Betting Rules</p>
-          <p style="color:var(--ink-soft); margin:0 0 22px; font-size:12.5px;">Reference links — guidance docs on the left, result/score lookup tools on the right.</p>
+        <div class="inner br-inner br-page">
+          <div class="pg-head">
+            <div class="pg-head-left">
+              <span class="pg-head-icon" aria-hidden="true">🎲</span>
+              <div>
+                <div class="pg-head-title">HeyVIP Betting Rules</div>
+                <div class="pg-head-sub">Reference links — guidance docs on the left, result/score lookup tools on the right.</div>
+              </div>
+            </div>
+          </div>
 
           <div id="brLoading" class="edit-modal-note">Loading…</div>
           <div id="brError" class="edit-modal-note err" style="display:none;"></div>
@@ -120,7 +127,7 @@ html[data-theme="light"] {
       const results = Array.isArray(entry.results) ? entry.results : [];
       return `
         <div class="br-country-block">
-          <p class="edit-modal-title" style="font-size:13px; margin:0 0 10px; opacity:0.75;">${esc(label)} (${esc(entry.country)})</p>
+          <p class="br-country-label">${esc(label)} (${esc(entry.country)})</p>
           <div class="br-panels">
             <section class="br-panel">
               <div class="br-panel-title">HeyVIP Betting Resources</div>
