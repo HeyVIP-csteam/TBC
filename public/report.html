@@ -36,116 +36,324 @@ html[data-theme="light"] {
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/announcement-banner.js?v=3ccef02f" defer></script>
+<!-- ======================================================================
+     Report styles live in ONE <style> block (#reportStyles), so the existing Export feature copies it
+     into the downloaded file unchanged (it only uses the --rp-* tokens
+     defined at its top, never the app's global style.css).
+     Layout concept: one 1440px column — header, a single filter toolbar,
+     then the data (summary cards + ranking, or one module table).
+     ====================================================================== -->
 <style id="reportStyles">
+  /* Report-only tokens, scoped to .rp so nothing else in the app changes.
+     Dark-first like the app; theme.js always sets data-theme on <html>. */
+  .rp {
+    --rp-page: #070a18;
+    --rp-surface: #0e1330;
+    --rp-surface-2: #131939;
+    --rp-surface-3: #1a2147;
+    --rp-line: rgba(150, 165, 220, 0.13);
+    --rp-line-strong: rgba(150, 165, 220, 0.24);
+    --rp-ink: #e8ebf7;
+    --rp-ink-2: #a2abc8;
+    --rp-ink-3: #6e7797;
+    --rp-accent: #8b7cf6;
+    --rp-accent-soft: rgba(139, 124, 246, 0.16);
+    --rp-accent-ink: #c9c1ff;
+    --rp-danger: #f2708a;
+    --rp-danger-soft: rgba(242, 112, 138, 0.12);
+    --rp-warn: #f5b84b;
+    --rp-warn-soft: rgba(245, 184, 75, 0.12);
+    --rp-gold: #f3c463;
+    --rp-silver: #b9c2d8;
+    --rp-bronze: #d39a68;
+    --rp-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px -18px rgba(0, 0, 0, 0.7);
+    --rp-r-sm: 6px;
+    --rp-r-md: 10px;
+    --rp-r-lg: 14px;
+    --rp-h: 36px;
+    --rp-font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --rp-font-display: "Space Grotesk", "Inter", "Segoe UI", system-ui, sans-serif;
+    --rp-font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    --rp-gmix: 100%;
+    --rp-total-ink: #5cc8ff;
+    --rp-total-bg: rgba(56, 189, 248, 0.08);
+    --rp-matrix-bg: #0b1027;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .rp {
+      --rp-page: #e7ecfb;
+      --rp-surface: #ffffff;
+      --rp-surface-2: #f4f6fc;
+      --rp-surface-3: #eceffa;
+      --rp-line: rgba(35, 48, 110, 0.10);
+      --rp-line-strong: rgba(35, 48, 110, 0.18);
+      --rp-ink: #161b38;
+      --rp-ink-2: #4c5576;
+      --rp-ink-3: #7c84a2;
+      --rp-accent: #5b4bd8;
+      --rp-accent-soft: rgba(91, 75, 216, 0.10);
+      --rp-accent-ink: #4a3bc4;
+      --rp-danger: #c8314f;
+      --rp-danger-soft: rgba(200, 49, 79, 0.08);
+      --rp-warn: #a8660b;
+      --rp-warn-soft: rgba(214, 140, 20, 0.10);
+      --rp-gold: #c8901f;
+      --rp-silver: #7d879f;
+      --rp-bronze: #a8693a;
+      --rp-shadow: 0 1px 2px rgba(20, 30, 80, 0.05), 0 10px 28px -20px rgba(20, 30, 80, 0.35);
+      --rp-gmix: 58%;
+      --rp-total-ink: #0a6aa3;
+      --rp-total-bg: rgba(10, 106, 163, 0.07);
+      --rp-matrix-bg: #ffffff;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] .rp {
+    --rp-page: #e7ecfb;
+    --rp-surface: #ffffff;
+    --rp-surface-2: #f4f6fc;
+    --rp-surface-3: #eceffa;
+    --rp-line: rgba(35, 48, 110, 0.10);
+    --rp-line-strong: rgba(35, 48, 110, 0.18);
+    --rp-ink: #161b38;
+    --rp-ink-2: #4c5576;
+    --rp-ink-3: #7c84a2;
+    --rp-accent: #5b4bd8;
+    --rp-accent-soft: rgba(91, 75, 216, 0.10);
+    --rp-accent-ink: #4a3bc4;
+    --rp-danger: #c8314f;
+    --rp-danger-soft: rgba(200, 49, 79, 0.08);
+    --rp-warn: #a8660b;
+    --rp-warn-soft: rgba(214, 140, 20, 0.10);
+    --rp-gold: #c8901f;
+    --rp-silver: #7d879f;
+    --rp-bronze: #a8693a;
+    --rp-shadow: 0 1px 2px rgba(20, 30, 80, 0.05), 0 10px 28px -20px rgba(20, 30, 80, 0.35);
+    --rp-gmix: 58%;
+    --rp-total-ink: #0a6aa3;
+    --rp-total-bg: rgba(10, 106, 163, 0.07);
+    --rp-matrix-bg: #ffffff;
+    color-scheme: light;
+  }
 
-  .report-shell { max-width: 1500px; width: 100%; margin: 0 auto; padding: 0 24px 80px; }
+  .rp, .rp * { box-sizing: border-box; }
+  .rp {
+    max-width: 1440px; width: 100%; margin: 0 auto;
+    padding-block: 20px 72px; padding-inline: 24px;
+    font-family: var(--rp-font); color: var(--rp-ink); font-size: 13.5px; line-height: 1.45;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .rp :focus-visible { outline: 2px solid var(--rp-accent); outline-offset: 2px; }
 
-  .report-title-card {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 16px; background: var(--card-bg); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow);
-    padding: 18px 22px; margin-bottom: 16px;
-  }
-  .report-title-left { display: flex; align-items: flex-start; gap: 12px; }
-  .report-title-left .header-icon { font-size: 22px; }
-  .report-title-text { font-family: var(--font-display); font-weight: 700; font-size: 17px; color: var(--ink); }
-  .report-title-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+  /* ---- header ---- */
+  .rp-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .rp-head-text { min-width: 0; }
+  .rp-title { margin: 0; font-family: var(--rp-font-display); font-size: 22px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; text-wrap: balance; }
+  .rp-sub { margin: 4px 0 0; color: var(--rp-ink-2); font-size: 13px; }
+  .rp-sub .rp-tz { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--rp-line-strong); border-radius: 999px; font-size: 11px; color: var(--rp-ink-2); vertical-align: 1px; }
 
-  .report-controls {
-    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
-    background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
-    box-shadow: var(--shadow); padding: 16px 18px; margin-bottom: 16px;
+  .rp-btn {
+    height: var(--rp-h); padding: 0 14px; display: inline-flex; align-items: center; gap: 8px;
+    border-radius: var(--rp-r-md); border: 1px solid var(--rp-line-strong); background: var(--rp-surface);
+    color: var(--rp-ink); font: 600 13px/1 var(--rp-font); cursor: pointer; white-space: nowrap;
+    transition: background .12s, border-color .12s;
   }
-  .rc-group { display: flex; flex-direction: column; gap: 6px; }
-  .rc-group label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-soft); font-weight: 700; }
-  .rc-seg { display: flex; background: var(--field-bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
-  .rc-seg button { border: none; background: transparent; color: var(--ink-soft); font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-family: inherit; white-space: nowrap; }
-  .rc-seg button.active { background: linear-gradient(135deg, #6d5ce8, #4338ca); color: #fff; }
-  .report-controls select {
-    background: var(--field-bg); border: 1.5px solid var(--border); color: var(--ink);
-    border-radius: 10px; padding: 8px 12px; font-size: 13px; min-width: 190px; font-family: inherit;
-  }
-  .rc-spacer { flex: 1; }
-  .rc-actions { display: flex; align-items: stretch; gap: 10px; flex-wrap: nowrap; }
-  .rc-total-chip { background: rgba(124,108,240,0.14); border: 1px solid var(--accent-glow); border-radius: 12px; padding: 10px 18px; text-align: center; min-width: 120px; }
-  .rc-total-chip .num { font-size: 22px; font-weight: 800; font-family: var(--font-display); color: var(--ink); }
-  .rc-total-chip .lbl { font-size: 10.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.4px; }
-  .rc-export-btn {
-    background: var(--field-bg); border: 1.5px solid var(--border); color: var(--ink);
-    border-radius: 12px; padding: 10px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
-    font-family: inherit; display: flex; align-items: center; gap: 6px; white-space: nowrap;
-  }
-  .rc-export-btn:hover { border-color: var(--accent-gold); color: var(--accent-gold); }
-  .rc-export-btn:disabled { opacity: 0.5; cursor: default; }
+  .rp-btn:hover { background: var(--rp-surface-2); border-color: var(--rp-accent); }
+  .rp-btn:disabled { opacity: .55; cursor: default; }
+  .rp-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
 
-  .report-custom-range {
-    display: none; align-items: center; gap: 10px; background: var(--card-bg); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 16px; margin-bottom: 16px; font-size: 13px;
+  /* ---- filter toolbar ---- */
+  .rp-toolbar {
+    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px;
+    padding: 14px 16px; background: var(--rp-surface); border: 1px solid var(--rp-line);
+    border-radius: var(--rp-r-lg); box-shadow: var(--rp-shadow);
   }
+  .rp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .rp-field > label, .rp-field > .rp-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--rp-ink-3); }
+  .rp-seg { display: inline-flex; height: var(--rp-h); padding: 3px; gap: 2px; background: var(--rp-surface-2); border: 1px solid var(--rp-line); border-radius: var(--rp-r-md); }
+  .rp-seg button {
+    border: 0; background: transparent; color: var(--rp-ink-2); font: 600 13px/1 var(--rp-font);
+    padding: 0 12px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  }
+  .rp-seg button:hover { color: var(--rp-ink); }
+  .rp-seg button.active { background: var(--rp-accent-soft); color: var(--rp-accent-ink); box-shadow: inset 0 0 0 1px var(--rp-accent); }
+  .rp-select { position: relative; display: block; }
+  .rp-select select {
+    appearance: none; -webkit-appearance: none; height: var(--rp-h); width: 100%; min-width: 210px; max-width: 280px;
+    padding: 0 34px 0 12px; border-radius: var(--rp-r-md); border: 1px solid var(--rp-line-strong);
+    background: var(--rp-surface-2); color: var(--rp-ink); font: 500 13px/1 var(--rp-font); cursor: pointer;
+    text-overflow: ellipsis;
+  }
+  .rp-select select:hover { border-color: var(--rp-accent); }
+  .rp-select::after {
+    content: ""; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; margin-top: -5px;
+    border-right: 1.5px solid var(--rp-ink-2); border-bottom: 1.5px solid var(--rp-ink-2); transform: rotate(45deg); pointer-events: none;
+  }
+  .rp-select select option { background: var(--rp-surface); color: var(--rp-ink); }
+  .rp-select select option:disabled { color: var(--rp-ink-3); }
+  /* Custom range — same #customRange / #fromDate / #toDate the page already uses */
+  .report-custom-range { display: none; align-items: flex-end; gap: 8px; }
   .report-custom-range.open { display: flex; }
-  .report-custom-range label { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; }
-  .report-custom-range input[type="date"] {
-    background: var(--field-bg); border: 1.5px solid var(--border); color: var(--ink);
-    border-radius: 8px; padding: 6px 10px; font-size: 13px; font-family: inherit;
+  .report-custom-range .arrow { height: var(--rp-h); display: flex; align-items: center; color: var(--rp-ink-3); }
+  .rp input[type="date"] {
+    height: var(--rp-h); padding: 0 10px; border-radius: var(--rp-r-md); border: 1px solid var(--rp-line-strong);
+    background: var(--rp-surface-2); color: var(--rp-ink); font: 500 13px/1 var(--rp-font);
   }
-  .report-custom-range .arrow { color: var(--ink-soft); }
+  .rp-spacer { flex: 1 1 0; }
+  .rp-total { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 120px; }
+  .rp-total .lbl { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--rp-ink-3); white-space: nowrap; }
+  .rp-total .num { font-family: var(--rp-font-display); font-size: 26px; font-weight: 600; line-height: 1.05; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .rp-status { display: inline-flex; align-items: center; gap: 6px; height: var(--rp-h); font-size: 12px; color: var(--rp-ink-2); }
+  .rp-status[hidden] { display: none; }
+  .rp-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--rp-line-strong); border-top-color: var(--rp-accent); animation: rp-spin .8s linear infinite; }
+  @keyframes rp-spin { to { transform: rotate(360deg); } }
 
+  /* ---- states ---- */
+  #reportContainer { display: flex; flex-direction: column; gap: 14px; transition: opacity .15s; min-width: 0; }
+  #reportContainer.is-refreshing { opacity: .55; pointer-events: none; }
   .report-state {
-    background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
-    box-shadow: var(--shadow); padding: 30px 20px; text-align: center; color: var(--ink-soft); font-size: 13.5px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+    padding: 36px 20px; color: var(--rp-ink-2); font-size: 13.5px;
+    background: var(--rp-surface); border: 1px solid var(--rp-line); border-radius: var(--rp-r-lg);
   }
-  .report-state.err { color: #e0577a; }
+  .report-state .st-title { color: var(--rp-ink); font-weight: 600; font-size: 14px; }
+  .report-state.err { border-color: color-mix(in srgb, var(--rp-danger) 40%, transparent); background: var(--rp-danger-soft); }
+  .report-state.err .st-title { color: var(--rp-danger); }
+  .report-state.inline { padding: 22px 16px; border: 0; border-radius: 0; background: transparent; }
+  .rp-banner {
+    display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: var(--rp-r-md);
+    background: var(--rp-warn-soft); border: 1px solid color-mix(in srgb, var(--rp-warn) 40%, transparent);
+    color: var(--rp-ink); font-size: 13px;
+  }
+  .rp-banner b { color: var(--rp-warn); }
+  .rp-skel { background: var(--rp-surface); border: 1px solid var(--rp-line); border-radius: var(--rp-r-lg); position: relative; overflow: hidden; }
+  .rp-skel::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--rp-ink) 5%, transparent), transparent); animation: rp-shimmer 1.3s infinite; }
+  @keyframes rp-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
-  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  /* ---- summary cards (All issue types) ---- */
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
   .summary-card {
-    background: var(--card-bg); border: 1px solid var(--border); border-top: 3px solid var(--m-accent, var(--accent-gold));
-    border-radius: 14px; padding: 16px 18px 15px; box-shadow: var(--shadow); cursor: pointer; transition: transform 0.12s;
+    --m-accent: var(--rp-accent);
+    display: flex; flex-direction: column; gap: 10px; text-align: left; width: 100%; min-width: 0;
+    padding: 14px 16px 12px; border-radius: var(--rp-r-lg); cursor: pointer;
+    background: var(--rp-surface); border: 1px solid var(--rp-line); color: var(--rp-ink); box-shadow: var(--rp-shadow);
+    font: inherit; transition: border-color .12s, background .12s, transform .12s;
   }
-  .summary-card:hover { transform: translateY(-2px); }
-  .summary-card.selected { border-color: var(--m-accent); box-shadow: 0 0 0 1px var(--m-accent), 0 8px 20px -8px var(--m-accent); }
-  .summary-card .sc-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--m-accent, var(--ink)); margin-bottom: 12px; }
-  .summary-card .sc-num { font-family: var(--font-display); font-size: 28px; font-weight: 800; line-height: 1; margin-bottom: 8px; color: var(--ink); }
-  .summary-card .sc-bar-track { height: 5px; border-radius: 999px; background: var(--field-bg); overflow: hidden; margin-bottom: 6px; }
-  .summary-card .sc-bar-fill { height: 100%; border-radius: 999px; background: var(--m-accent, var(--accent-gold)); }
-  .summary-card .sc-pct { font-size: 11px; color: var(--ink-soft); }
+  .summary-card:hover { border-color: var(--rp-line-strong); background: var(--rp-surface-2); }
+  .summary-card.selected { border-color: var(--m-accent); background: color-mix(in srgb, var(--m-accent) 9%, var(--rp-surface)); }
+  .summary-card .sc-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--rp-ink-2); }
+  .summary-card .sc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--m-accent); flex-shrink: 0; }
+  .summary-card .sc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .summary-card .sc-num { font-family: var(--rp-font-display); font-size: 30px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--rp-ink); }
+  .summary-card .sc-bar-track { height: 4px; border-radius: 999px; background: var(--rp-surface-3); overflow: hidden; }
+  .summary-card .sc-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--m-accent); }
+  .summary-card .sc-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--rp-ink-3); white-space: nowrap; }
+  .summary-card .sc-cta { color: var(--rp-ink-2); font-weight: 600; white-space: nowrap; }
+  .summary-card:hover .sc-cta, .summary-card.selected .sc-cta { color: var(--m-accent); }
 
-  .report-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
-  .report-card + .report-card { margin-top: 16px; }
-  .rcard-head { padding: 16px 20px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 6px; }
-  .rcard-head h2 { margin: 0; font-size: 15px; font-family: var(--font-display); color: var(--ink); }
-  .rcard-head .sub { font-size: 12px; color: var(--ink-soft); }
+  /* ---- tables (ranking + module detail) ---- */
+  .report-card { background: var(--rp-surface); border: 1px solid var(--rp-line); border-radius: var(--rp-r-lg); box-shadow: var(--rp-shadow); overflow: hidden; min-width: 0; }
+  .rcard-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--rp-line); }
+  .rcard-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .rcard-title h2 { margin: 0; font-family: var(--rp-font-display); font-size: 15px; font-weight: 600; color: var(--rp-ink); }
+  .rcard-title .by { color: var(--rp-ink-3); font-weight: 500; font-size: 13px; }
+  .rcard-head .sub { font-size: 12px; color: var(--rp-ink-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rcard-head .sub .sep { color: var(--rp-ink-3); }
+  .rcard-head .sub b { color: var(--rp-ink); font-variant-numeric: tabular-nums; }
+  .icon-tile { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; background: color-mix(in srgb, var(--m-accent, var(--rp-accent)) 16%, transparent); }
+  .rtable { overflow-x: auto; }
+  .rtable-inner { min-width: 460px; }
+  .rgrid { display: grid; grid-template-columns: 28px minmax(0, 1.6fr) minmax(80px, 1fr) 72px; align-items: center; gap: 12px; padding: 0 18px; }
+  .rlist-head { height: 34px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--rp-ink-3); background: var(--rp-surface-2); border-bottom: 1px solid var(--rp-line); }
+  .rlist-head .c-count, .rlist-foot .c-count { text-align: right; }
+  .rrow { border-bottom: 1px solid var(--rp-line); }
+  .rrow:last-child { border-bottom: 0; }
+  .rrow-main { min-height: 42px; width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
+  button.rrow-main { cursor: pointer; }
+  button.rrow-main:hover { background: var(--rp-surface-2); }
+  .rrow-main[aria-expanded="true"] { background: var(--rp-surface-2); }
+  .rrow-chevron { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: var(--rp-ink-3); transition: transform .15s; }
+  .rrow-chevron svg { width: 10px; height: 10px; }
+  .rrow-main[aria-expanded="true"] .rrow-chevron { transform: rotate(90deg); color: var(--rp-ink); }
+  .rrow-name { min-width: 0; display: flex; align-items: center; gap: 10px; }
+  .rrow-name .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--rp-ink); }
+  .rrow-name .icon-tile { width: 24px; height: 24px; font-size: 13px; border-radius: 6px; }
+  .rrow-bar-track { height: 6px; border-radius: 999px; background: var(--rp-surface-3); overflow: hidden; }
+  .rrow-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--m-accent, var(--rp-accent)); }
+  .rrow-count { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--rp-ink); }
+  .rank-badge { width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--rp-ink-2); background: var(--rp-surface-3); }
+  .rank-list .rrow:nth-child(1) .rank-badge { color: var(--rp-gold); background: color-mix(in srgb, var(--rp-gold) 16%, transparent); }
+  .rank-list .rrow:nth-child(2) .rank-badge { color: var(--rp-silver); background: color-mix(in srgb, var(--rp-silver) 16%, transparent); }
+  .rank-list .rrow:nth-child(3) .rank-badge { color: var(--rp-bronze); background: color-mix(in srgb, var(--rp-bronze) 16%, transparent); }
+  .rbreakdown { display: none; padding: 4px 18px 14px 58px; background: var(--rp-surface-2); }
+  .rbreakdown.open { display: block; }
+  .rbreakdown-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 10px; }
+  .rchip { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 10px; border-radius: var(--rp-r-sm); background: var(--rp-surface); border: 1px solid var(--rp-line); font-size: 12.5px; color: var(--rp-ink-2); }
+  .rchip .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .rchip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .rchip b { color: var(--rp-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rlist-foot { min-height: 42px; font-weight: 600; border-top: 1px solid var(--rp-line-strong); background: var(--rp-surface-2); }
+  .rlist-foot .c-count { font-variant-numeric: tabular-nums; }
 
-  .rlist-head { display: flex; padding: 10px 20px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--ink-soft); font-weight: 700; border-bottom: 1px solid var(--border); background: var(--field-bg); }
-  .rlist-head .c-name { flex: 1; } .rlist-head .c-count { width: 70px; text-align: right; }
+  /* ---- data matrix (rows × brands grouped by country) ---- */
+  .rcard-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 18px; border-bottom: 1px solid var(--rp-line); }
+  .rcard-tools .hint { font-size: 12px; color: var(--rp-ink-3); }
+  .rp-seg.sm { height: 30px; }
+  .rp-seg.sm button { font-size: 12px; padding: 0 10px; }
+  .matrix-card { border-left: 3px solid var(--rp-total-ink); }
+  .mx-wrap { overflow: auto; max-height: min(70vh, 720px); background: var(--rp-matrix-bg); }
+  .mx { border-collapse: separate; border-spacing: 0; width: 100%; min-width: max-content; font-family: var(--rp-font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .mx th, .mx td { padding: 0 14px; height: 38px; white-space: nowrap; border-bottom: 1px solid var(--rp-line); text-align: left; }
+  .mx thead th { position: sticky; z-index: 2; background: var(--rp-surface-2); font-family: var(--rp-font); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--rp-ink-3); }
+  .mx thead tr:first-child th { top: 0; height: 34px; }
+  .mx thead tr:nth-child(2) th { top: 34px; height: 30px; }
+  .mx thead .grp { text-align: center; color: color-mix(in srgb, var(--g) var(--rp-gmix), var(--rp-ink)); border-bottom-color: color-mix(in srgb, var(--g) 45%, transparent); }
+  .mx thead .grp .gt { margin-left: 8px; font-family: var(--rp-font-mono); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--rp-ink-2); }
+  .mx thead .bc { color: color-mix(in srgb, var(--g) var(--rp-gmix), var(--rp-ink)); text-align: center; }
+  .mx thead .bc, .mx td.v { border-left: 1px solid var(--rp-line); }
+  .mx .gs, .mx thead .bc.gs, .mx td.v.gs { border-left: 1px solid var(--rp-line-strong); }
+  .mx .rowh { position: sticky; left: 0; z-index: 1; background: var(--rp-matrix-bg); font-family: var(--rp-font); font-size: 13px; font-weight: 600; color: var(--rp-ink); min-width: 150px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--rp-line-strong); }
+  .mx thead .rowh { z-index: 3; background: var(--rp-surface-2); color: var(--rp-ink-3); font-size: 11px; }
+  .mx .rowh .wd { margin-left: 8px; font-weight: 500; color: var(--rp-ink-3); font-size: 11.5px; }
+  .mx td.v { text-align: center; font-weight: 600; color: color-mix(in srgb, var(--g) var(--rp-gmix), var(--rp-ink)); }
+  /* zero: only the digit is muted (solid colour) — borders and backgrounds stay crisp */
+  .mx td.v.z { color: var(--rp-ink-3); font-weight: 500; }
+  .mx td.tot, .mx thead .tot { text-align: right; color: var(--rp-ink); font-weight: 700; border-left: 1px solid var(--rp-line-strong); }
+  .mx tbody tr:hover td, .mx tbody tr:hover .rowh { background: var(--rp-surface-2); }
+  .mx tfoot td, .mx tfoot th { position: sticky; bottom: 0; z-index: 1; background: color-mix(in srgb, var(--rp-total-ink) 9%, var(--rp-matrix-bg)); color: var(--rp-total-ink); font-weight: 700; border-top: 1px solid color-mix(in srgb, var(--rp-total-ink) 40%, transparent); border-bottom: 0; }
+  .mx tfoot .rowh { z-index: 3; text-transform: uppercase; letter-spacing: .06em; font-size: 12px; color: var(--rp-total-ink); background: color-mix(in srgb, var(--rp-total-ink) 9%, var(--rp-matrix-bg)); }
+  .mx-empty { padding: 22px 18px; color: var(--rp-ink-2); font-size: 13px; }
 
-  .rrow { border-bottom: 1px solid var(--border); }
-  .rrow-main { display: flex; align-items: center; gap: 12px; padding: 13px 20px; }
-  .rrow-main.clickable { cursor: pointer; }
-  .rrow-main.clickable:hover { background: var(--field-bg); }
-  .rrow-chevron { color: var(--ink-soft); font-size: 10px; width: 12px; flex-shrink: 0; transition: transform 0.15s; }
-  .rrow-main.expanded .rrow-chevron { transform: rotate(90deg); }
-  .rrow-name { width: 220px; flex-shrink: 0; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
-  .rrow-bar-track { flex: 1; height: 7px; border-radius: 999px; background: var(--field-bg); overflow: hidden; }
-  .rrow-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #f5a524, #f3c463); }
-  .rrow-count { width: 60px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 13.5px; flex-shrink: 0; color: var(--ink); }
-
-  .rbreakdown { display: none; padding: 4px 20px 16px 42px; background: var(--field-bg); flex-wrap: wrap; gap: 8px; }
-  .rbreakdown.open { display: flex; }
-  .rchip { background: var(--card-bg); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font-size: 12px; color: var(--ink-soft); display: flex; gap: 6px; align-items: center; }
-  .rchip b { color: var(--ink); font-weight: 700; }
-
-  .rank-badge {
-    width: 22px; height: 22px; border-radius: 50%; background: var(--field-bg); border: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: var(--ink-soft);
-    flex-shrink: 0; margin-right: 2px;
+  @media (max-width: 760px) {
+    .rp { padding-block: 14px 56px; padding-inline: 16px; }
+    .rp-toolbar { padding: 12px; }
+    .rp-field, .rp-select, .rp-select select { width: 100%; max-width: none; min-width: 0; }
+    .rp-seg { width: 100%; }
+    .rp-seg button { flex: 1; }
+    .report-custom-range.open { width: 100%; }
+    .report-custom-range .rp-field { flex: 1; }
+    .rp input[type="date"] { width: 100%; }
+    .rp-spacer { display: none; }
+    .rp-total { flex-direction: row; align-items: baseline; justify-content: space-between; width: 100%; }
+    .summary-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .summary-card .sc-foot { flex-wrap: wrap; row-gap: 2px; }
+    .rtable-inner { min-width: 0; }
+    .rgrid { grid-template-columns: 18px minmax(0, 1fr) 52px 52px; gap: 8px; padding: 0 12px; }
+    .rlist-head span:nth-child(3) { visibility: hidden; }
+    .rrow-name .icon-tile { display: none; }
+    .rbreakdown-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+    .mx th, .mx td { padding: 0 10px; height: 36px; }
+    .mx .rowh { min-width: 0; width: 118px; max-width: 118px; font-size: 12px; }
+    .mx .rowh .wd { display: none; }
+    .mx-wrap { max-height: 70vh; }
+    .rbreakdown { padding-left: 14px; }
+    .summary-card .sc-num { font-size: 26px; }
   }
-  .rank-list .rrow:nth-child(1) .rank-badge { background: linear-gradient(135deg,#f3c463,#e0a83f); color: #241a04; border-color: transparent; }
-  .rank-list .rrow:nth-child(2) .rank-badge { background: linear-gradient(135deg,#cfd6e6,#9aa3c4); color: #1a2040; border-color: transparent; }
-  .rank-list .rrow:nth-child(3) .rank-badge { background: linear-gradient(135deg,#d8a877,#b5814f); color: #241a04; border-color: transparent; }
-
-  .rlist-foot { display: flex; padding: 13px 20px; font-size: 13px; font-weight: 700; border-top: 1px solid var(--border); color: var(--ink); }
-  .rlist-foot .c-name { flex: 1; } .rlist-foot .c-count { width: 70px; text-align: right; }
-  .rmore-note { padding: 10px 20px; font-size: 12px; color: var(--ink-soft); border-top: 1px solid var(--border); font-style: italic; }
+  @media (prefers-reduced-motion: reduce) {
+    .rp-skel::after, .rp-spin { animation: none; }
+    .summary-card, .rrow-chevron, #reportContainer { transition: none; }
+  }
 </style>
 </head>
 <body class="subpage-fixed">
@@ -169,50 +377,45 @@ html[data-theme="light"] {
       <div id="announcementBanner"></div>
       <main class="subpage-main">
 
-  <div class="report-shell">
-    <div class="report-title-card">
-      <div class="report-title-left">
-        <span class="header-icon">📈</span>
-        <div>
-          <div class="report-title-text">Report</div>
-          <div class="report-title-sub">Ticket counts across every module, by day / month / custom range</div>
+  <div class="rp">
+    <header class="rp-head">
+      <div class="rp-head-text">
+        <h1 class="rp-title">Report</h1>
+        <p class="rp-sub">Submitted tickets by issue type, country and brand.<span class="rp-tz" title="Day boundaries for all three countries">Days in GMT+8</span></p>
+      </div>
+      <button type="button" class="rp-btn" id="exportBtn" title="Download every module and country you can see for this date range as an interactive HTML file">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg>
+        <span id="exportBtnLabel">Export</span>
+      </button>
+    </header>
+
+    <section class="rp-toolbar" aria-label="Report filters">
+      <div class="rp-field">
+        <span class="rp-label" id="rangeLbl">Time range</span>
+        <div class="rp-seg" id="rangeSeg" role="group" aria-labelledby="rangeLbl">
+          <button type="button" class="active" data-val="today" aria-pressed="true">Today</button>
+          <button type="button" data-val="month" aria-pressed="false">This Month</button>
+          <button type="button" data-val="custom" aria-pressed="false">Custom</button>
         </div>
       </div>
-    </div>
+      <div class="report-custom-range" id="customRange">
+        <div class="rp-field"><label for="fromDate">From</label><input type="date" id="fromDate" /></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="rp-field"><label for="toDate">To</label><input type="date" id="toDate" /></div>
+      </div>
+      <div class="rp-field">
+        <label for="moduleSelect">Issue type</label>
+        <span class="rp-select"><select id="moduleSelect"></select></span>
+      </div>
+      <div class="rp-field">
+        <label for="countrySelect">Country</label>
+        <span class="rp-select"><select id="countrySelect"></select></span>
+      </div>
+      <div class="rp-spacer"></div>
+      <span class="rp-status" id="rpStatus" role="status" hidden><span class="rp-spin" aria-hidden="true"></span><span>Updating…</span></span>
+    </section>
 
-    <div class="report-controls">
-      <div class="rc-group">
-        <label>Time Range</label>
-        <div class="rc-seg" id="rangeSeg">
-          <button class="active" data-val="today">Today</button>
-          <button data-val="month">This Month</button>
-          <button data-val="custom">Custom…</button>
-        </div>
-      </div>
-      <div class="rc-group">
-        <label>Issue Type</label>
-        <select id="moduleSelect"></select>
-      </div>
-      <div class="rc-group">
-        <label>Country</label>
-        <select id="countrySelect"></select>
-      </div>
-      <div class="rc-actions">
-        <div class="rc-total-chip"><div class="num" id="totalNum">—</div><div class="lbl" id="totalLbl">Total Today</div></div>
-        <button class="rc-export-btn" id="exportBtn">⬇ Export</button>
-      </div>
-      <div class="rc-spacer"></div>
-    </div>
-
-    <div class="report-custom-range" id="customRange">
-      <label>From</label>
-      <input type="date" id="fromDate" />
-      <span class="arrow">→</span>
-      <label>To</label>
-      <input type="date" id="toDate" />
-    </div>
-
-    <div id="reportContainer"><div class="report-state" id="reportInitState">Loading…</div></div>
+    <div id="reportContainer" aria-live="polite"></div>
   </div>
 
       </main>
@@ -230,462 +433,488 @@ html[data-theme="light"] {
     window.HubNav.mount("hubNavMount", { activeModule: "report" });
     window.BrandRow.mount("pageBrandRow");
 
-    // ---- module registry (sourced from schemas.js — no duplicate list
-    // to keep in sync) — Daily Report is deliberately excluded, same
-    // reasoning as the backend (free-text shift summary, not a
-    // countable "issue type"). ----
-    const EXCLUDED_MODULES = ["daily_report"];
-    const REPORT_MODULE_LIST = (window.MODULES || []).filter((m) => !EXCLUDED_MODULES.includes(m.id));
-    const MODULE_BY_ID = {};
-    REPORT_MODULE_LIST.forEach((m) => { MODULE_BY_ID[m.id] = m; });
+  /* ====================================================================
+     2026-10-12 REDESIGN — data handling is unchanged from the previous
+     version: one GET /api/admin/report per date-range change (module and
+     country are client-side filters), the same grouping/ranking/brand
+     matching/country lock, and the same self-contained HTML export.
+     What changed is presentation: summary cards, ranking table, and the
+     brand × (issue type | day) matrix that replaced the expandable chips
+     — the matrix only re-arranges rows already fetched (each row carries
+     its date), so totals are identical. Export reuses these same
+     functions via .toString(), so the downloaded file matches the page.
+     ==================================================================== */
+  const EXCLUDED_MODULES = ["daily_report"];
+  const REPORT_MODULE_LIST = (window.MODULES || []).filter((m) => !EXCLUDED_MODULES.includes(m.id));
+  const MODULE_BY_ID = {};
+  REPORT_MODULE_LIST.forEach((m) => { MODULE_BY_ID[m.id] = m; });
 
-    const COUNTRY_COLORS = { INR: "#4ADE80", PKR: "#38BDF8", PHP: "#F472B6" };
-    const BRAND_PALETTE = ["#38BDF8", "#A78BFA", "#4ADE80", "#FB923C", "#F472B6", "#FBBF24", "#F87171", "#34D399", "#818CF8"];
-    function brandColor(brandId) {
-      const ids = (window.BRANDS || []).map((b) => b.id);
-      const idx = ids.indexOf(brandId);
-      return BRAND_PALETTE[(idx >= 0 ? idx : 0) % BRAND_PALETTE.length];
-    }
-    function brandName(brandId) {
-      const b = (window.BRANDS || []).find((x) => x.id === brandId);
-      return b ? b.name : (brandId || "(unknown)");
-    }
+  const COUNTRY_COLORS = { INR: "#4ADE80", PKR: "#38BDF8", PHP: "#F472B6" };
+  const BRAND_PALETTE = ["#38BDF8", "#A78BFA", "#4ADE80", "#FB923C", "#F472B6", "#FBBF24", "#F87171", "#34D399", "#818CF8"];
+  function brandColor(brandId) {
+    const ids = (window.BRANDS || []).map((b) => b.id);
+    const idx = ids.indexOf(brandId);
+    return BRAND_PALETTE[(idx >= 0 ? idx : 0) % BRAND_PALETTE.length];
+  }
+  function brandName(brandId) {
+    const b = (window.BRANDS || []).find((x) => x.id === brandId);
+    return b ? b.name : (brandId || "(unknown)");
+  }
 
-    // ---- populate the Issue Type / Country selects ----
-    const moduleSelect = document.getElementById("moduleSelect");
-    moduleSelect.innerHTML =
-      `<option value="ALL_MODULES">🗂️ All</option>` +
-      REPORT_MODULE_LIST.map((m) => {
-        const phpOnly = Array.isArray(m.countries) && m.countries.length === 1 && m.countries[0] === "PHP";
-        return `<option value="${m.id}">${m.icon} ${m.name}${phpOnly ? " (PHP only)" : ""}</option>`;
-      }).join("");
+  const moduleSelect = document.getElementById("moduleSelect");
+  moduleSelect.innerHTML =
+    `<option value="ALL_MODULES">🗂️ All</option>` +
+    REPORT_MODULE_LIST.map((m) => {
+      const phpOnly = Array.isArray(m.countries) && m.countries.length === 1 && m.countries[0] === "PHP";
+      return `<option value="${m.id}">${m.icon} ${m.name}${phpOnly ? " (PHP only)" : ""}</option>`;
+    }).join("");
+  const countrySelect = document.getElementById("countrySelect");
+  countrySelect.innerHTML =
+    `<option value="ALL">All</option>` +
+    (window.COUNTRY_CODES || []).map((c) => `<option value="${c}">${c}</option>`).join("");
 
-    const countrySelect = document.getElementById("countrySelect");
-    countrySelect.innerHTML =
-      `<option value="ALL">All</option>` +
-      (window.COUNTRY_CODES || []).map((c) => `<option value="${c}">${c}</option>`).join("");
+  const state = { range: "today", moduleId: "ALL_MODULES", country: "ALL", selectedDim: null, view: "type" };
+  let allRows = [];
+  let lastError = null;
+  let lastPartialErrors = null;
+  let hasRendered = false; // NEW (visual only): keep old results on screen while a new range loads
 
-    // ---- state ----
-    const state = { range: "today", moduleId: "ALL_MODULES", country: "ALL", selectedDim: null };
-    let allRows = []; // flat {module,country,brand,type,count} from the API, for the currently-fetched range+country
-    let lastError = null;
-    let lastPartialErrors = null;
+  const REPORT_TZ_OFFSET_MS = 8 * 60 * 60 * 1000; // GMT+8
+  function pad2(n) { return String(n).padStart(2, "0"); }
+  function gmt8Now() { return new Date(Date.now() + REPORT_TZ_OFFSET_MS); }
+  function todayStr() {
+    const d = gmt8Now();
+    return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+  }
+  function monthRangeStrs() {
+    const now = gmt8Now();
+    const from = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-01`;
+    return { from, to: todayStr() };
+  }
+  function currentFromTo() {
+    if (state.range === "today") return { from: todayStr(), to: todayStr() };
+    if (state.range === "month") return monthRangeStrs();
+    return { from: document.getElementById("fromDate").value, to: document.getElementById("toDate").value };
+  }
+  function formatDateDisplay(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  }
+  function matrixDateBounds() { return currentFromTo(); }
+  function rangeLabel() {
+    const { from, to } = currentFromTo();
+    if (!from || !to) return "Custom range";
+    const modePrefix = state.range === "today" ? "Today · " : state.range === "month" ? "This Month · " : "";
+    return from === to ? `${modePrefix}${formatDateDisplay(from)}` : `${modePrefix}${formatDateDisplay(from)} – ${formatDateDisplay(to)}`;
+  }
 
-    // REVISED (2026-09-27) — this dashboard uses one shared reference
-    // timezone, GMT+8, for "Today"/"This Month", the same way for every
-    // viewer regardless of where their own browser sits — matches
-    // dayBoundaryMs() in functions/api/admin/report.js, which
-    // interprets these same YYYY-MM-DD strings in GMT+8 too. Computed
-    // via UTC math (get the UTC instant, shift it 8 hours) rather than
-    // reading the browser's own local date, since the viewer's location
-    // is deliberately NOT what decides this.
-    const REPORT_TZ_OFFSET_MS = 8 * 60 * 60 * 1000; // GMT+8
-    function pad2(n) { return String(n).padStart(2, "0"); }
-    function gmt8Now() { return new Date(Date.now() + REPORT_TZ_OFFSET_MS); } // fields read as UTC below give GMT+8's wall-clock date
-    function todayStr() {
-      const d = gmt8Now();
-      return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
-    }
-    function monthRangeStrs() {
-      const now = gmt8Now();
-      const from = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-01`;
-      return { from, to: todayStr() };
-    }
-    function currentFromTo() {
-      if (state.range === "today") return { from: todayStr(), to: todayStr() };
-      if (state.range === "month") return monthRangeStrs();
-      return { from: document.getElementById("fromDate").value, to: document.getElementById("toDate").value };
-    }
-    // Formats a YYYY-MM-DD string as e.g. "Sep 27, 2026" — parsed as a
-    // plain calendar date (not a UTC instant) so it always shows the
-    // exact date that was picked, regardless of the viewer's own
-    // timezone.
-    function formatDateDisplay(dateStr) {
-      const [y, m, d] = dateStr.split("-").map(Number);
-      const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
-      return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
-    }
-    // REVISED (2026-09-27) — used to just say "Today" / "This Month",
-    // which reads fine on screen but is ambiguous once it's sitting in
-    // an exported file someone opens later ("this month" as of when?).
-    // Always shows the real date(s) now, for every mode.
-    function rangeLabel() {
-      const { from, to } = currentFromTo();
-      if (!from || !to) return "Custom range";
-      const modePrefix = state.range === "today" ? "Today · " : state.range === "month" ? "This Month · " : "";
-      return from === to ? `${modePrefix}${formatDateDisplay(from)}` : `${modePrefix}${formatDateDisplay(from)} – ${formatDateDisplay(to)}`;
-    }
+  function sumRows(rows) { return rows.reduce((a, r) => a + r.count, 0); }
+  function rowsFor(moduleId, country) {
+    return allRows.filter((r) => (moduleId === "ALL_MODULES" || r.module === moduleId) && (country === "ALL" || r.country === country));
+  }
+  function dimLabel(name, isCountry) { return isCountry ? name : brandName(name); }
 
-    function sumRows(rows) { return rows.reduce((a, r) => a + r.count, 0); }
-    function rowsFor(moduleId, country) {
-      return allRows.filter((r) => (moduleId === "ALL_MODULES" || r.module === moduleId) && (country === "ALL" || r.country === country));
-    }
-    function dimLabel(name, isCountry) { return isCountry ? name : brandName(name); }
-
-    // Single-module detail table: typed modules group by their issue-
-    // type field (with a brand/country breakdown per type); non-typed
-    // modules (QA, Genie Issue) group directly by brand/country.
-    function computeModuleRows(moduleId, country) {
-      const rows = rowsFor(moduleId, country);
-      const isAll = country === "ALL";
-      const hasTypes = rows.some((r) => r.type);
-      const groups = {};
-      if (hasTypes) {
-        rows.forEach((r) => {
-          const t = r.type || "(unspecified)";
-          groups[t] = groups[t] || {};
-          const dim = isAll ? r.country : (r.brand || "(unknown)");
-          groups[t][dim] = (groups[t][dim] || 0) + r.count;
-        });
-      } else {
-        rows.forEach((r) => {
-          const dim = isAll ? r.country : (r.brand || "(unknown)");
-          groups[dim] = groups[dim] || {};
-          groups[dim]._total = (groups[dim]._total || 0) + r.count;
-        });
-      }
-      if (hasTypes) {
-        return Object.keys(groups).map((t) => {
-          const dims = groups[t];
-          const total = Object.values(dims).reduce((a, b) => a + b, 0);
-          const breakdown = Object.keys(dims).map((d) => ({ name: dimLabel(d, isAll), count: dims[d] })).sort((a, b) => b.count - a.count);
-          return { name: t, count: total, breakdown };
-        }).sort((a, b) => b.count - a.count);
-      }
-      return Object.keys(groups).map((d) => ({ name: dimLabel(d, isAll), count: groups[d]._total || 0, breakdown: null })).sort((a, b) => b.count - a.count);
-    }
-
-    // BUGFIX (2026-09-27) — this used to match a row to a brand card by
-    // exact id equality only (r.brand === b.id). Most tickets carry a
-    // real brandId ("crickex_inr"), but any record that only ever had
-    // the bare display name in its brand field (older records — see
-    // report.js's own comment on this fallback) would match NO card at
-    // all and silently undercount. Now matches by id OR by name — the
-    // actual root cause of the undercount this was chasing turned out
-    // to be in the backend's D1 scan instead (see report.js's own
-    // 2026-09-27 fix: an unbounded single query silently truncating on
-    // a large table), but this matching gap was real too and is worth
-    // keeping fixed regardless.
-    // BUGFIX (2026-09-27) — the earlier id-or-name fix still missed real
-    // data: the diagnostic added alongside it (see below) caught actual
-    // tickets storing brand as a bare lowercase slug ("crickex",
-    // "betvisa", "betjili") — matching neither the id ("crickex_inr")
-    // nor the properly-cased name ("Crickex") exactly. Root cause is
-    // upstream (something in ticket submission is writing that lowercase
-    // form instead of resolving it through the brand registry — worth
-    // checking separately), but matching case-insensitively against the
-    // name here is a correct, resilient fix regardless of whether/when
-    // that gets addressed at the source: comparing lowercased strings is
-    // never wrong, only ever more forgiving.
-    function rowMatchesBrand(row, brandObj) {
-      if (!row.brand) return false;
-      if (row.brand === brandObj.id) return true;
-      return String(row.brand).toLowerCase() === String(brandObj.name).toLowerCase();
-    }
-    function topCardDimension(country) {
-      if (country === "ALL") {
-        return (window.COUNTRY_CODES || []).map((c) => ({ name: c, color: COUNTRY_COLORS[c] || "#f3c463", total: sumRows(allRows.filter((r) => r.country === c)) }));
-      }
-      return (window.BRANDS || []).filter((b) => b.country === country)
-        .map((b) => ({ name: b.name, id: b.id, color: brandColor(b.id), total: sumRows(allRows.filter((r) => r.country === country && rowMatchesBrand(r, b))) }));
-    }
-
-    function moduleTotalsForDim(dimId, isCountryDim, country) {
-      let filtered;
-      if (isCountryDim) {
-        filtered = allRows.filter((r) => r.country === dimId);
-      } else {
-        const brandObj = (window.BRANDS || []).find((b) => b.id === dimId);
-        filtered = allRows.filter((r) => r.country === country && brandObj && rowMatchesBrand(r, brandObj));
-      }
-      const byModule = {};
-      filtered.forEach((r) => { byModule[r.module] = (byModule[r.module] || 0) + r.count; });
-      return Object.keys(byModule).filter((m) => MODULE_BY_ID[m])
-        .map((m) => ({ moduleId: m, total: byModule[m] })).filter((x) => x.total > 0).sort((a, b) => b.total - a.total);
-    }
-
-
-    function escapeHtml(str) {
-      return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    function buildSummaryCard(entry, grandAcrossAll) {
-      const pct = grandAcrossAll ? Math.round((entry.total / grandAcrossAll) * 100) : 0;
-      const el = document.createElement("div");
-      el.className = "summary-card" + (state.selectedDim === (entry.id || entry.name) ? " selected" : "");
-      el.style.setProperty("--m-accent", entry.color);
-      el.innerHTML = `
-        <div class="sc-head">${escapeHtml(entry.name)}</div>
-        <div class="sc-num">${entry.total}</div>
-        <div class="sc-bar-track"><div class="sc-bar-fill" style="width:${pct}%"></div></div>
-        <div class="sc-pct">${pct}% of total</div>`;
-      el.addEventListener("click", () => {
-        const key = entry.id || entry.name;
-        state.selectedDim = state.selectedDim === key ? null : key;
-        render();
+  function computeModuleRows(moduleId, country) {
+    const rows = rowsFor(moduleId, country);
+    const isAll = country === "ALL";
+    const hasTypes = rows.some((r) => r.type);
+    const groups = {};
+    if (hasTypes) {
+      rows.forEach((r) => {
+        const t = r.type || "(unspecified)";
+        groups[t] = groups[t] || {};
+        const dim = isAll ? r.country : (r.brand || "(unknown)");
+        groups[t][dim] = (groups[t][dim] || 0) + r.count;
       });
-      return el;
+    } else {
+      rows.forEach((r) => {
+        const dim = isAll ? r.country : (r.brand || "(unknown)");
+        groups[dim] = groups[dim] || {};
+        groups[dim]._total = (groups[dim]._total || 0) + r.count;
+      });
     }
+    if (hasTypes) {
+      return Object.keys(groups).map((t) => {
+        const dims = groups[t];
+        const total = Object.values(dims).reduce((a, b) => a + b, 0);
+        const breakdown = Object.keys(dims).map((d) => ({ name: dimLabel(d, isAll), count: dims[d] })).sort((a, b) => b.count - a.count);
+        return { name: t, count: total, breakdown };
+      }).sort((a, b) => b.count - a.count);
+    }
+    return Object.keys(groups).map((d) => ({ name: dimLabel(d, isAll), count: groups[d]._total || 0, breakdown: null })).sort((a, b) => b.count - a.count);
+  }
 
-    function buildModuleCard(moduleId, country) {
-      const m = MODULE_BY_ID[moduleId];
-      const rows = computeModuleRows(moduleId, country);
-      const isAll = country === "ALL";
-      const grandTotal = rows.reduce((a, b) => a + b.count, 0);
-      const maxCount = Math.max(1, ...rows.map((r) => r.count));
-      const hasTypes = rowsFor(moduleId, country).some((r) => r.type);
-      const typeColLabel = hasTypes ? "Issue Type" : (isAll ? "Country" : "Brand");
-      const card = document.createElement("div");
-      card.className = "report-card";
-      card.innerHTML = `
-        <div class="rcard-head">
-          <h2>${m ? m.icon + " " + escapeHtml(m.name) : escapeHtml(moduleId)} — by ${typeColLabel}</h2>
-          <div class="sub">${rangeLabel()} · ${isAll ? "All countries" : country} · Total <b style="color:var(--ink)">${grandTotal}</b></div>
+  function rowMatchesBrand(row, brandObj) {
+    if (!row.brand) return false;
+    if (row.brand === brandObj.id) return true;
+    return String(row.brand).toLowerCase() === String(brandObj.name).toLowerCase();
+  }
+  function topCardDimension(country) {
+    if (country === "ALL") {
+      return (window.COUNTRY_CODES || []).map((c) => ({ name: c, color: COUNTRY_COLORS[c] || "#f3c463", total: sumRows(allRows.filter((r) => r.country === c)) }));
+    }
+    return (window.BRANDS || []).filter((b) => b.country === country)
+      .map((b) => ({ name: b.name, id: b.id, color: brandColor(b.id), total: sumRows(allRows.filter((r) => r.country === country && rowMatchesBrand(r, b))) }));
+  }
+  function moduleTotalsForDim(dimId, isCountryDim, country) {
+    let filtered;
+    if (isCountryDim) {
+      filtered = allRows.filter((r) => r.country === dimId);
+    } else {
+      const brandObj = (window.BRANDS || []).find((b) => b.id === dimId);
+      filtered = allRows.filter((r) => r.country === country && brandObj && rowMatchesBrand(r, brandObj));
+    }
+    const byModule = {};
+    filtered.forEach((r) => { byModule[r.module] = (byModule[r.module] || 0) + r.count; });
+    return Object.keys(byModule).filter((m) => MODULE_BY_ID[m])
+      .map((m) => ({ moduleId: m, total: byModule[m] })).filter((x) => x.total > 0).sort((a, b) => b.total - a.total);
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  // Display-only helpers (new): thousands separators, and a chip colour that
+  // reuses the same country/brand colours the cards use.
+  function fmt(n) { return Number(n || 0).toLocaleString("en-US"); }
+  function chipColor(name, isCountryDim, country) {
+    if (isCountryDim) return COUNTRY_COLORS[name] || "#f3c463";
+    const b = (window.BRANDS || []).find((x) => x.country === country && x.name === name);
+    return b ? brandColor(b.id) : "#8b93b0";
+  }
+  const CHEVRON_SVG = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 1.5 7 5l-3.5 3.5"/></svg>';
+
+  // ---- data matrix (display only: re-arranges the same rows the report
+  // already holds — same counts, no extra request) ----
+  function brandAbbr(b) {
+    const map = { crickex: "CX", betjili: "BJ", mostplay: "MP", betvisa: "BV", jeetway: "JWY", jeetwin: "JW", sbj66: "S66", heybaji: "HB", superbaji: "SB", kv8: "KV8", darazplay: "DP" };
+    return map[String(b.name).toLowerCase()] || String(b.name).slice(0, 3).toUpperCase();
+  }
+  function matrixGroups(moduleId, country) {
+    const m = MODULE_BY_ID[moduleId];
+    return (country === "ALL" ? (window.COUNTRY_CODES || []) : [country])
+      .filter((c) => moduleId === "ALL_MODULES" || !m || m.countries.includes(c))
+      .map((c) => ({ country: c, color: COUNTRY_COLORS[c] || "#f3c463", brands: (window.BRANDS || []).filter((b) => b.country === c) }));
+  }
+  function enumerateDates(from, to) {
+    const out = [];
+    if (!from || !to) return out;
+    for (const d = new Date(from + "T00:00:00Z"); out.length <= 400; d.setUTCDate(d.getUTCDate() + 1)) {
+      const s = d.toISOString().slice(0, 10);
+      if (s > to) break;
+      out.push(s);
+    }
+    return out;
+  }
+  function dayLabelHtml(s) {
+    const [y, m, d] = s.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.toLocaleDateString("en-US", { month: "short", day: "2-digit", timeZone: "UTC" }) +
+      `<span class="wd">${dt.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" })}</span>`;
+  }
+  // spec: { data, groups, rowKeys, rowOf(r), rowLabel(key) -> html, firstColLabel }
+  function buildMatrixTable(spec) {
+    const cells = {}, colTot = {}, rowTot = {};
+    let grand = 0;
+    spec.data.forEach((r) => {
+      const g = spec.groups.find((x) => x.country === r.country);
+      if (!g) return;
+      const rk = spec.rowOf(r);
+      if (rk == null) return;
+      // Rows / grand totals count every ticket (same totals as the cards and the old page);
+      // a ticket whose brand matches no current brand has no column of its own.
+      rowTot[rk] = (rowTot[rk] || 0) + r.count;
+      const b = g.brands.find((x) => rowMatchesBrand(r, x));
+      if (b) {
+        const ck = r.country + "|" + b.id;
+        cells[rk] = cells[rk] || {};
+        cells[rk][ck] = (cells[rk][ck] || 0) + r.count;
+        colTot[ck] = (colTot[ck] || 0) + r.count;
+      }
+      grand += r.count;
+    });
+    const cols = [];
+    spec.groups.forEach((g) => {
+      const list = g.brands.map((b) => ({ key: g.country + "|" + b.id, abbr: brandAbbr(b), full: b.name + " (" + g.country + ")", g }));
+      list.forEach((c, i) => { c.first = i === 0; });
+      g.cols = list;
+      g.total = list.reduce((a, c) => a + (colTot[c.key] || 0), 0);
+      cols.push(...list);
+    });
+    const cell = (v, c, tag) => `<${tag} class="v${v ? "" : " z"}${c.first ? " gs" : ""}" style="--g:${c.g.color}">${fmt(v)}</${tag}>`;
+    const head1 = spec.groups.map((g) => `<th class="grp gs" colspan="${g.cols.length}" style="--g:${g.color}">${escapeHtml(g.country)}</th>`).join("");
+    const head2 = cols.map((c) => `<th class="bc${c.first ? " gs" : ""}" style="--g:${c.g.color}" title="${escapeHtml(c.full)}">${escapeHtml(c.abbr)}</th>`).join("");
+    const body = spec.rowKeys.map((rk) => `<tr><th class="rowh" scope="row">${spec.rowLabel(rk)}</th>${cols.map((c) => cell((cells[rk] || {})[c.key] || 0, c, "td")).join("")}<td class="tot">${fmt(rowTot[rk] || 0)}</td></tr>`).join("");
+    const foot = `<tr><th class="rowh" scope="row">Grand total</th>${cols.map((c) => cell(colTot[c.key] || 0, c, "td")).join("")}<td class="tot">${fmt(grand)}</td></tr>`;
+    const wrap = document.createElement("div");
+    wrap.className = "mx-wrap";
+    wrap.setAttribute("tabindex", "0");
+    wrap.innerHTML = spec.rowKeys.length
+      ? `<table class="mx"><thead><tr><th class="rowh" rowspan="2">${escapeHtml(spec.firstColLabel)}</th>${head1}<th class="tot" rowspan="2">Total</th></tr><tr>${head2}</tr></thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`
+      : `<div class="mx-empty">No tickets in this range.</div>`;
+    return wrap;
+  }
+  function buildDailyMatrixCard(moduleId, country, title) {
+    const { from, to } = matrixDateBounds();
+    const card = document.createElement("section");
+    card.className = "report-card matrix-card";
+    card.innerHTML = `
+      <div class="rcard-head">
+        <div class="rcard-title"><h2>${escapeHtml(title)} <span class="by">by day</span></h2></div>
+        <div class="sub"><span>${escapeHtml(rangeLabel())}</span><span class="sep">·</span><span>${country === "ALL" ? "All countries" : escapeHtml(country)}</span></div>
+      </div>`;
+    card.appendChild(buildMatrixTable({
+      data: rowsFor(moduleId, country),
+      groups: matrixGroups(moduleId, country),
+      rowKeys: enumerateDates(from, to),
+      rowOf: (r) => r.date,
+      rowLabel: dayLabelHtml,
+      firstColLabel: "Date / Day",
+    }));
+    return card;
+  }
+
+  function buildSummaryCard(entry, grandAcrossAll) {
+    const pct = grandAcrossAll ? Math.round((entry.total / grandAcrossAll) * 100) : 0;
+    const key = entry.id || entry.name;
+    const selected = state.selectedDim === key;
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "summary-card" + (selected ? " selected" : "");
+    el.setAttribute("aria-pressed", selected ? "true" : "false");
+    el.style.setProperty("--m-accent", entry.color);
+    el.innerHTML = `
+      <span class="sc-head"><span class="sc-dot"></span><span class="sc-name">${escapeHtml(entry.name)}</span></span>
+      <span class="sc-num">${fmt(entry.total)}</span>
+      <span class="sc-bar-track"><span class="sc-bar-fill" style="width:${pct}%"></span></span>
+      <span class="sc-foot"><span class="sc-pct">${pct}% of total</span><span class="sc-cta">${selected ? "Hide ranking" : "View ranking ›"}</span></span>`;
+    el.addEventListener("click", () => {
+      state.selectedDim = state.selectedDim === key ? null : key;
+      render();
+    });
+    return el;
+  }
+
+  function buildModuleCard(moduleId, country) {
+    const m = MODULE_BY_ID[moduleId];
+    const rows = computeModuleRows(moduleId, country); // same grouping + order as before
+    const isAll = country === "ALL";
+    const grandTotal = rows.reduce((a, b) => a + b.count, 0);
+    const hasTypes = rowsFor(moduleId, country).some((r) => r.type);
+    const typeColLabel = hasTypes ? "Issue Type" : (isAll ? "Country" : "Brand");
+    const byDay = state.view === "day";
+    const card = document.createElement("section");
+    card.className = "report-card matrix-card";
+    card.style.setProperty("--m-accent", m ? m.accent : "#8b7cf6");
+    card.innerHTML = `
+      <div class="rcard-head">
+        <div class="rcard-title">
+          <span class="icon-tile" aria-hidden="true">${m ? m.icon : "❓"}</span>
+          <h2>${m ? escapeHtml(m.name) : escapeHtml(moduleId)} <span class="by">by ${byDay ? "Day" : typeColLabel}</span></h2>
         </div>
-        <div class="rlist-head"><div class="c-name">${typeColLabel}</div><div class="c-count">Count</div></div>
+        <div class="sub"><span>${escapeHtml(rangeLabel())}</span><span class="sep">·</span><span>${isAll ? "All countries" : escapeHtml(country)}</span><span class="sep">·</span><span>Total <b>${fmt(grandTotal)}</b></span></div>
+      </div>
+      <div class="rcard-tools">
+        <div class="rp-seg sm" role="group" aria-label="Rows">
+          <button type="button" data-view="type" class="${byDay ? "" : "active"}" aria-pressed="${!byDay}">By ${hasTypes ? "issue type" : "total"}</button>
+          <button type="button" data-view="day" class="${byDay ? "active" : ""}" aria-pressed="${byDay}">By day</button>
+        </div>
+        <span class="hint">Columns: brands grouped by country · hover a code for the full name</span>
+      </div>`;
+    card.querySelectorAll("[data-view]").forEach((btn) => btn.addEventListener("click", () => { state.view = btn.dataset.view; render(); }));
+    let spec;
+    if (byDay) {
+      const { from, to } = matrixDateBounds();
+      spec = { rowKeys: enumerateDates(from, to), rowOf: (r) => r.date, rowLabel: dayLabelHtml, firstColLabel: "Date / Day" };
+    } else if (hasTypes) {
+      spec = { rowKeys: rows.map((r) => r.name), rowOf: (r) => r.type || "(unspecified)", rowLabel: (k) => `<span title="${escapeHtml(k)}">${escapeHtml(k)}</span>`, firstColLabel: "Issue Type" };
+    } else {
+      spec = { rowKeys: grandTotal ? ["__all"] : [], rowOf: () => "__all", rowLabel: () => (m ? escapeHtml(m.name) : "All tickets"), firstColLabel: "Issue Type" };
+    }
+    card.appendChild(buildMatrixTable({ ...spec, data: rowsFor(moduleId, country), groups: matrixGroups(moduleId, country) }));
+    return card;
+  }
+
+  function buildRankList(entries, title) {
+    const grand = entries.reduce((a, b) => a + b.total, 0);
+    const max = Math.max(1, ...entries.map((e) => e.total));
+    const card = document.createElement("section");
+    card.className = "report-card rank-list";
+    card.innerHTML = `
+      <div class="rcard-head">
+        <div class="rcard-title"><h2>Ranking <span class="by">· ${escapeHtml(title)}</span></h2></div>
+        <div class="sub"><span>${escapeHtml(rangeLabel())}</span></div>
+      </div>
+      <div class="rtable"><div class="rtable-inner">
+        <div class="rgrid rlist-head"><span>#</span><span>Issue Type</span><span>Relative to top</span><span class="c-count">Count</span></div>
         <div class="rlist-body"></div>
-        <div class="rlist-foot"><div class="c-name">Total</div><div class="c-count">${grandTotal}</div></div>`;
-      const body = card.querySelector(".rlist-body");
-      if (!rows.length) {
-        body.innerHTML = `<div class="report-state">No tickets in this range.</div>`;
-      } else {
-        rows.forEach((r) => {
-          const canExpand = !!(r.breakdown && r.breakdown.length);
-          const wrap = document.createElement("div");
-          wrap.className = "rrow";
-          const main = document.createElement("div");
-          main.className = "rrow-main" + (canExpand ? " clickable" : "");
-          main.innerHTML = `
-            <span class="rrow-chevron">${canExpand ? "▶" : ""}</span>
-            <span class="rrow-name" title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
-            <div class="rrow-bar-track"><div class="rrow-bar-fill" style="width:${Math.round((r.count / maxCount) * 100)}%"></div></div>
-            <span class="rrow-count">${r.count}</span>`;
-          const bd = document.createElement("div");
-          bd.className = "rbreakdown";
-          if (canExpand) bd.innerHTML = r.breakdown.map((b) => `<div class="rchip">${escapeHtml(b.name)} <b>${b.count}</b></div>`).join("");
-          if (canExpand) main.addEventListener("click", () => { main.classList.toggle("expanded"); bd.classList.toggle("open"); });
-          wrap.appendChild(main); wrap.appendChild(bd);
-          body.appendChild(wrap);
-        });
+        <div class="rgrid rlist-foot"><span></span><span>Total</span><span></span><span class="c-count">${fmt(grand)}</span></div>
+      </div></div>`;
+    const body = card.querySelector(".rlist-body");
+    if (!entries.length) body.innerHTML = `<div class="report-state inline">No tickets in this range.</div>`;
+    entries.forEach((e, i) => {
+      const m = MODULE_BY_ID[e.moduleId];
+      const wrap = document.createElement("div");
+      wrap.className = "rrow";
+      wrap.innerHTML = `
+        <div class="rgrid rrow-main" style="--m-accent:${m ? m.accent : "#f3c463"}">
+          <span class="rank-badge">${i + 1}</span>
+          <span class="rrow-name"><span class="icon-tile" aria-hidden="true">${m ? m.icon : "❓"}</span><span class="txt" title="${m ? escapeHtml(m.name) : escapeHtml(e.moduleId)}">${m ? escapeHtml(m.name) : escapeHtml(e.moduleId)}</span></span>
+          <span class="rrow-bar-track"><span class="rrow-bar-fill" style="width:${Math.round((e.total / max) * 100)}%"></span></span>
+          <span class="rrow-count">${fmt(e.total)}</span>
+        </div>`;
+      body.appendChild(wrap);
+    });
+    return card;
+  }
+
+  function renderSkeleton() {
+    const c = document.getElementById("reportContainer");
+    c.innerHTML = `<div class="summary-grid">${'<div class="rp-skel" style="height:118px"></div>'.repeat(3)}</div><div class="rp-skel" style="height:220px"></div>`;
+    c.setAttribute("aria-busy", "true");
+  }
+
+  function render() {
+    const container = document.getElementById("reportContainer");
+    container.innerHTML = "";
+    container.classList.remove("is-refreshing");
+    container.removeAttribute("aria-busy");
+    { const _t = document.getElementById("totalLbl"); if (_t) _t.textContent = "Total " + (state.range === "today" ? "Today" : state.range === "month" ? "This Month" : "(range)"); }
+
+    if (lastError) {
+      container.innerHTML = `<div class="report-state err" role="alert"><div class="st-title">Couldn't load the report</div><div>${escapeHtml(lastError)}</div><button type="button" class="rp-btn" id="retryBtn">Try again</button></div>`;
+      document.getElementById("retryBtn").addEventListener("click", () => fetchAndRender());
+      { const _t = document.getElementById("totalNum"); if (_t) _t.textContent = "—"; }
+      return;
+    }
+    if (lastPartialErrors) {
+      const warn = document.createElement("div");
+      warn.className = "rp-banner";
+      warn.setAttribute("role", "status");
+      warn.innerHTML = `<b>⚠</b><span>Couldn't scan ${escapeHtml(lastPartialErrors.join(", "))} — totals below may be undercounted for ${lastPartialErrors.length > 1 ? "those countries" : "that country"}. Try again shortly.</span>`;
+      container.appendChild(warn);
+    }
+
+    if (state.moduleId === "ALL_MODULES") {
+      const cardEntries = topCardDimension(state.country);
+      const grand = cardEntries.reduce((a, b) => a + b.total, 0);
+      const grid = document.createElement("div");
+      grid.className = "summary-grid";
+      cardEntries.forEach((entry) => grid.appendChild(buildSummaryCard(entry, grand)));
+      container.appendChild(grid);
+      if (state.selectedDim) {
+        const isCountryCard = state.country === "ALL";
+        const ranked = moduleTotalsForDim(state.selectedDim, isCountryCard, state.country);
+        const title = isCountryCard ? state.selectedDim : brandName(state.selectedDim);
+        container.appendChild(buildRankList(ranked, title));
       }
-      return card;
+      container.appendChild(buildDailyMatrixCard("ALL_MODULES", state.country, "All issue types"));
+      { const _t = document.getElementById("totalNum"); if (_t) _t.textContent = fmt(grand); }
+    } else {
+      container.appendChild(buildModuleCard(state.moduleId, state.country));
+      { const _t = document.getElementById("totalNum"); if (_t) _t.textContent = fmt(sumRows(rowsFor(state.moduleId, state.country))); }
     }
+    hasRendered = true;
+  }
 
-    function buildRankList(entries, title) {
-      const grand = entries.reduce((a, b) => a + b.total, 0);
-      const max = Math.max(1, ...entries.map((e) => e.total));
-      const card = document.createElement("div");
-      card.className = "report-card rank-list";
-      card.innerHTML = `
-        <div class="rcard-head"><h2>Ranking — ${escapeHtml(title)}</h2><div class="sub">${rangeLabel()}</div></div>
-        <div class="rlist-head"><div class="c-name">Issue Type</div><div class="c-count">Count</div></div>
-        <div class="rlist-body"></div>
-        <div class="rlist-foot"><div class="c-name">Total</div><div class="c-count">${grand}</div></div>`;
-      const body = card.querySelector(".rlist-body");
-      entries.forEach((e, i) => {
-        const m = MODULE_BY_ID[e.moduleId];
-        const wrap = document.createElement("div");
-        wrap.className = "rrow";
-        wrap.innerHTML = `
-          <div class="rrow-main">
-            <span class="rank-badge">${i + 1}</span>
-            <span style="margin-right:2px;">${m ? m.icon : "❓"}</span>
-            <span class="rrow-name" style="width:auto; flex:0 0 180px;">${m ? escapeHtml(m.name) : escapeHtml(e.moduleId)}</span>
-            <div class="rrow-bar-track"><div class="rrow-bar-fill" style="width:${Math.round((e.total / max) * 100)}%; background:${m ? m.accent : "#f3c463"}"></div></div>
-            <span class="rrow-count">${e.total}</span>
-          </div>`;
-        body.appendChild(wrap);
-      });
-      return card;
+  async function fetchAndRender() {
+    const { from, to } = currentFromTo();
+    if (!from || !to) return;
+    const container = document.getElementById("reportContainer");
+    const status = document.getElementById("rpStatus");
+    // Visual only: first load shows a skeleton; later loads keep the previous
+    // results (dimmed) so the page doesn't jump while the new range arrives.
+    if (hasRendered && !lastError) { container.classList.add("is-refreshing"); container.setAttribute("aria-busy", "true"); }
+    else renderSkeleton();
+    status.hidden = false;
+    lastError = null;
+    lastPartialErrors = null;
+    try {
+      const params = new URLSearchParams({ from, to, module: "ALL", country: "ALL" });
+      const res = await window.AgentAuth.authFetch(`/api/admin/report?${params.toString()}`, { cache: "no-store" });
+      const data = await res.json();
+      if (!data.ok) {
+        lastError = data.error || "Failed to load report.";
+        allRows = [];
+      } else {
+        allRows = data.rows || [];
+        if (data.partialErrors && data.partialErrors.length) lastPartialErrors = data.partialErrors;
+      }
+    } catch {
+      lastError = "Failed to load — check your connection.";
+      allRows = [];
     }
+    status.hidden = true;
+    render();
+  }
 
-    function render() {
-      const container = document.getElementById("reportContainer");
-      container.innerHTML = "";
-      document.getElementById("totalLbl").textContent = "Total " + (state.range === "today" ? "Today" : state.range === "month" ? "This Month" : "(range)");
-
-      if (lastError) {
-        container.innerHTML = `<div class="report-state err">${escapeHtml(lastError)}</div>`;
-        document.getElementById("totalNum").textContent = "—";
+  function setRangeButtons(btn) {
+    document.querySelectorAll("#rangeSeg button").forEach((b) => { b.classList.toggle("active", b === btn); b.setAttribute("aria-pressed", String(b === btn)); });
+  }
+  document.getElementById("rangeSeg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button"); if (!btn) return;
+    setRangeButtons(btn); state.range = btn.dataset.val; state.selectedDim = null;
+    const customBox = document.getElementById("customRange");
+    if (state.range === "custom") {
+      customBox.classList.add("open");
+      if (!document.getElementById("fromDate").value) {
+        const from = gmt8Now(); from.setUTCDate(from.getUTCDate() - 6);
+        document.getElementById("fromDate").value = `${from.getUTCFullYear()}-${pad2(from.getUTCMonth() + 1)}-${pad2(from.getUTCDate())}`;
+        document.getElementById("toDate").value = todayStr();
+        fetchAndRender();
         return;
       }
-
-      if (lastPartialErrors) {
-        const warn = document.createElement("div");
-        warn.className = "report-state err";
-        warn.style.marginBottom = "12px";
-        warn.textContent = `⚠️ Couldn't scan ${lastPartialErrors.join(", ")} — totals below may be undercounted for ${lastPartialErrors.length > 1 ? "those countries" : "that country"}. Try again shortly.`;
-        container.appendChild(warn);
-      }
-
-      if (state.moduleId === "ALL_MODULES") {
-        const cardEntries = topCardDimension(state.country);
-        const grand = cardEntries.reduce((a, b) => a + b.total, 0);
-
-        const grid = document.createElement("div");
-        grid.className = "summary-grid";
-        cardEntries.forEach((entry) => grid.appendChild(buildSummaryCard(entry, grand)));
-        container.appendChild(grid);
-
-        if (state.selectedDim) {
-          const isCountryCard = state.country === "ALL";
-          const ranked = moduleTotalsForDim(state.selectedDim, isCountryCard, state.country);
-          const title = isCountryCard ? state.selectedDim : brandName(state.selectedDim);
-          container.appendChild(buildRankList(ranked, title));
-        }
-        document.getElementById("totalNum").textContent = grand;
-      } else {
-        const card = buildModuleCard(state.moduleId, state.country);
-        container.appendChild(card);
-        document.getElementById("totalNum").textContent = sumRows(rowsFor(state.moduleId, state.country));
-      }
+    } else {
+      customBox.classList.remove("open");
     }
+    fetchAndRender();
+  });
+  document.getElementById("fromDate").addEventListener("change", () => { state.selectedDim = null; fetchAndRender(); });
+  document.getElementById("toDate").addEventListener("change", () => { state.selectedDim = null; fetchAndRender(); });
 
-    async function fetchAndRender() {
-      const { from, to } = currentFromTo();
-      if (!from || !to) return; // custom range with a date not picked yet
-      const container = document.getElementById("reportContainer");
-      container.innerHTML = `<div class="report-state">Loading…</div>`;
-      lastError = null;
-      lastPartialErrors = null;
-      try {
-        // Always fetch every country this account is permitted to see
-        // (server-side canSeeCountry already narrows it per-account) —
-        // NOT just whichever country the on-screen filter happens to be
-        // set to. The Country dropdown is now a pure client-side view
-        // filter (see rowsFor()); this is what makes allRows always hold
-        // the complete permitted dataset, which both fixes Export
-        // (see the exportBtn handler) and means switching Country no
-        // longer needs a round trip at all.
-        const params = new URLSearchParams({ from, to, module: "ALL", country: "ALL" });
-        const res = await window.AgentAuth.authFetch(`/api/admin/report?${params.toString()}`, { cache: "no-store" });
-        const data = await res.json();
-        if (!data.ok) {
-          lastError = data.error || "Failed to load report.";
-          allRows = [];
-        } else {
-          allRows = data.rows || [];
-          // Not a hard failure — the rest of the data is still valid and
-          // worth showing, but a partial scan means the totals for those
-          // countries are undercounted, so this has to be visible, not
-          // silently swallowed (see report.js's own partialErrors note).
-          if (data.partialErrors && data.partialErrors.length) lastPartialErrors = data.partialErrors;
-        }
-      } catch {
-        lastError = "Failed to load — check your connection.";
-        allRows = [];
-      }
-      render();
-    }
-
-    document.getElementById("rangeSeg").addEventListener("click", (e) => {
-      const btn = e.target.closest("button"); if (!btn) return;
-      document.querySelectorAll("#rangeSeg button").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active"); state.range = btn.dataset.val; state.selectedDim = null;
-      const customBox = document.getElementById("customRange");
-      if (state.range === "custom") {
-        customBox.classList.add("open");
-        if (!document.getElementById("fromDate").value) {
-          const from = gmt8Now(); from.setUTCDate(from.getUTCDate() - 6);
-          document.getElementById("fromDate").value = `${from.getUTCFullYear()}-${pad2(from.getUTCMonth() + 1)}-${pad2(from.getUTCDate())}`;
-          document.getElementById("toDate").value = todayStr();
-          fetchAndRender();
-          return;
-        }
-      } else {
-        customBox.classList.remove("open");
-      }
-      fetchAndRender();
+  function applyCountryLock() {
+    const m = MODULE_BY_ID[state.moduleId];
+    const allowed = state.moduleId === "ALL_MODULES" || !m ? (window.COUNTRY_CODES || []) : m.countries;
+    Array.from(countrySelect.options).forEach((opt) => {
+      opt.disabled = opt.value === "ALL" ? false : !allowed.includes(opt.value);
     });
-    document.getElementById("fromDate").addEventListener("change", () => { state.selectedDim = null; fetchAndRender(); });
-    document.getElementById("toDate").addEventListener("change", () => { state.selectedDim = null; fetchAndRender(); });
-    // Mirrors the interactive preview's "country lock" behavior: a
-    // PHP-only module (Deposit Request / Bank Issue) shouldn't silently
-    // show "no tickets" just because the Country dropdown is still on
-    // INR/PKR from before — grey out the countries that don't apply and
-    // auto-switch to one that does. Applies to any module whose
-    // `countries` list (from schemas.js) doesn't cover the current
-    // selection, not just the two PHP-only ones known today.
-    function applyCountryLock() {
-      const m = MODULE_BY_ID[state.moduleId];
-      const allowed = state.moduleId === "ALL_MODULES" || !m ? (window.COUNTRY_CODES || []) : m.countries;
-      Array.from(countrySelect.options).forEach((opt) => {
-        opt.disabled = opt.value === "ALL" ? false : !allowed.includes(opt.value);
-      });
-      const currentOk = state.country === "ALL" ? allowed.length > 1 : allowed.includes(state.country);
-      if (!currentOk) {
-        state.country = allowed[0];
-        countrySelect.value = state.country;
-      }
+    const currentOk = state.country === "ALL" ? allowed.length > 1 : allowed.includes(state.country);
+    if (!currentOk) {
+      state.country = allowed[0];
+      countrySelect.value = state.country;
     }
+  }
+  moduleSelect.addEventListener("change", (e) => {
+    state.moduleId = e.target.value; state.selectedDim = null;
+    applyCountryLock();
+    render();
+  });
+  countrySelect.addEventListener("change", (e) => { state.country = e.target.value; state.selectedDim = null; render(); });
 
-    // Module and Country are now pure client-side view filters — allRows
-    // (fetched with country=ALL, see fetchAndRender) already holds every
-    // permitted country's data for the current time range, so switching
-    // either one just re-slices what's already in memory. Only the Time
-    // Range controls (below) still need a server round trip.
-    moduleSelect.addEventListener("change", (e) => {
-      state.moduleId = e.target.value; state.selectedDim = null;
-      applyCountryLock();
-      render();
-    });
-    countrySelect.addEventListener("change", (e) => { state.country = e.target.value; state.selectedDim = null; render(); });
-
-    // ---- Export: a self-contained, fully interactive snapshot — NOT
-    // of whatever's on screen right now, but of every module/country/
-    // brand this account is permitted to see, for the currently
-    // selected time range (see the 2026-09-27 conversation this was
-    // revised in: exporting "whatever the on-screen filters happen to
-    // show" was the bug — an account scoped to PKR only should export
-    // PKR only, an All-Countries account should export everything, and
-    // that scoping already comes from the server for free, since
-    // allRows is now always fetched with country=ALL and canSeeCountry
-    // does the narrowing — see fetchAndRender above). The exported copy
-    // embeds allRows itself, not a fixed picture of one view of it, so
-    // Issue Type / Country still work as real, live filters inside the
-    // downloaded file — clicking a summary card still reveals its
-    // ranking, exactly like this page. Only the Time Range control is
-    // gone (a downloaded file has no server to ask for a different
-    // range); the range it covers is shown as plain text instead.
-    //
-    // The functions below are inlined via ordinary .toString() rather
-    // than hand-copied into a template string — this file has already
-    // been bitten twice by two copies of the same logic drifting apart
-    // (the KV8 promotion name, and MODULE_META vs schemas.js): this way
-    // there is only one copy, ever, and the export can never fall
-    // behind what this page actually does.
-    document.getElementById("exportBtn").addEventListener("click", () => {
-      const btn = document.getElementById("exportBtn");
+  // ---- Export (same data + same functions as today; restyled document) ----
+  document.getElementById("exportBtn").addEventListener("click", () => {
+    const btn = document.getElementById("exportBtn");
+    const label = document.getElementById("exportBtnLabel");
+    btn.disabled = true; label.textContent = "Exporting…";
+    try {
       const exportedRangeLabel = rangeLabel();
       const { from, to } = currentFromTo();
       const spanDays = Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
-      const showDateFilter = spanDays > 2; // per explicit request: only worth showing for more than a couple of days
-
-      const rootVars = `
-        :root {
-          --ink:#eef1fb; --ink-soft:#9aa3c4; --border:#262c50; --field-bg:#1a2040; --card-bg:#141a33;
-          --radius:14px; --shadow:0 20px 45px -20px rgba(0,0,0,0.6); --accent-gold:#f3c463; --accent-glow:rgba(124,108,240,0.45);
-          --font-display: "Space Grotesk", sans-serif;
-        }`;
+      const showDateFilter = spanDays > 2;
       const reportStyles = document.getElementById("reportStyles")?.textContent || "";
-      const controlsStyles = `
-        .exp-controls { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 18px; margin-bottom:16px; }
-        .exp-controls .rc-group { display:flex; flex-direction:column; gap:6px; }
-        .exp-controls label { font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); font-weight:700; }
-        .exp-controls select, .exp-controls input[type="date"] { background:var(--field-bg); border:1.5px solid var(--border); color:var(--ink); border-radius:10px; padding:8px 12px; font-size:13px; font-family:inherit; }
-        .exp-controls select { min-width:190px; }
-      `;
-      // See this handler's own header comment on why these are inlined
-      // via .toString() instead of copy-pasted.
+      const exportStyles = `
+        body { margin:0; background:#070a18; color:#e8ebf7; font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif; }
+        .exp-wrap { padding-inline:0; }
+        .exp-meta { margin:4px 0 0; color:var(--rp-ink-2); font-size:12.5px; }`;
       const reusedFuncsSrc = [
-        escapeHtml, brandColor, brandName, dimLabel, sumRows, rowsFor, rowMatchesBrand,
+        escapeHtml, fmt, chipColor, brandColor, brandName, dimLabel, sumRows, rowsFor, rowMatchesBrand,
+        brandAbbr, matrixGroups, enumerateDates, dayLabelHtml, buildMatrixTable, buildDailyMatrixCard,
         computeModuleRows, topCardDimension, moduleTotalsForDim,
         buildSummaryCard, buildModuleCard, buildRankList, applyCountryLock,
         formatDateDisplay,
       ].map((fn) => fn.toString()).join("\n\n");
-
       const embedded = {
-        rows: allRows, // now per-day (see `date` on each row) — this is what makes the sub-range filter below possible
+        rows: allRows,
         modules: REPORT_MODULE_LIST.map((m) => ({ id: m.id, name: m.name, icon: m.icon, accent: m.accent, countries: m.countries })),
         brands: (window.BRANDS || []).map((b) => ({ id: b.id, name: b.name, country: b.country })),
         countries: window.COUNTRY_CODES || [],
@@ -696,30 +925,28 @@ html[data-theme="light"] {
         exportTo: to,
         showDateFilter,
       };
-
-      const scriptOpenTag = "<" + "script>"; // see this file's own note further up on why these can't be written literally
+      const scriptOpenTag = "<" + "script>";
       const scriptCloseTag = "<" + "/script>";
       const snapshotHtml = `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Report export — ${escapeHtml(from)} to ${escapeHtml(to)}</title>
+<html lang="en" data-theme="dark"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Report export — ${escapeHtml(from)} to ${escapeHtml(to)}</title>
 <style>
-  ${rootVars}
-  body { font-family: -apple-system, "Segoe UI", sans-serif; background:#090c1c; color:var(--ink); margin:0; padding:28px; max-width:1400px; }
-  h1 { font-size:18px; margin:0 0 6px; } .meta { color:var(--ink-soft); font-size:12.5px; margin-bottom:20px; }
-  ${controlsStyles}
-  ${reportStyles}
-</style></head><body>
-<h1>📈 Report export</h1>
-<div class="meta">${escapeHtml(exportedRangeLabel)} · Exported ${escapeHtml(new Date().toLocaleString())} · scoped to whatever countries/modules this account can see</div>
-<div class="exp-controls">
-  <div class="rc-group" id="dateFilterFromGroup" style="${showDateFilter ? "" : "display:none;"}"><label>From</label><input type="date" id="subFromDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(from)}" /></div>
-  <div class="rc-group" id="dateFilterToGroup" style="${showDateFilter ? "" : "display:none;"}"><label>To</label><input type="date" id="subToDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(to)}" /></div>
-  <div class="rc-group"><label>Issue Type</label><select id="moduleSelect"></select></div>
-  <div class="rc-group"><label>Country</label><select id="countrySelect"></select></div>
-</div>
+${reportStyles}
+${exportStyles}
+</style></head><body><div class="exp-wrap"><div class="rp">
+<header class="rp-head"><div class="rp-head-text"><h1 class="rp-title">Report export</h1>
+<p class="exp-meta">${escapeHtml(exportedRangeLabel)} · Exported ${escapeHtml(new Date().toLocaleString())} · Days in GMT+8 · Scoped to the countries and modules this account can see</p></div></header>
+<section class="rp-toolbar" aria-label="Report filters">
+  <div class="rp-field" style="${showDateFilter ? "" : "display:none;"}"><label for="subFromDate">From</label><input type="date" id="subFromDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(from)}" /></div>
+  <div class="rp-field" style="${showDateFilter ? "" : "display:none;"}"><label for="subToDate">To</label><input type="date" id="subToDate" min="${escapeHtml(from)}" max="${escapeHtml(to)}" value="${escapeHtml(to)}" /></div>
+  <div class="rp-field"><label for="moduleSelect">Issue type</label><span class="rp-select"><select id="moduleSelect"></select></span></div>
+  <div class="rp-field"><label for="countrySelect">Country</label><span class="rp-select"><select id="countrySelect"></select></span></div>
+
+</section>
 <div id="reportContainer"></div>
+</div></div>
 ${scriptOpenTag}
-  const EMBEDDED = ${JSON.stringify(embedded)};
-  const ALL_ROWS_FULL = EMBEDDED.rows; // never mutated — the sub-range filter below re-slices FROM this, into allRows
+  const EMBEDDED = ${JSON.stringify(embedded).replace(/</g, "\\u003c")};
+  const ALL_ROWS_FULL = EMBEDDED.rows;
   let allRows = ALL_ROWS_FULL;
   const REPORT_MODULE_LIST = EMBEDDED.modules;
   const MODULE_BY_ID = {};
@@ -728,10 +955,10 @@ ${scriptOpenTag}
   window.COUNTRY_CODES = EMBEDDED.countries;
   const COUNTRY_COLORS = EMBEDDED.countryColors;
   const BRAND_PALETTE = EMBEDDED.brandPalette;
-  const state = { moduleId: "ALL_MODULES", country: "ALL", selectedDim: null };
-  // Reflects whichever sub-range (if any) is currently applied via the
-  // From/To inputs above — defaults to the full exported range.
+  const CHEVRON_SVG = ${JSON.stringify(CHEVRON_SVG)};
+  const state = { moduleId: "ALL_MODULES", country: "ALL", selectedDim: null, view: "type" };
   let subFrom = EMBEDDED.exportFrom, subTo = EMBEDDED.exportTo;
+  function matrixDateBounds() { return { from: subFrom, to: subTo }; }
   function rangeLabel() {
     if (subFrom === EMBEDDED.exportFrom && subTo === EMBEDDED.exportTo) return EMBEDDED.rangeLabel;
     return subFrom === subTo ? formatDateDisplay(subFrom) : formatDateDisplay(subFrom) + " – " + formatDateDisplay(subTo);
@@ -765,8 +992,11 @@ ${scriptOpenTag}
         const title = isCountryCard ? state.selectedDim : brandName(state.selectedDim);
         container.appendChild(buildRankList(ranked, title));
       }
+      container.appendChild(buildDailyMatrixCard("ALL_MODULES", state.country, "All issue types"));
+      { const _t = document.getElementById("totalNum"); if (_t) _t.textContent = fmt(grand); }
     } else {
       container.appendChild(buildModuleCard(state.moduleId, state.country));
+      { const _t = document.getElementById("totalNum"); if (_t) _t.textContent = fmt(sumRows(rowsFor(state.moduleId, state.country))); }
     }
   }
   moduleSelect.addEventListener("change", function (e) { state.moduleId = e.target.value; state.selectedDim = null; applyCountryLock(); render(); });
@@ -791,22 +1021,30 @@ ${scriptOpenTag}
   render();
 ${scriptCloseTag}
 </body></html>`;
-      const blob = new Blob([snapshotHtml], { type: "text/html" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `report-all-permitted-data-${from}_to_${to}.html`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-      if (window.showToast) window.showToast(`Exported: ${a.download}`);
-    });
+      deliverExport(snapshotHtml, `report-all-permitted-data-${from}_to_${to}.html`);
+    } catch (e) {
+      if (window.showToast) window.showToast("Export failed — " + (e && e.message ? e.message : "try again"));
+    } finally {
+      btn.disabled = false; label.textContent = "Export";
+    }
+  });
 
+  // Same delivery as before the redesign: download the file + toast.
+  function deliverExport(html, filename) {
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    if (window.showToast) window.showToast(`Exported: ${filename}`);
+  }
 
-    // ---- initial load: default range is Today ----
-    applyCountryLock();
-    fetchAndRender();
+  applyCountryLock();
+  fetchAndRender();
   </script>
 </body>
 </html>
