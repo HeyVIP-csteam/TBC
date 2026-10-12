@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=0e3fe096" />
+<link rel="stylesheet" href="/assets/style.css?v=815e896f" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -2514,7 +2514,7 @@ html[data-theme="light"] {
       rsDraft = RS.getTeam();
       const opts = Object.entries(RS.SOUNDS).map(([id, s]) => `
         <div class="rs-opt" role="radio" tabindex="${canEdit ? 0 : -1}" data-sound="${id}" aria-checked="${id === rsDraft.sound}" aria-disabled="${!canEdit}">
-          <span class="rs-opt-txt"><span class="rs-opt-name">${acctEsc(s.name)}</span><span class="rs-opt-desc">${acctEsc(s.desc)}</span></span>
+          <span class="rs-opt-txt"><span class="rs-opt-name">${acctEsc(s.name)}</span></span>
           <button type="button" class="rs-play" data-play="${id}" title="Play ${acctEsc(s.name)}" aria-label="Play ${acctEsc(s.name)}">${RS_PLAY_ICON}</button>
         </div>`).join("");
       const secs = Array.from({ length: 10 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${n === rsDraft.seconds ? "selected" : ""}>${n} second${n > 1 ? "s" : ""}</option>`).join("");
@@ -2522,9 +2522,7 @@ html[data-theme="light"] {
         <div class="rs-set" id="replySoundSettings">
           <div class="rs-set-head">
             <div class="mention-backfill-title">🔔 Telegram reply sound</div>
-            <span class="rs-set-scope">Whole team · all countries</span>
           </div>
-          <p class="edit-modal-note" style="margin:0">Plays when a ticket gets a new reply, also while the tab is in the background. Each person can mute it for themselves with the 🔔 button in the top bar.</p>
           <div class="rs-opts" role="radiogroup" aria-label="Reply sound">${opts}</div>
           <div class="rs-row">
             <label for="rsSeconds">Ring for</label>

@@ -4010,3 +4010,10 @@ html[data-theme="dark"] {
   .uc-avatar { width: 28px; height: 28px; }
   .uc-avatar svg { width: 21px; height: 21px; }
 }
+
+/* TG Reply Threads — chat header: no empty band under the title / buttons
+   (2026-10-12). The header already has its own bottom border, so the old
+   <hr> (20px margins) below it only added blank space. */
+#threadsMain .thread-top-fixed { padding-top: 18px; padding-bottom: 16px; }
+#threadsMain .thread-top-fixed > .thread-divider { display: none; }
+@media (max-width: 640px) { #threadsMain .thread-top-fixed { padding: 14px 18px 12px; } }
