@@ -55,3 +55,13 @@
   `assets/style.css` 两处抽屉改为 `top: var(--topbar-h, 61px)`。实测 952px 宽：
   顶栏 70px → 抽屉从 70px 开始；700px 宽：94px → 94px。宽屏布局不受影响。
 - 已跑 `update-asset-versions.js` 更新所有 HTML 的 `?v=`。
+
+## 补丁 — Export 先预览，Confirm 才下载
+- 点 Export 后不再直接下载，而是弹出 "Export preview"：里面显示的就是将要下载的那个 HTML 文件本身
+  （沙箱 iframe，文件自带的离线脚本照常运行，可以先试 Issue type / Country 筛选、排行、日期缩小）。
+- 表头显示时间范围、文件名、文件大小；右上角 **Confirm**（在 Close 左边）才真正下载文件，
+  Close / Esc / 点外面 = 取消，不下载。
+- 下载内容、文件名、导出数据完全不变（同一个 snapshot，同一个 deliverExport()）。
+- 实测：预览中卡片 1,054 / 1,820 / 489 与页面一致；排行 6 行；Deposit Request 锁定 PHP；
+  Close / Esc 不下载；Confirm 下载 report-all-permitted-data-2026-10-01_to_2026-10-12.html（235 KB）；
+  深色 / 浅色 / 手机宽度正常。

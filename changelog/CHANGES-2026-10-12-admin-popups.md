@@ -48,3 +48,7 @@ Settings · Reset Password · Agent Profile
   链接框里按 Enter 也会保存该行。
 - 保存仍是同一个请求：`POST /api/brand-config { brand, link }`（Reset = link 为空），已实测。
 - 窗口自动高度（最宽 1000px）；手机上每行变成「名称 + 按钮」在上、链接框在下。
+- 修复：Web Link 列表无法往下滑动（只看得到前面几行）。原因是列表外框为了圆角设了 overflow:hidden，
+  在弹窗的 flex 布局里被压缩到窗口高度、多出的行被裁掉。现在弹窗内容区里的区块不再被压缩，
+  由内容区整体滚动。已实测 1265×900、1366×700、390×844：Web Link、Agent Profile、IP Access、
+  TG Group 都能滚到最后一行。
