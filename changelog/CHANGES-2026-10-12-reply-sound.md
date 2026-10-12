@@ -83,3 +83,17 @@
 ## 补丁 — Settings 提示音区块精简
 - 删除了「Whole team · all countries」标签、下面那段说明文字，以及三个声音下面的小字说明。
 - 现在只留：标题、三个声音（各有 ▶ 试听）、Ring for、Test、Save。
+
+## 补丁 — Deposit Issue 说明文字去掉 "PKR"
+- 首页卡片和 Deposit Issue 页面标题下的说明，原本写死 "Search PKR Deposit Support records…"，选 INR 时也显示 PKR。
+- 现在改成 "Search Deposit Support records and update CS fields"，不管选哪个国家都正确。
+- 改动文件：`public/index.html`、`public/deposit-issue.html`。只改文字。
+
+## 补丁 — Recall 里看不到完整工单
+- 问题：点 Recall 里已删除的工单时，后端其实已经返回完整工单资料（Admin 以上，180 天保留期内），但页面只显示删除记录那一句（"Ticket + 0 message(s) untracked…"）和对话，没有显示工单本身的内容。
+- 修复：`public/threads.html` 的 Recall 详情页新增「Original ticket」区块：
+  - 用和一般打开工单时同一个函数，显示原始工单内容：所有字段，或 Telegram 原文。
+  - 显示工单附件和截图。
+  - 有 Forward 记录的话也会显示。
+- 对话中的附件现在也会显示，以前只显示文字。
+- 后端、权限、保留期都没改。不是 Admin 的账号，或超过 180 天的工单，仍然只显示原来的提示。
