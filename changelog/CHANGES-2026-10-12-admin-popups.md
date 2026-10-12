@@ -40,3 +40,11 @@ Settings · Reset Password · Agent Profile
   Web Link、Promo Sheet、Bot Token、Betting Links、Create Account、Reset Password、
   公告轮播速度、IP 批准、新增办公室、Agent Profile 保存）：发出的请求 **完全一致**。
 - 12 个面板 + 2 个子弹窗深色 / 浅色截图检查；390px 手机宽度无横向溢出；无新增页面错误。
+
+## 补丁 — Web Link 改为整张列表
+- 以前：左边选国家、中间点品牌，只有被点中的品牌显示链接输入框，点另一个品牌就隐藏。
+- 现在（按提供的截图）：一张 "Brand Website Links" 列表，每个品牌一行 —— Logo · 名称 · 链接 · Save
+  （已设置链接时多一个 Reset），所有品牌的链接同时显示；All Countries 时按国家分组，右上角显示品牌数量。
+  链接框里按 Enter 也会保存该行。
+- 保存仍是同一个请求：`POST /api/brand-config { brand, link }`（Reset = link 为空），已实测。
+- 窗口自动高度（最宽 1000px）；手机上每行变成「名称 + 按钮」在上、链接框在下。
