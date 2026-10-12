@@ -611,7 +611,7 @@ html[data-theme="light"] {
       }
 
       const readOnlyConversationHtml = thread && thread.messages && thread.messages.length
-        ? thread.messages.map((m) => renderMsgReadOnly(m)).join("")
+        ? thread.messages.map((m) => renderMsgReadOnly(m, thread.country || entry.country)).join("")
         : "";
 
       main.innerHTML = `
@@ -631,12 +631,16 @@ html[data-theme="light"] {
             <div style="white-space:pre-wrap; font-size:13px; line-height:1.6;">${escapeHtml(entry.content || "")}</div>
           </div>
           ${thread ? `
+            <div class="conversation-title">Original ticket</div>
+            <div class="recall-original" style="margin:10px 0 18px;">${buildSummaryHTML({ ...thread, country: thread.country || entry.country }) || '<div class="threads-empty">No ticket content saved.</div>'}</div>` : ""}
+          ${thread ? `
             <div class="conversation-title">Full conversation (${thread.messages.length})</div>
             <div class="conversation">${readOnlyConversationHtml || '<div class="threads-empty">No replies.</div>'}</div>
           ` : ""}
         </div>
       `;
       polishEmoji();
+      loadInlineAttachments();
     }
 
     // Read-only message bubble — same visual classes as renderMsg() so
@@ -644,15 +648,24 @@ html[data-theme="light"] {
     // interactive controls (edit/recall-reply/reply-target buttons):
     // this is a look-back view of history, not a live conversation an
     // admin should be able to act on from here.
-    function renderMsgReadOnly(m) {
+    function renderMsgReadOnly(m, country) {
       const initials = (m.from || "?").trim().slice(0, 2).toUpperCase();
       const color = m.self ? "var(--accent-gold)" : colorFor(m.from || "?");
+      // 2026-10-12 — attachments too (same slots as an open chat), so a
+      // Recall-log ticket shows its photos instead of hiding them.
+      const fids = m.attachmentFileIds && m.attachmentFileIds.length ? m.attachmentFileIds : (m.attachmentFileId ? [m.attachmentFileId] : []);
+      const attach = fids.length
+        ? `<div class="msg-multi-attach">${fids.map((fid, i) => `
+            <div class="inline-attach-slot msg-inline-attach" data-attachment-file="${escapeAttr(fid)}" data-attachment-name="${escapeAttr((m.attachmentNames && m.attachmentNames[i]) || m.attachmentName || `attachment-${i + 1}`)}" data-attachment-country="${escapeAttr(country || "")}">
+              <div class="inline-attach-loading">Loading attachment…</div>
+            </div>`).join("")}</div>`
+        : (m.hasAttachment ? '<span class="msg-attach-tag">📎 attachment</span>' : "");
       return `
         <div class="msg-row ${m.self ? "self" : ""}">
           <div class="msg-avatar" style="background:${color};">${initials}</div>
           <div class="msg-body">
             <div class="msg-who">${escapeHtml(m.from)}${m.handle ? ` <span class="msg-handle">${escapeHtml(m.handle)}</span>` : ""}${m.editedAt ? ' <span class="msg-edited">(edited)</span>' : ""}</div>
-            <div class="msg-bubble">${escapeHtml(m.text)}</div>
+            <div class="msg-bubble">${escapeHtml(m.text)}${attach}</div>
             <div class="msg-time">${timeAgo(m.ts)}</div>
           </div>
         </div>`;
