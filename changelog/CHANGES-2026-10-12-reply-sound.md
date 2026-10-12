@@ -72,3 +72,14 @@
 - 改动文件：
   - `public/assets/authguard.js`：renderWhoami，所有页面共用。
   - `public/assets/style.css`：新增资料卡样式，移除旧的 whoami 窄屏规则。
+
+## 补丁 — TG Reply Threads 聊天标题下方的空白
+- 标题和按钮下面原本有一条约 50px 的空白，现在删掉了：
+  - 原因是标题区已经有一条底线，下面又多放了一条上下各 20px 的分隔线 `<hr>`。
+  - 现在只保留底线，标题区的上下留白也调小了。
+- 标题区高度：130px → 79px。聊天内容因此往上移，可以多看到一些内容。
+- 只改了 `public/assets/style.css`，用 `#threadsMain` 限定范围，所以不影响其他页面，也没有改 threads.html 的程序逻辑。
+
+## 补丁 — Settings 提示音区块精简
+- 删除了「Whole team · all countries」标签、下面那段说明文字，以及三个声音下面的小字说明。
+- 现在只留：标题、三个声音（各有 ▶ 试听）、Ring for、Test、Save。
