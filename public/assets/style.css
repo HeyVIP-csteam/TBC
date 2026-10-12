@@ -4017,3 +4017,14 @@ html[data-theme="dark"] {
 #threadsMain .thread-top-fixed { padding-top: 18px; padding-bottom: 16px; }
 #threadsMain .thread-top-fixed > .thread-divider { display: none; }
 @media (max-width: 640px) { #threadsMain .thread-top-fixed { padding: 14px 18px 12px; } }
+
+/* Recall log → a recalled reply shown back in its conversation (2026-10-12) */
+.msg-recalled-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; color: #ef4444; background: rgba(239, 68, 68, .12); border: 1px solid rgba(239, 68, 68, .35); vertical-align: 1px; }
+.msg-row .msg-bubble.msg-recalled { background: rgba(239, 68, 68, .08) !important; border: 1.5px dashed rgba(239, 68, 68, .55) !important; color: var(--ink); }
+.msg-recalled-row { animation: recalledFlash 1.6s ease-out 1; }
+@keyframes recalledFlash { 0% { filter: brightness(1.6); } 100% { filter: none; } }
+@media (prefers-reduced-motion: reduce) { .msg-recalled-row { animation: none; } }
+/* Recall log → a deleted ticket's original content is shown in red (2026-10-12) */
+.recall-original--deleted .thread-summary-card { border: 1.5px solid rgba(239, 68, 68, .8) !important; border-left: 5px solid #ef4444 !important; background: color-mix(in srgb, #ef4444 14%, var(--aa-surface, #0d1520)) !important; box-shadow: 0 0 0 3px rgba(239, 68, 68, .12); }
+.recall-original--deleted .thread-summary-card hr, .recall-original--deleted .thread-summary-attachments { border-top-color: rgba(239, 68, 68, .35) !important; }
+.conversation-title.recall-deleted-title { color: #ef4444 !important; border-color: rgba(239, 68, 68, .45) !important; background: rgba(239, 68, 68, .1) !important; }

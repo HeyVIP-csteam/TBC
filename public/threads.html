@@ -23,7 +23,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=815e896f" />
+<link rel="stylesheet" href="/assets/style.css?v=990ed9f3" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -610,9 +610,31 @@ html[data-theme="light"] {
           </div>`;
       }
 
-      const readOnlyConversationHtml = thread && thread.messages && thread.messages.length
-        ? thread.messages.map((m) => renderMsgReadOnly(m, thread.country || entry.country)).join("")
-        : "";
+      // 2026-10-12 — a recalled reply is put back into the conversation at
+      // the moment it was recalled (the log keeps the recall time, not the
+      // original send time — a recall always comes after the send, so it
+      // lands right after the messages that were already there), marked
+      // "Recalled" so it reads in context instead of only in a card on top.
+      const convCountry = (thread && thread.country) || entry.country;
+      const convMsgs = thread && thread.messages ? thread.messages.slice() : [];
+      let recalledRowAt = -1;
+      if (thread && entry.type === "recall-reply") {
+        const rt = new Date(entry.ts).getTime();
+        recalledRowAt = convMsgs.findIndex((m) => new Date(m.ts).getTime() > rt);
+        if (recalledRowAt < 0) recalledRowAt = convMsgs.length;
+      }
+      const recalledRowHtml = recalledRowAt < 0 ? "" : `
+        <div class="msg-row self msg-recalled-row" id="recalledInline">
+          <div class="msg-avatar" style="background:var(--accent-gold);">${escapeHtml((entry.by || "?").trim().slice(0, 2).toUpperCase())}</div>
+          <div class="msg-body">
+            <div class="msg-who">${escapeHtml(entry.by || "unknown")} <span class="msg-recalled-tag">↩️ Recalled</span></div>
+            <div class="msg-bubble msg-recalled">${escapeHtml(entry.content || "(no text)")}</div>
+            <div class="msg-time">Recalled ${timeAgo(entry.ts)}</div>
+          </div>
+        </div>`;
+      const convRows = convMsgs.map((m) => renderMsgReadOnly(m, convCountry));
+      if (recalledRowAt >= 0) convRows.splice(recalledRowAt, 0, recalledRowHtml);
+      const readOnlyConversationHtml = convRows.join("");
 
       main.innerHTML = `
         <div class="thread-top-fixed">
@@ -631,16 +653,18 @@ html[data-theme="light"] {
             <div style="white-space:pre-wrap; font-size:13px; line-height:1.6;">${escapeHtml(entry.content || "")}</div>
           </div>
           ${thread ? `
-            <div class="conversation-title">Original ticket</div>
-            <div class="recall-original" style="margin:10px 0 18px;">${buildSummaryHTML({ ...thread, country: thread.country || entry.country }) || '<div class="threads-empty">No ticket content saved.</div>'}</div>` : ""}
+            <div class="conversation-title${isDeleteType ? " recall-deleted-title" : ""}">${isDeleteType ? "🗑 Deleted ticket" : "Original ticket"}</div>
+            <div class="recall-original${isDeleteType ? " recall-original--deleted" : ""}" style="margin:10px 0 18px;">${buildSummaryHTML({ ...thread, country: thread.country || entry.country }) || '<div class="threads-empty">No ticket content saved.</div>'}</div>` : ""}
           ${thread ? `
-            <div class="conversation-title">Full conversation (${thread.messages.length})</div>
+            <div class="conversation-title">Full conversation (${thread.messages.length}${recalledRowAt >= 0 ? " + 1 recalled" : ""})</div>
             <div class="conversation">${readOnlyConversationHtml || '<div class="threads-empty">No replies.</div>'}</div>
           ` : ""}
         </div>
       `;
       polishEmoji();
       loadInlineAttachments();
+      // Bring the recalled reply into view inside the conversation.
+      document.getElementById("recalledInline")?.scrollIntoView({ block: "center" });
     }
 
     // Read-only message bubble — same visual classes as renderMsg() so
