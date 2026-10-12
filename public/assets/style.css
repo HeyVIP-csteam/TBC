@@ -287,7 +287,9 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
 .sidebar-toggle-btn { display: none; }
 .sidebar-backdrop {
   display: none;
-  position: fixed; inset: 0; z-index: 44;
+  /* Starts below the top bar (2026-10-12): the drawer opens under the bar,
+     so the dimmed overlay must not cover the logo / clock / user either. */
+  position: fixed; inset: 0; top: var(--topbar-h, 61px); z-index: 44;
   background: rgba(10, 12, 25, 0.55);
   opacity: 0;
   pointer-events: none;
@@ -3434,6 +3436,10 @@ html[data-theme="light"] #agentProfileOverlay { background: rgba(30, 40, 60, 0.4
   #acctModalBackdrop .wl-row .weblink-url { grid-column: 1 / -1; grid-row: 2; }
   #acctModalBackdrop .wl-actions { grid-column: 2; grid-row: 1; }
 }
+/* Blocks inside the popup body never shrink (a child with overflow:hidden
+   would otherwise be squeezed to the window height and its rows cut off);
+   the body itself scrolls. The two-column panels keep their own sizing. */
+#acctModalBackdrop #acctModalBody > :not(.tgroute-layout) { flex-shrink: 0; }
 
 /* ---- Announcements page — redesigned 2026-10-12 (same look as the admin
    popups; shares the --aa-* tokens). Markup lives in announcements.html,
@@ -3567,6 +3573,21 @@ html[data-theme="light"] .announce-body .an-btn-primary { color: #fff; }
   .topbar .logo-img { max-width: 92px; height: auto; }
   .topbar { padding-left: 12px; padding-right: 12px; }
 }
+
+/* Signed-in user on narrower windows: "User: name" + logout stay on the
+   first line; only the role badge (OWNER / ADMIN …) drops below. */
+@media (min-width: 561px) and (max-width: 1200px) {
+  .topbar .agent-whoami { display: inline-grid; grid-template-columns: auto auto; align-items: center; justify-items: start; column-gap: 8px; row-gap: 3px; line-height: 1.2; white-space: nowrap; flex-shrink: 0; }
+  .topbar .agent-whoami .logout-icon-btn { order: 1; margin-left: 0; }
+  .topbar .agent-whoami .role-badge { order: 2; margin-left: 0; }
+}
+
+@media (min-width: 561px) and (max-width: 820px) {
+  .topbar .country-switcher-btn { min-width: 0; max-width: 150px; padding: 7px 10px; }
+  .topbar .country-switcher-btn > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+  .topbar .topbar-right { gap: 8px; min-width: 0; }
+}
+@media (max-width: 680px) { .topbar .wordmark { display: none; } }
 
 /* ---- Content pages — unified 2026-10-12 ----------------------------------
    The pages that open from the Home cards / ISSUE SUBMISSION menu (the 9

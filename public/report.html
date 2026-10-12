@@ -26,7 +26,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=80210056" />
+<link rel="stylesheet" href="/assets/style.css?v=42d456ae" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -423,6 +423,57 @@ html[data-theme="light"] {
     </div>
   </div>
 
+  <!-- Export preview (2026-10-12): shows the exact file before it downloads. -->
+  <div class="xp-back" id="exportPreview" hidden>
+    <div class="xp-modal" role="dialog" aria-modal="true" aria-labelledby="exportPreviewTitle">
+      <header class="xp-head">
+        <div class="xp-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></div>
+        <div class="xp-text">
+          <h2 id="exportPreviewTitle">Export preview</h2>
+          <p><span id="exportPreviewRange"></span> · downloads as <b id="exportPreviewFile"></b> · <span id="exportPreviewSize"></span></p>
+        </div>
+        <div class="xp-actions">
+          <button type="button" class="xp-btn xp-btn-primary" id="exportPreviewConfirm">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Confirm
+          </button>
+          <button type="button" class="xp-btn" id="exportPreviewClose">Close</button>
+        </div>
+      </header>
+      <div class="xp-body">
+        <iframe id="exportPreviewFrame" title="Report export preview" sandbox="allow-scripts"></iframe>
+      </div>
+      <footer class="xp-foot">This is the exact file that will be downloaded — it works offline. Try the filters and rankings here, then press Confirm to download.</footer>
+    </div>
+  </div>
+<style id="exportPreviewStyles">
+  .xp-back { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: rgba(4, 8, 18, 0.62); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  html[data-theme="light"] .xp-back { background: rgba(30, 40, 60, 0.4); }
+  .xp-back[hidden] { display: none; }
+  .xp-modal { width: 100%; max-width: 1240px; height: min(900px, calc(100dvh - 48px)); display: flex; flex-direction: column; background: var(--aa-bg); border: 1px solid var(--aa-line-strong); border-radius: 22px; box-shadow: var(--aa-shadow); overflow: hidden; color: var(--aa-ink); font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .xp-head { flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 16px 20px; background: var(--aa-head); border-bottom: 1px solid var(--aa-line); flex-wrap: wrap; }
+  .xp-icon { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 13px; color: var(--aa-accent); background: color-mix(in srgb, var(--aa-accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--aa-accent) 30%, transparent); }
+  .xp-icon svg { width: 21px; height: 21px; }
+  .xp-text { flex: 1; min-width: 220px; }
+  .xp-text h2 { margin: 0; font-family: var(--font-display, "Space Grotesk", "Inter", sans-serif); font-size: 18px; font-weight: 700; color: var(--aa-ink); }
+  .xp-text p { margin: 3px 0 0; font-size: 12.5px; color: var(--aa-ink-2); overflow-wrap: anywhere; }
+  .xp-text b { color: var(--aa-ink); font-weight: 600; font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace); font-size: 12px; }
+  .xp-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .xp-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 38px; padding: 0 16px; border-radius: 10px; background: var(--aa-surface-2); border: 1px solid var(--aa-line-strong); color: var(--aa-ink); font: 600 13px/1 inherit; cursor: pointer; }
+  .xp-btn:hover { background: var(--aa-surface-hover); }
+  .xp-btn:focus-visible { outline: 2px solid var(--aa-accent); outline-offset: 2px; }
+  .xp-btn-primary { background: var(--aa-accent); border-color: var(--aa-accent); color: #04211d; font-weight: 700; }
+  html[data-theme="light"] .xp-btn-primary { color: #fff; }
+  .xp-btn-primary:hover { background: var(--aa-accent); filter: brightness(1.08); }
+  .xp-body { flex: 1; min-height: 0; background: #070a18; }
+  .xp-body iframe { display: block; width: 100%; height: 100%; border: 0; }
+  .xp-foot { flex-shrink: 0; padding: 10px 20px; border-top: 1px solid var(--aa-line); background: var(--aa-surface-2); font-size: 12px; color: var(--aa-ink-2); }
+  @media (max-width: 640px) {
+    .xp-back { padding: 10px; }
+    .xp-modal { height: calc(100dvh - 20px); border-radius: 18px; }
+    .xp-actions { width: 100%; }
+    .xp-actions .xp-btn { flex: 1; }
+  }
+</style>
   <script src="/assets/schemas.js?v=c135f22f"></script>
   <script src="/assets/hub-nav.js?v=c712b8aa"></script>
   <script src="/assets/brand-row.js?v=ea371f55"></script>
@@ -1021,13 +1072,48 @@ ${scriptOpenTag}
   render();
 ${scriptCloseTag}
 </body></html>`;
-      deliverExport(snapshotHtml, `report-all-permitted-data-${from}_to_${to}.html`);
+      openExportPreview(snapshotHtml, `report-all-permitted-data-${from}_to_${to}.html`, exportedRangeLabel);
     } catch (e) {
       if (window.showToast) window.showToast("Export failed — " + (e && e.message ? e.message : "try again"));
     } finally {
       btn.disabled = false; label.textContent = "Export";
     }
   });
+
+  // 2026-10-12 — Export now opens a preview of the exact file first; the
+  // download only happens on Confirm. The preview frame runs the file's own
+  // (offline, self-contained) script in a sandbox, so filters, rankings and
+  // date narrowing can be tried before downloading.
+  let exportPreviewPending = null;
+  function openExportPreview(html, filename, rangeText) {
+    exportPreviewPending = { html, filename };
+    const back = document.getElementById("exportPreview");
+    document.getElementById("exportPreviewFile").textContent = filename;
+    document.getElementById("exportPreviewRange").textContent = rangeText || "";
+    document.getElementById("exportPreviewSize").textContent = Math.max(1, Math.round(new Blob([html]).size / 1024)) + " KB";
+    document.getElementById("exportPreviewFrame").srcdoc = html;
+    back.hidden = false;
+    document.body.style.overflow = "hidden";
+    setTimeout(() => document.getElementById("exportPreviewConfirm").focus(), 0);
+  }
+  function closeExportPreview() {
+    const back = document.getElementById("exportPreview");
+    if (back.hidden) return;
+    back.hidden = true;
+    document.body.style.overflow = "";
+    document.getElementById("exportPreviewFrame").srcdoc = "";
+    exportPreviewPending = null;
+    document.getElementById("exportBtn").focus();
+  }
+  document.getElementById("exportPreviewConfirm").addEventListener("click", () => {
+    if (!exportPreviewPending) return;
+    const { html, filename } = exportPreviewPending;
+    deliverExport(html, filename);
+    closeExportPreview();
+  });
+  document.getElementById("exportPreviewClose").addEventListener("click", closeExportPreview);
+  document.getElementById("exportPreview").addEventListener("click", (e) => { if (e.target.id === "exportPreview") closeExportPreview(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeExportPreview(); });
 
   // Same delivery as before the redesign: download the file + toast.
   function deliverExport(html, filename) {
