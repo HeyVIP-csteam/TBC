@@ -313,7 +313,6 @@
     const t = data.today || {};
     const st = STATUS_LABEL[t.status] ? t.status : "offline";
     const since = st === "offline" ? fmtRelative(t.lastActiveAt) : fmtRelative(t.statusSince);
-    const max = Math.max(1, ...data.last7.map((d) => d.totalOnlineSeconds || 0));
     aaRecordShell("Online-time record", `
       <div class="aa-profile">
         ${avatarHtml(data.username, st)}
@@ -331,12 +330,11 @@
       <p class="aa-section-label">Last 7 days</p>
       <div class="aa-days">
         <table>
-          <thead><tr><th>Date</th><th class="bar-col" aria-hidden="true"></th><th class="num">Total online time</th><th class="num">Last active time</th></tr></thead>
+          <thead><tr><th>Date</th><th class="num">Total online time</th><th class="num">Last active time</th></tr></thead>
           <tbody>
             ${data.last7.map((d, i) => `
               <tr class="${i === 0 ? "is-today" : ""}">
                 <td>${escHtml(d.label)}</td>
-                <td class="bar-col" aria-hidden="true"><div class="bar"><span style="width:${Math.round(((d.totalOnlineSeconds || 0) / max) * 100)}%"></span></div></td>
                 <td class="num${d.totalOnlineSeconds ? "" : " muted"}">${escHtml(fmtDuration(d.totalOnlineSeconds))}</td>
                 <td class="num muted">${escHtml(fmtClock(d.lastActiveAt))}</td>
               </tr>`).join("")}

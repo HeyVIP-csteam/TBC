@@ -1266,8 +1266,8 @@ html[data-theme="light"] .aa-chip.role-admin { color: #1d4ed8; }
 .aa-days td.muted { color: var(--aa-ink-3); }
 .aa-days tr.is-today td { background: color-mix(in srgb, var(--aa-accent) 7%, transparent); }
 .aa-days tr.is-today td:first-child { color: var(--aa-accent); font-weight: 700; }
-.aa-days .bar { width: 100%; min-width: 80px; height: 6px; border-radius: 99px; background: var(--aa-surface-2); overflow: hidden; }
-.aa-days .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--aa-online); }
+.aa-days th + th, .aa-days td + td { border-left: 1px solid var(--aa-line-strong); }
+.aa-days th.num { font-family: inherit; }
 
 @media (max-width: 640px) {
   #aaModalBackdrop { padding: 12px; }
@@ -1285,7 +1285,6 @@ html[data-theme="light"] .aa-chip.role-admin { color: #1d4ed8; }
   .aa-side { order: 3; width: 100%; min-width: 0; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; padding-left: 56px; text-align: left; }
   .aa-foot { flex-wrap: wrap; gap: 2px 12px; }
   .aa-kpis { grid-template-columns: 1fr; }
-  .aa-days .bar-col { display: none; }
   .aa-foot { padding: 10px 16px; }
 }
 
