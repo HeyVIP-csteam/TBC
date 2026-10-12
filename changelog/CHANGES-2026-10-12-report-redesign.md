@@ -45,3 +45,13 @@
 ## 已知、未在本次处理
 - 手机宽度（390px）下整页可横向滚动约 235px，来源是全站顶栏（时钟 + 用户名），
   旧版 report 页面一样，与报告内容无关。
+
+## 补丁 — 左侧 ISSUE SUBMISSION 抽屉盖住顶栏
+- 现象：窗口不够宽（Threads ≤1300px、其他页面 ≤720px）时，点 ☰ 打开的左侧导航抽屉
+  上缘压在顶栏下边线上。旧版本就有此问题。
+- 根因：抽屉固定 `top: 61px`，但 "CS TEAM - TBC" 标题换成两行时顶栏实际高 70–94px，
+  而抽屉层级（z-index 45）高于顶栏（20），于是盖住顶栏底部。
+- 修复：`assets/theme.js` 用 ResizeObserver 把顶栏实际高度写入 CSS 变量 `--topbar-h`；
+  `assets/style.css` 两处抽屉改为 `top: var(--topbar-h, 61px)`。实测 952px 宽：
+  顶栏 70px → 抽屉从 70px 开始；700px 宽：94px → 94px。宽屏布局不受影响。
+- 已跑 `update-asset-versions.js` 更新所有 HTML 的 `?v=`。
