@@ -441,8 +441,13 @@ body.hubnav-open .hub-nav-backdrop { display: block; }
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
 }
+/* 2026-10-13 — used to STOP the marquee (animation: none) when the
+   computer asks for less motion. Many office / Remote Desktop / VDI PCs
+   have Windows "Animation effects" turned off, which browsers report as
+   prefers-reduced-motion — so on those agents' screens the brand row
+   never moved. It now keeps scrolling, just slower and gentler. */
 @media (prefers-reduced-motion: reduce) {
-  .brand-row-track { animation: none; }
+  .brand-row-track { animation-duration: 60s; }
 }
 .brand-pill {
   display: flex; align-items: center; gap: 8px;
