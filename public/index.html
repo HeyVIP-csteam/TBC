@@ -2462,8 +2462,7 @@ html[data-theme="light"] {
             ${countryLabel ? "" : '<p class="edit-modal-note err">No country available.</p>'}
           </div>
           <div class="mention-backfill-action">
-            <button type="button" class="tgroute-action-btn" id="mentionBackfillBtn" ${backfillDisabled ? "disabled" : ""}>Run backfill${countryLabel ? ` — ${acctEsc(countryLabel)}` : ""}</button>
-            ${isAll && allowedCountries.length > 1 ? `<button type="button" class="tgroute-action-btn" id="mentionBackfillAllBtn" style="margin-left:6px;" ${canEdit ? "" : "disabled"}>Run backfill — All Countries</button>` : ""}
+            <button type="button" class="tgroute-action-btn" id="mentionBackfillBtn" ${backfillDisabled ? "disabled" : ""}>Run backfill</button>
             <p class="edit-modal-note" id="mentionBackfillStatus"></p>
           </div>
         </div>
@@ -2598,21 +2597,18 @@ html[data-theme="light"] {
     function wireMentionBackfill() {
       const btn = document.getElementById("mentionBackfillBtn");
       if (!btn) return;
-      btn.addEventListener("click", () => runMentionBackfill(btn, [acctSettingsWorkingCountry]));
-      // 2026-10-13 — "All Countries" at the top used to still run only the
-      // ONE country picked in the dropdown (whatever came first), which
-      // looked like "the backfill only ever runs PHP". This button walks
-      // every country the account can see, one after another.
-      const allBtn = document.getElementById("mentionBackfillAllBtn");
-      if (allBtn) {
-        allBtn.addEventListener("click", () => {
-          const list = window.AgentCountry ? window.AgentCountry.getAllowedCountries() : [];
-          runMentionBackfill(allBtn, list, btn);
-        });
-      }
+      // 2026-10-13 — ONE button. "All Countries" selected at the top →
+      // runs every country this account can see, one after another;
+      // a single country selected at the top → just that country.
+      btn.addEventListener("click", () => {
+        const top = window.AgentCountry ? window.AgentCountry.getCountry() : null;
+        const isAll = window.AgentCountry && window.AgentCountry.isAll(top);
+        const list = isAll ? window.AgentCountry.getAllowedCountries() : [acctSettingsWorkingCountry];
+        runMentionBackfill(btn, list);
+      });
     }
 
-    async function runMentionBackfill(btn, countries, otherBtn) {
+    async function runMentionBackfill(btn, countries) {
       const statusEl = document.getElementById("mentionBackfillStatus");
       countries = (countries || []).filter(Boolean);
       if (!countries.length) {
@@ -2621,7 +2617,6 @@ html[data-theme="light"] {
       }
       const nameOf = (c) => (window.COUNTRIES && window.COUNTRIES[c]) ? window.COUNTRIES[c].name : c;
       btn.disabled = true;
-      if (otherBtn) otherBtn.disabled = true;
       statusEl.className = "edit-modal-note";
       const results = [];
       let country = countries[0];
@@ -2656,7 +2651,6 @@ html[data-theme="light"] {
         showToast(`Network error in ${nameOf(country)} after ${total} threads — click Run backfill again to resume.`, "err");
       } finally {
         btn.disabled = false;
-        if (otherBtn) otherBtn.disabled = false;
       }
     }
 
