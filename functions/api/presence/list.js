@@ -16,7 +16,7 @@
  * original (see the `.filter(...)` below); everything else is
  * unchanged from the pre-merge file.
  */
-import { authenticateStaff, ROLE_RANK, canViewActiveAgents, listOffices } from "../../_shared/accounts.js";
+import { authenticateStaff, ROLE_RANK, canViewActiveAgents, listOffices, listAccounts } from "../../_shared/accounts.js";
 import { resolveAllowedCountries, hasCountryOverlap } from "../../_shared/countryAccess.js";
 import { COUNTRY_CODES } from "../../_shared/countries.js";
 import { getListRow } from "../../_shared/presence.js";
@@ -35,14 +35,11 @@ async function handle({ request, env }) {
   if (!auth.ok || !auth.account) return json({ ok: false, error: "Not authorized." }, 401);
   if (!canViewActiveAgents(auth.account)) return json({ ok: false, error: "You don't have access to Active Agents." }, 403);
 
-  const raw = await env.ACCOUNTS_KV.get("accounts-index");
-  const usernames = raw ? JSON.parse(raw) : [];
-  const accounts = (
-    await Promise.all(usernames.map((u) => env.ACCOUNTS_KV.get(`account:${u}`)))
-  )
-    .filter(Boolean)
-    .map((a) => JSON.parse(a))
-    .filter((a) => a.role !== "owner");
+  // 2026-10-15 — was reading `accounts-index` / `account:*` straight from
+  // ACCOUNTS_KV, i.e. the pre-2026-09-17 copy: accounts created or edited
+  // since then were missing or stale here. Now the same D1 data as Agent
+  // Profile (listAccounts() already leaves out the owner row).
+  const accounts = (await listAccounts(env)).filter((a) => a.role !== "owner");
 
   // The one new line: don't show an agent whose visible-country range
   // is entirely disjoint from the viewer's own. Uses set overlap, not

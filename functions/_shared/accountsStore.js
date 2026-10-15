@@ -42,139 +42,104 @@
 
 const TABLE = "kv";
 
-// 2026-10-10 — negative cache for the legacy-KV fallback. Every new write
-// goes to D1 (put() below), so once a key is missing from BOTH D1 and the
-// old KV, the old KV can never gain it later — re-asking KV on every
-// request was pure latency. The main case: `lock:<user>` doesn't exist
-// for any account that has never been locked, so every authenticated
-// request used to pay a D1 miss + a KV miss just for that. Per-isolate,
-// time-bounded, and cleared by put()/delete() for the same key.
-const KV_MISS_TTL_MS = 10 * 60 * 1000;
-const KV_MISS_MAX = 5000;
-const kvMisses = new Map(); // key -> expiresAt
-
-function knownKvMiss(key) {
-  const exp = kvMisses.get(key);
-  if (!exp) return false;
-  if (Date.now() > exp) {
-    kvMisses.delete(key);
-    return false;
+// 2026-10-15 — "D1_ERROR: D1 DB is overloaded. Requests queued for too
+// long." reached the login page twice on 2026-10-14 (~13:52 and ~16:00
+// UTC). accounts-db's own metrics for that day show very low, flat load
+// (<1 query/s, latency 0.2–0.3 ms, no spikes) — a short platform-side
+// hiccup, not something this app caused. Two changes:
+//   1. Transient D1 errors are retried (2 retries, ~150/400 ms + jitter),
+//      so a brief hiccup is invisible to agents.
+//   2. If D1 is STILL failing after that, the error is thrown (the
+//      caller shows "server busy, try again"). There is no KV fallback
+//      any more — see "D1 ONLY" below.
+const TRANSIENT_D1_RE = /overloaded|queued for too long|network connection lost|internal error|object to be reset|reset because|timed? ?out/i;
+export function isTransientD1Error(e) {
+  return TRANSIENT_D1_RE.test(String((e && e.message) || e || ""));
+}
+async function d1Retry(fn) {
+  const delays = [150, 400];
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!isTransientD1Error(e) || i >= delays.length) throw e;
+      await new Promise((r) => setTimeout(r, delays[i] + Math.random() * 100));
+    }
   }
-  return true;
 }
 
-function rememberKvMiss(key) {
-  if (kvMisses.size >= KV_MISS_MAX) kvMisses.clear();
-  kvMisses.set(key, Date.now() + KV_MISS_TTL_MS);
-}
-
-// Test hook — simulates a fresh isolate.
-export function __resetAccountsStoreMemo() {
-  kvMisses.clear();
-}
+// 2026-10-15 — D1 ONLY. The legacy-KV fallback ("heal on read", see the
+// MIGRATION STRATEGY note at the top of this file) has been removed.
+// Verified in the accounts-db console before this change: every username
+// in `accounts-index` has its `account:` row in D1, every id in
+// `offices-index` has its `office:` row, and accounts-index /
+// offices-index / pending-ips / ip-access-log are all in D1 (blocked-ips
+// has never existed — no IP was ever blocked). Reading the old KV copy
+// was only ever reached when D1 errored, and then it answered with
+// pre-2026-09-17 data (old office IP lists, lock state, tokenVersion) —
+// which is what turned a short D1 hiccup into "D1 DB is overloaded" on
+// the login page for agents with the right password. The old KV values
+// are left untouched in ACCOUNTS_KV; nothing here reads or writes them.
+//
+// If ACCOUNTS_DB itself is not bound (should never happen in production),
+// get() returns null and put() throws, rather than quietly using KV.
 
 export function accountsStore(env) {
   const db = env.ACCOUNTS_DB;
+  const requireDb = () => {
+    if (!db) throw new Error("ACCOUNTS_DB (accounts-db) is not bound — check wrangler.toml.");
+    return db;
+  };
 
   // Named (not `this`) so methods still work if a caller destructures them.
   const store = {
     async get(key) {
-      if (db) {
-        try {
-          const row = await db.prepare(`SELECT data FROM ${TABLE} WHERE key = ?`).bind(key).first();
-          if (row) return row.data;
-        } catch {
-          // Table not created yet, or some other D1 hiccup — fall
-          // through to the legacy KV path below rather than hard-fail.
-        }
-      }
-      return store.getLegacy(key);
-    },
-
-    // The legacy-KV half of get(): for callers that already know D1
-    // doesn't have this key (see getAuthBundle()).
-    async getLegacy(key) {
-      if (!env.ACCOUNTS_KV) return null;
-      if (db && knownKvMiss(key)) return null;
-      const legacy = await env.ACCOUNTS_KV.get(key);
-      if (legacy === null && db) rememberKvMiss(key);
-      if (legacy && db) {
-        // Best-effort heal — a failed heal just means this key keeps
-        // falling back to KV next time too, never a correctness bug
-        // (the legacy KV copy is untouched either way).
-        db.prepare(`INSERT INTO ${TABLE} (key, data) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data`)
-          .bind(key, legacy).run().catch(() => {});
-      }
-      return legacy;
+      const d = requireDb();
+      const row = await d1Retry(() => d.prepare(`SELECT data FROM ${TABLE} WHERE key = ?`).bind(key).first());
+      return row ? row.data : null;
     },
 
     async put(key, value) {
-      kvMisses.delete(key);
-      if (!db) {
-        // ACCOUNTS_DB not bound yet (shouldn't happen post-deploy, but
-        // fails safe instead of silently dropping the write) — land it
-        // on the old KV so it's not lost outright.
-        if (env.ACCOUNTS_KV) await env.ACCOUNTS_KV.put(key, value);
-        return;
-      }
-      await db.prepare(`INSERT INTO ${TABLE} (key, data) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data`)
-        .bind(key, value).run();
+      const d = requireDb();
+      await d1Retry(() =>
+        d.prepare(`INSERT INTO ${TABLE} (key, data) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data`)
+          .bind(key, value).run()
+      );
     },
 
     async delete(key) {
-      kvMisses.delete(key);
-      if (db) await db.prepare(`DELETE FROM ${TABLE} WHERE key = ?`).bind(key).run().catch(() => {});
-      // Also clear the legacy copy so a stale KV value can never come
-      // back from under a future D1 outage's fallback path.
-      if (env.ACCOUNTS_KV) await env.ACCOUNTS_KV.delete(key).catch(() => {});
+      const d = requireDb();
+      await d1Retry(() => d.prepare(`DELETE FROM ${TABLE} WHERE key = ?`).bind(key).run()).catch(() => {});
     },
 
     /**
      * 2026-10-10 — account + lock + office for one login, in ONE D1 round
      * trip (the office key is resolved inside SQL from the account row's
-     * officeId). Returns raw strings ({ account, lock, office }); any key
-     * D1 didn't have goes through get() above (legacy KV fallback + heal).
-     * `office` is undefined whenever D1 didn't return it (account not in
-     * D1 yet, no officeId, or office still only in legacy KV) — the caller
-     * then resolves the office the normal way.
+     * officeId). Returns raw strings ({ account, lock, office }); a key D1
+     * doesn't have comes back null (account/lock) or undefined (office —
+     * the caller then resolves the office the normal way).
      */
     async getAuthBundle(username) {
+      const d = requireDb();
       const accountKey = `account:${username}`;
       const lockKey = `lock:${username}`;
+      const { results } = await d1Retry(() => d
+        .prepare(
+          `SELECT key, data FROM ${TABLE} WHERE key IN (?1, ?2)
+           UNION ALL
+           SELECT key, data FROM ${TABLE}
+            WHERE key = 'office:' || json_extract((SELECT data FROM ${TABLE} WHERE key = ?1), '$.officeId')`
+        )
+        .bind(accountKey, lockKey)
+        .all());
       const found = {};
-      let queried = false;
-      if (db) {
-        try {
-          const { results } = await db
-            .prepare(
-              `SELECT key, data FROM ${TABLE} WHERE key IN (?1, ?2)
-               UNION ALL
-               SELECT key, data FROM ${TABLE}
-                WHERE key = 'office:' || json_extract((SELECT data FROM ${TABLE} WHERE key = ?1), '$.officeId')`
-            )
-            .bind(accountKey, lockKey)
-            .all();
-          for (const r of results || []) found[r.key] = r.data;
-          queried = true;
-        } catch {
-          // fall through to the per-key path below
-        }
-      }
-      const has = (k) => Object.prototype.hasOwnProperty.call(found, k);
-      // D1 already answered "not here" for a missing key — go straight to
-      // the legacy KV fallback instead of asking D1 again.
-      const miss = (k) => (queried ? store.getLegacy(k) : store.get(k));
-      const inD1 = has(accountKey);
-      const [account, lock] = await Promise.all([
-        inD1 ? found[accountKey] : miss(accountKey),
-        has(lockKey) ? found[lockKey] : miss(lockKey),
-      ]);
-      let office;
-      if (inD1) {
-        const officeKey = Object.keys(found).find((k) => k.startsWith("office:"));
-        office = officeKey ? found[officeKey] : undefined; // undefined = not in D1, resolve normally
-      }
-      return { account, lock, office };
+      for (const r of results || []) found[r.key] = r.data;
+      const officeKey = Object.keys(found).find((k) => k.startsWith("office:"));
+      return {
+        account: found[accountKey] ?? null,
+        lock: found[lockKey] ?? null,
+        office: officeKey ? found[officeKey] : undefined,
+      };
     },
   };
   return store;

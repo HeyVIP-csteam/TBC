@@ -846,7 +846,17 @@ export function requestIP(request) {
 // "accurate to within ~5 minutes", not to-the-second — an acceptable
 // trade for how it's actually used (spotting accounts that have gone
 // quiet, not a real-time presence indicator).
+// 2026-10-15 — bookkeeping only: a busy database must never turn an
+// otherwise valid request into an error.
 async function touchLastActive(env, account) {
+  try {
+    await touchLastActiveInner(env, account);
+  } catch (e) {
+    console.warn(`[accounts] touchLastActive skipped: ${String((e && e.message) || e)}`);
+  }
+}
+
+async function touchLastActiveInner(env, account) {
   const now = Date.now();
   const last = account.lastActiveAt ? new Date(account.lastActiveAt).getTime() : 0;
   if (now - last < 5 * 60 * 1000) return;

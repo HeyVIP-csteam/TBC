@@ -113,7 +113,7 @@ import { sendTelegramMessage } from "../../_shared/telegram.js";
 import { getSecurityAlertsRoute } from "../../_shared/routes.js";
 import { isIpBlocked, recordPendingIpRequest } from "../../_shared/ipAccess.js";
 import { logActivity } from "../../_shared/activityLog.js";
-import { accountsStore } from "../../_shared/accountsStore.js";
+import { accountsStore, isTransientD1Error } from "../../_shared/accountsStore.js";
 import { resolveAllowedCountries } from "../../_shared/countryAccess.js";
 import { COUNTRY_CODES } from "../../_shared/countries.js";
 import { resolveBotToken } from "../../_shared/routing.js";
@@ -219,6 +219,12 @@ export async function onRequestPost(context) {
     // not just the pending-list one.
     return await handleLogin({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
   } catch (e) {
+    // 2026-10-15 — account database still busy after retries (see
+    // accountsStore.js): plain message instead of the raw D1_ERROR text.
+    if (isTransientD1Error(e)) {
+      console.error(`[login] account database busy: ${String((e && e.message) || e)}`);
+      return json({ ok: false, error: "The server is busy right now. Please wait a few seconds and try again." }, 503);
+    }
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }
 }
@@ -279,7 +285,7 @@ async function handleLogin({ request, env, waitUntil }) {
     const ip = requestIP(request) || "unknown";
     if (waitUntil) waitUntil(notifyLoginFailure(env, { account, ip, request, reasonTitle: "Wrong Password" }));
     if (waitUntil) waitUntil(logActivity(env, { category: "Auth", action: "Login Failed", agent: account.username, ip, detail: "Wrong password" }));
-    const { locked, count } = await recordLoginFailure(env, account.username, { kind: "wrong password" });
+    const { locked, count } = await recordLoginFailureSafe(env, account.username, { kind: "wrong password" });
     if (locked && waitUntil) {
       waitUntil(notifyAccountLocked(env, { account, reason: `${count} failed login attempts within the last hour` }));
       waitUntil(logActivity(env, { category: "Auth", action: "Account Auto-Locked", agent: account.username, ip, detail: `${count} failed login attempts within the last hour` }));
@@ -313,7 +319,7 @@ async function handleLogin({ request, env, waitUntil }) {
     if (waitUntil) waitUntil(notifyLoginFailure(env, { account, ip, request, reasonTitle: "Abnormal IP Address" }));
     if (waitUntil) waitUntil(logActivity(env, { category: "Auth", action: "Login Failed", agent: account.username, ip, detail: "Unrecognized/unwhitelisted IP" }));
 
-    const { locked, count } = await recordLoginFailure(env, account.username, { kind: "unrecognized IP", ip });
+    const { locked, count } = await recordLoginFailureSafe(env, account.username, { kind: "unrecognized IP", ip });
     if (locked && waitUntil) {
       waitUntil(notifyAccountLocked(env, { account, reason: `${count} failed login attempts within the last hour` }));
       waitUntil(logActivity(env, { category: "Auth", action: "Account Auto-Locked", agent: account.username, ip, detail: `${count} failed login attempts within the last hour` }));
@@ -368,6 +374,20 @@ async function handleLogin({ request, env, waitUntil }) {
 // 1-hour window, same as before — old failures age out rather than
 // haunting the account forever; a genuinely successful login also
 // clears the slate immediately (see clearLoginFailures() below).
+// 2026-10-15 — counting a failed attempt is bookkeeping: if saving the
+// count fails, the agent still gets the real answer ("Wrong username or
+// password" / IP not approved), not a server error. (This is exactly the
+// step that turned two failed logins into "D1 DB is overloaded" on
+// 2026-10-14.)
+async function recordLoginFailureSafe(env, username, info) {
+  try {
+    return await recordLoginFailure(env, username, info);
+  } catch (e) {
+    console.error(`[login] couldn't record failed attempt for ${username}: ${String((e && e.message) || e)}`);
+    return { locked: false, count: 0 };
+  }
+}
+
 async function recordLoginFailure(env, username, { kind, ip }) {
   const key = `loginfail:${username}`;
   const raw = await accountsStore(env).get(key);
