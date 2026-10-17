@@ -2,8 +2,9 @@
  * active-agents-modal.js  (index.html ONLY)
  *
  * Active Agents popup: list + search + status filter + Record drill-down.
- * Backend unchanged: GET /api/presence/list (on open, then every 10s ONLY
- * while the popup is open) and GET /api/presence/record?username=… when an
+ * Backend unchanged: GET /api/presence/list (on open, then every 3 min ONLY
+ * while the popup is open AND the tab is in front — 2026-10-17, was every
+ * 10s even in background tabs; each call reads Workers KV ~150–226 times) and GET /api/presence/record?username=… when an
  * agent is picked in Record. Visibility is still decided by the server
  * (canViewActiveAgents in functions/api/presence/list.js) — this file never
  * acts as a permission check.
@@ -102,9 +103,24 @@
 
   function el(id) { return document.getElementById(id); }
 
+  // 2026-10-17 — same cadence as the presence heartbeat that feeds this
+  // list; a failed load is retried after 30s instead of waiting 3 min.
+  const AA_POLL_MS = 3 * 60 * 1000;
+  const AA_RETRY_MS = 30000;
+  let aaLastLoadAt = 0;
+  function aaPollTick() {
+    if (document.hidden) return;
+    const due = aaLastError ? AA_RETRY_MS : AA_POLL_MS;
+    if (Date.now() - aaLastLoadAt >= due - 1000) aaLoadList();
+  }
+  function aaOnVisibility() {
+    if (!document.hidden && Date.now() - aaLastLoadAt > 60000) aaLoadList();
+  }
+
   async function aaLoadList() {
     if (aaLoading) return;
     aaLoading = true;
+    aaLastLoadAt = Date.now();
     el("aaRefreshBtn")?.classList.add("is-spinning");
     // 15s cap so one hung request can't block every later refresh.
     const ctrl = typeof AbortController === "function" ? new AbortController() : null;
@@ -118,6 +134,9 @@
         aaData = data;
         aaLastError = null;
         aaUpdatedAt = new Date();
+        // 2026-10-17 — the Home card shows the same number; hand it over so
+        // the card doesn't fetch the same list separately while this is open.
+        try { window.dispatchEvent(new CustomEvent("activeagents:data", { detail: data })); } catch { /* old browser */ }
       }
     } catch (e) {
       aaLastError = e && e.name === "AbortError" ? "The server took too long to answer." : "Network error — couldn't reach the server.";
@@ -236,7 +255,7 @@
     if (!foot) return;
     const stale = !!aaLastError;
     foot.classList.toggle("is-stale", stale);
-    el("aaFootStatus").textContent = stale ? (aaData ? "Couldn't refresh — showing last list, retrying every 10s" : "Not connected — retrying every 10s") : "Live presence · refreshes every 10s";
+    el("aaFootStatus").textContent = stale ? (aaData ? "Couldn't refresh — showing last list, retrying in 30s" : "Not connected — retrying in 30s") : "Live presence · refreshes every 3 min";
     el("aaFootUpdated").textContent = aaUpdatedAt ? "Updated " + aaUpdatedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }) : "";
   }
 
@@ -360,7 +379,8 @@
     aaRender(); // shows the last list instantly if we have one, otherwise the loading state
     aaLoadList();
     if (aaPollTimer) clearInterval(aaPollTimer);
-    aaPollTimer = setInterval(aaLoadList, 10000); // only polls while the popup is open
+    aaPollTimer = setInterval(aaPollTick, 15000); // only while the popup is open; see AA_POLL_MS
+    document.addEventListener("visibilitychange", aaOnVisibility);
     document.addEventListener("keydown", onKey);
   }
   function close() {
@@ -368,6 +388,7 @@
     if (backdrop) backdrop.classList.remove("is-open");
     if (aaPollTimer) { clearInterval(aaPollTimer); aaPollTimer = null; }
     aaCloseRecord();
+    document.removeEventListener("visibilitychange", aaOnVisibility);
     document.removeEventListener("keydown", onKey);
   }
 

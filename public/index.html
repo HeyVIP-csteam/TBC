@@ -133,7 +133,7 @@ html[data-theme="light"] {
   </div>
 
   <!-- Active Agents popup (redesigned 2026-10-12) — same data and endpoints
-       as before (/api/presence/list every 10s while open, /api/presence/record
+       as before (/api/presence/list every 3 min while open — 2026-10-17, was 10s —, /api/presence/record
        for the Record view); see active-agents-modal.js. -->
   <div class="edit-modal-backdrop aa-backdrop" id="aaModalBackdrop">
     <div class="aa-modal" role="dialog" aria-modal="true" aria-labelledby="aaTitle">
@@ -178,7 +178,7 @@ html[data-theme="light"] {
       </div>
 
       <footer class="aa-foot">
-        <span class="aa-foot-live"><span class="aa-dot is-online" aria-hidden="true"></span><span id="aaFootStatus">Live presence · refreshes every 10s</span></span>
+        <span class="aa-foot-live"><span class="aa-dot is-online" aria-hidden="true"></span><span id="aaFootStatus">Live presence · refreshes every 3 min</span></span>
         <span id="aaFootUpdated"></span>
       </footer>
 
@@ -334,7 +334,7 @@ html[data-theme="light"] {
   </div>
 
   <script src="/assets/schemas.js?v=c135f22f"></script>
-  <script src="/assets/active-agents-modal.js?v=21bb0058"></script>
+  <script src="/assets/active-agents-modal.js?v=a4c5d7a2"></script>
   <script src="/assets/spa-shell.js?v=dd82eee8"></script>
   <script>
     // MERGED (2026-08-21) — mirrors _shared/accounts.js's
@@ -726,11 +726,35 @@ html[data-theme="light"] {
         if (window.ActiveAgentsModal) window.ActiveAgentsModal.open();
       });
     }
+    // 2026-10-17 — every /api/presence/list call reads Workers KV about
+    // 150–226 times (accounts + each agent's presence). This card used to
+    // refresh every 30s from EVERY view of the shell, even in background
+    // tabs — on its own enough to push KV reads past the $5 plan's 10M/month
+    // (Oct 2026 bill: 14.75M). Now: every 3 min (same cadence as the
+    // presence heartbeat that feeds it), only while Home is the visible view
+    // and the tab is in front; on coming back to Home / to the tab it
+    // refreshes at once if the number is more than a minute old.
+    const AA_CARD_REFRESH_MS = 3 * 60 * 1000;
+    let aaCardAt = 0;
+    let aaCardInFlight = false;
+    function aaPopupIsOpen() {
+      const b = document.getElementById("aaModalBackdrop");
+      return !!b && b.classList.contains("is-open");
+    }
     async function loadActiveAgentsCardStat() {
-      if (!canSeeActiveAgents) return;
+      // While the popup is open it already refreshes the same list and
+      // hands it to the card (see the "activeagents:data" listener below).
+      if (!canSeeActiveAgents || !homeIsVisible() || aaCardInFlight || aaPopupIsOpen()) return;
+      aaCardInFlight = true;
+      aaCardAt = Date.now();
       try {
         const res = await window.AgentAuth.authFetch("/api/presence/list", { cache: "no-store" });
-        const data = await res.json();
+        renderActiveAgentsCard(await res.json());
+      } catch { /* card still works without the sub-stat */ }
+      finally { aaCardInFlight = false; }
+    }
+    function renderActiveAgentsCard(data) {
+      {
         const statEl = document.getElementById("activeAgentsStat");
         const iconEl = document.getElementById("activeAgentsIcon");
         // Icon + text both breathe together while someone's actually
@@ -744,15 +768,30 @@ html[data-theme="light"] {
         if (statEl && data.ok) statEl.textContent = `${data.stats.online} online now`;
         if (statEl) statEl.classList.toggle("breathing", hasOnline);
         if (iconEl) iconEl.classList.toggle("breathing", hasOnline);
-      } catch { /* card still works without the sub-stat */ }
+      }
     }
+    window.addEventListener("activeagents:data", (e) => {
+      if (!canSeeActiveAgents || !e.detail) return;
+      aaCardAt = Date.now();
+      renderActiveAgentsCard(e.detail);
+    });
     loadActiveAgentsCardStat();
-    // Keep the Home-card's own count (and its breathing state) fresh even
-    // while the Active Agents popup itself is closed — same 30s cadence
-    // as a background refresh, separate from and lighter than the
-    // popup's own 10s poll in active-agents-modal.js (which only runs
-    // while that popup is actually open).
-    if (canSeeActiveAgents) setInterval(loadActiveAgentsCardStat, 30000);
+    // Keep the Home-card's own count (and its breathing state) fresh while
+    // the popup is closed — see AA_CARD_REFRESH_MS above. The popup has its
+    // own refresh in active-agents-modal.js (only while it is open).
+    if (canSeeActiveAgents) {
+      setInterval(() => {
+        if (Date.now() - aaCardAt >= AA_CARD_REFRESH_MS - 1000) loadActiveAgentsCardStat();
+      }, 30000);
+      const aaCardRefreshIfStale = () => {
+        if (homeIsVisible() && Date.now() - aaCardAt > 60000) loadActiveAgentsCardStat();
+      };
+      document.addEventListener("visibilitychange", aaCardRefreshIfStale);
+      const homeEl = document.getElementById("viewHome");
+      if (homeEl && window.MutationObserver) {
+        new MutationObserver(aaCardRefreshIfStale).observe(homeEl, { attributes: true, attributeFilter: ["style"] });
+      }
+    }
     async function loadAnnounceCardStat() {
       if (!canSeeAnnouncements) return;
       try {
