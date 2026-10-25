@@ -24,10 +24,13 @@
  * country doesn't have them was considered and rejected as more
  * confusing than a clean per-country branch.
  *
- * PKR — Deposit Issue and Deposit Backup share the SAME A–W layout
- * (confirmed identical from the real "CXPKR ~ July 2026-BACK-UP"
- * screenshot vs the live Deposit Issue sheet) — one COLS object serves
- * both PKR_ISSUE_COLUMNS and PKR_BACKUP_COLUMNS below.
+ * PKR — Deposit Issue and Deposit Backup USED TO share the same A–W
+ * layout (one COLS object served both). 2026-10-25: the other department
+ * inserted a new column at P in the live Deposit Issue sheet, so every
+ * column from the old P onward moved one to the right (CS PIC P→Q …
+ * Remark W→X). Deposit Backup was not reported as changed, so the two
+ * are now separate objects: PKR_BACKUP_COLS keeps the old A–W layout,
+ * PKR_ISSUE_COLS has the shifted A–X layout.
  *
  * INR — Deposit Issue and Deposit Backup DIVERGE starting at column O:
  * "issue" has PG Remarks/CS Remarks/Payment Status/Order ID/PIC Name/
@@ -40,9 +43,9 @@
  */
 
 // ---- PKR ----
-// Column layout confirmed from the real sheet (row 1 = headers, data
-// starts row 2), identical for Deposit Issue and Deposit Backup.
-const PKR_COLS = {
+// Deposit Backup layout (row 1 = headers, data starts row 2) — the
+// original A–W layout, unchanged.
+const PKR_BACKUP_COLS = {
   transactionId: "A",
   requestTime: "B",
   channel: "C",
@@ -67,6 +70,25 @@ const PKR_COLS = {
   pytPsd: "V",
   remark: "W",
   lastCol: "W",
+};
+
+// Deposit Issue layout — 2026-10-25, other department inserted a new
+// column at P (not read here). A–O unchanged; everything from CS PIC on
+// is one column to the right of PKR_BACKUP_COLS. Confirmed from the live
+// sheet's header row: Q "CS PIC", R "Player contact no", S "Status CS",
+// T "Correct UID". The 4 CS-editable columns must stay contiguous —
+// update.js writes them as one range starting at csPIC.
+const PKR_ISSUE_COLS = {
+  ...PKR_BACKUP_COLS,
+  csPIC: "Q",
+  playerContactNo: "R",
+  statusCS: "S",
+  correctUid: "T",
+  playersCartId: "U",
+  paymentStatus: "V",
+  pytPsd: "W",
+  remark: "X",
+  lastCol: "X",
 };
 
 // ---- INR ----
@@ -185,13 +207,13 @@ const INR_BACKUP_COLS = {
 };
 
 export const ISSUE_COLUMNS_BY_COUNTRY = {
-  PKR: PKR_COLS,
+  PKR: PKR_ISSUE_COLS,
   // INR intentionally absent here — resolved per-tab via INR_ISSUE_TABS,
   // not per-country. getIssueColumns() below branches on this.
 };
 
 export const BACKUP_COLUMNS_BY_COUNTRY = {
-  PKR: PKR_COLS,
+  PKR: PKR_BACKUP_COLS,
   INR: INR_BACKUP_COLS,
 };
 
@@ -204,7 +226,7 @@ export const BACKUP_COLUMNS_BY_COUNTRY = {
 // the wrong tab's data through the wrong column lens). PKR ignores
 // `tabName` — every PKR brand/tab confirmed to share one layout.
 export function getIssueColumns(country, tabName) {
-  if (country === "PKR") return PKR_COLS;
+  if (country === "PKR") return PKR_ISSUE_COLS;
   if (country === "INR") {
     const key = tabName ? normalizeTabNameForLookup(tabName) : null;
     return (key && INR_ISSUE_TABS[key]) || null;
