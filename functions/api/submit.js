@@ -27,8 +27,18 @@ const VALID_MODULES = Object.keys(MODULE_META).filter((id) => !DEPOSIT_CHANNEL_P
 // submission never comes back as a raw platform error page. The agent
 // always gets JSON back, even when something we didn't anticipate breaks.
 export async function onRequestPost(context) {
+  // 2026-10-29 — keep running even if the browser disconnects. Cloudflare
+  // cancels a request's unfinished work the moment the client goes away
+  // (tab closed/refreshed, network drop) — unless that work is handed to
+  // waitUntil(). A KV8 PKR Withdraw Issue (W1606451351, 10/29 11:23 Taipei)
+  // was sent to Telegram but never saved as a thread: the TG send (photo +
+  // PDF, several seconds) finished, then the request was cut before the
+  // Sheet write / createThread step. Registering the whole handler with
+  // waitUntil lets it finish (up to ~30s after the disconnect).
   try {
-    return await handleSubmit({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
+    const work = handleSubmit({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
+    keepAlive(context, work);
+    return await work;
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }
@@ -644,4 +654,13 @@ function json(obj, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function keepAlive(context, promise) {
+  if (typeof context.waitUntil !== "function") return;
+  try {
+    context.waitUntil(promise.catch(() => {}));
+  } catch {
+    // waitUntil unavailable on this runtime — request still runs normally.
+  }
 }

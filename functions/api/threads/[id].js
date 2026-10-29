@@ -154,8 +154,18 @@ export async function onRequestGet({ request, env, params }) {
 // throw uncaught and come back as a raw platform error instead of JSON.
 // This outer catch is the guarantee that never happens.
 export async function onRequestPost(context) {
+  // 2026-10-29 — keep running even if the browser disconnects. Cloudflare
+  // cancels a request's unfinished work the moment the client goes away
+  // (tab closed/refreshed, network drop) — unless that work is handed to
+  // waitUntil(). A KV8 PKR Withdraw Issue (W1606451351, 10/29 11:23 Taipei)
+  // was sent to Telegram but never saved as a thread: the TG send (photo +
+  // PDF, several seconds) finished, then the request was cut before the
+  // Sheet write / createThread step (same risk here: reply is sent to TG, then appendMessage). Registering the whole handler with
+  // waitUntil lets it finish (up to ~30s after the disconnect).
   try {
-    return await handleThreadAction({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
+    const work = handleThreadAction({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
+    keepAlive(context, work);
+    return await work;
   } catch (e) {
     return json({ ok: false, error: `Unexpected server error: ${String(e && e.message || e)}` }, 500);
   }
@@ -787,4 +797,13 @@ function json(obj, status = 200, extraHeaders = {}) {
     status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extraHeaders },
   });
+}
+
+function keepAlive(context, promise) {
+  if (typeof context.waitUntil !== "function") return;
+  try {
+    context.waitUntil(promise.catch(() => {}));
+  } catch {
+    // waitUntil unavailable on this runtime — request still runs normally.
+  }
 }
