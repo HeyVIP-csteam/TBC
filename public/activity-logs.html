@@ -38,129 +38,129 @@ html[data-theme="light"] {
 <script src="/assets/reply-sound.js?v=a889f48f"></script>
 <script src="/assets/announcement-banner.js?v=3ccef02f" defer></script>
 <style>
-  /* Three visually separate cards (own radius/border/shadow each), not
-     one big card split into sections — matches Promo Code Search's own
-     card rhythm. */
-  .actlog-shell { max-width: 1800px; width: 100%; margin: 0 auto; padding: 0 24px 80px; }
+  /* 2026-10-30 — same look as the other content pages (Deposit Issue,
+     Promo Code Search, Report): --aa-* tokens from style.css, header band
+     with icon tile, 18px cards, teal accent, unified inputs/table/buttons.
+     Visual only — markup ids, script and data handling are unchanged. */
+  .actlog-shell { max-width: 1800px; width: 100%; margin: 0 auto; padding: 0 24px 80px; display: flex; flex-direction: column; gap: 14px; color: var(--aa-ink); }
 
-  .actlog-title-card {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 16px; background: var(--card-bg); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow);
-    padding: 18px 22px; margin-bottom: 16px;
+  .actlog-shell :is(.actlog-title-card, .actlog-filter-card, .actlog-results-card) {
+    background: var(--aa-bg); border: 1px solid var(--aa-line-strong); border-radius: 18px; box-shadow: var(--aa-shadow); margin: 0;
   }
-  .actlog-title-left { display: flex; align-items: flex-start; gap: 10px; }
-  .actlog-title-left .header-icon { font-size: 20px; line-height: 1; margin-top: -1px; flex-shrink: 0; }
-  .actlog-title-text { font-family: var(--font-display); font-weight: 700; font-size: 17px; color: var(--ink); }
-  .actlog-title-sub { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
 
-  .actlog-filter-card {
-    display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;
-    background: var(--card-bg); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow);
-    padding: 14px 18px; margin-bottom: 16px; overflow-x: auto;
+  /* header band */
+  .actlog-title-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 20px; background: var(--aa-head) !important; }
+  .actlog-title-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .actlog-title-left .header-icon {
+    width: 46px; height: 46px; flex-shrink: 0; display: grid; place-items: center; margin: 0; border-radius: 13px; font-size: 21px; line-height: 1;
+    background: color-mix(in srgb, var(--aa-accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--aa-accent) 30%, transparent);
   }
+  .actlog-title-text { font-family: var(--font-display, "Space Grotesk", "Inter", sans-serif); font-size: 19px; font-weight: 700; color: var(--aa-ink); letter-spacing: -0.01em; }
+  .actlog-title-sub { margin-top: 3px; font-size: 12.5px; color: var(--aa-ink-2); }
+
+  /* Refresh — secondary button; turns red while a refresh is running (existing behaviour) */
+  #actlogRefreshBtn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 16px; border-radius: 10px;
+    background: var(--aa-surface-2); border: 1px solid var(--aa-line-strong); color: var(--aa-ink); font: 600 13px/1 inherit; cursor: pointer; box-shadow: none; transform: none;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  #actlogRefreshBtn:hover { background: var(--aa-surface-hover); border-color: color-mix(in srgb, var(--aa-accent) 55%, transparent); transform: none; }
+  #actlogRefreshBtn:focus-visible { outline: 2px solid var(--aa-accent); outline-offset: 2px; }
+  #actlogRefreshBtn.is-refreshing {
+    background: color-mix(in srgb, var(--aa-danger) 14%, transparent);
+    border-color: color-mix(in srgb, var(--aa-danger) 50%, transparent);
+    color: var(--aa-danger);
+  }
+
+  /* filters */
+  .actlog-filter-card { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; padding: 16px 18px; overflow-x: auto; }
   .actlog-filter-card select,
   .actlog-filter-card input[type="text"] {
-    background: var(--field-bg); border: 1.5px solid var(--border); border-radius: 10px;
-    padding: 8px 12px; font-size: 12.5px; color: var(--ink); font-family: inherit; flex-shrink: 0;
+    height: 42px; box-sizing: border-box; padding: 0 12px; border-radius: 10px; flex-shrink: 0;
+    background: var(--aa-surface-2); border: 1px solid var(--aa-line-strong); color: var(--aa-ink); font-size: 13.5px; font-family: inherit;
+    transition: border-color .15s, background .15s;
   }
+  .actlog-filter-card input[type="text"]::placeholder { color: var(--aa-ink-3); }
   .actlog-filter-card select:focus,
-  .actlog-filter-card input[type="text"]:focus { outline: none; border-color: var(--accent-gold); }
-  .actlog-filter-card select { cursor: pointer; }
-  #actlogCategory { min-width: 150px; }
-  #actlogAgentFilter { min-width: 150px; }
+  .actlog-filter-card input[type="text"]:focus { outline: none; border-color: var(--aa-accent); background: var(--aa-bg); }
+  .actlog-filter-card select { cursor: pointer; padding-right: 8px; }
+  .actlog-filter-card select option { background: var(--aa-bg); color: var(--aa-ink); }
+  #actlogCategory { min-width: 170px; }
+  #actlogAgentFilter { min-width: 180px; }
   #actlogSearch { flex: 1; min-width: 160px; }
   .actlog-filter-count {
-    flex-shrink: 0; font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
-    white-space: nowrap;
+    flex-shrink: 0; padding: 4px 10px; border-radius: 7px; white-space: nowrap;
+    background: var(--aa-chip); border: 1px solid var(--aa-chip-line);
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace); font-size: 11.5px; font-weight: 600; color: var(--aa-ink-2);
   }
+  .actlog-filter-count:empty { display: none; }
 
-  .actlog-results-card {
-    background: var(--card-bg); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow);
-    padding: 16px 18px;
-  }
+  /* results card */
+  .actlog-results-card { padding: 0; overflow: hidden; }
   .actlog-results-head {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
-    padding-bottom: 12px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    margin: 0; padding: 12px 18px; background: var(--aa-surface-2); border-bottom: 1px solid var(--aa-line);
   }
-  .actlog-results-title {
-    display: flex; align-items: center; gap: 8px;
-    font-family: var(--font-display); font-weight: 700; font-size: 13.5px; color: var(--ink);
-  }
-  .actlog-results-title .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; flex-shrink: 0; }
+  .actlog-results-title { display: flex; align-items: center; gap: 8px; font-family: var(--font-display, "Space Grotesk", "Inter", sans-serif); font-weight: 700; font-size: 14px; color: var(--aa-ink); }
+  .actlog-results-title .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--aa-online); box-shadow: 0 0 0 3px var(--aa-online-bg); flex-shrink: 0; }
   .actlog-results-right { display: flex; align-items: center; gap: 10px; }
+  .actlog-results-card .ipa-page-size {
+    height: 32px; padding: 0 8px; border-radius: 8px; background: var(--aa-bg); border: 1px solid var(--aa-line-strong);
+    color: var(--aa-ink); font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .actlog-results-card .ipa-page-size:focus { outline: none; border-color: var(--aa-accent); }
   .actlog-found-pill {
-    background: rgba(34, 197, 94, 0.14); color: #16a34a; font-size: 11.5px;
-    font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap;
+    background: var(--aa-online-bg); color: var(--aa-online-ink); border: 1px solid var(--aa-online-line);
+    font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
   }
+  .actlog-found-pill:empty { display: none; }
 
-  /* Table column widths — NOT written as fixed percentages. Every
-     column except Detail is white-space:nowrap with no width set, so
-     the browser sizes each to its own content's minimum; Detail alone
-     gets width:100% to soak up the rest and wraps normally. This is
-     the fix for long badge-like Action text (e.g. "TG Route Changed")
-     overflowing a hard-coded percentage column and bleeding into its
-     neighbor. */
+  /* table — Detail takes the free width and wraps; every other column
+     sizes to its content (avoids long Action text bleeding into Detail). */
   .actlog-table-wrap { overflow-x: auto; }
-  .actlog-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .actlog-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
   .actlog-table th, .actlog-table td {
-    white-space: nowrap; padding: 10px 10px; vertical-align: top;
-    border-top: 1px solid var(--border);
-    /* Vertical divider between every column — both header and body
-       cells, so the line runs unbroken from the header straight down
-       through each row. Dropped on the last column (IP) since a
-       trailing divider against the card's own edge looks like a stray
-       line rather than a separator. */
-    border-right: 1px solid var(--border);
+    white-space: nowrap; padding: 11px 14px; vertical-align: top; text-align: left;
+    border-bottom: 1px solid var(--aa-line);
   }
-  .actlog-table th:last-child, .actlog-table td:last-child { border-right: none; }
+  .actlog-table :is(th + th, td + td) { border-left: 1px solid var(--aa-line); }
   .actlog-table th {
-    text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em;
-    color: var(--ink-soft); font-weight: 700; background: var(--field-bg);
-    border-top: none; position: sticky; top: 0;
+    position: sticky; top: 0; z-index: 1; background: var(--aa-surface-2);
+    font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--aa-ink-3);
   }
-  .actlog-table tr:first-child td { border-top: 1px solid var(--border); }
+  .actlog-table td { color: var(--aa-ink); }
+  .actlog-table tbody tr:last-child td { border-bottom: 0; }
+  .actlog-table tbody tr:hover td { background: var(--aa-surface-hover); }
+  .actlog-table td:nth-child(1), .actlog-table td:nth-child(2) { font-variant-numeric: tabular-nums; color: var(--aa-ink-2); }
   .actlog-table th.actlog-col-detail,
-  .actlog-table td.actlog-col-detail { width: 100%; white-space: normal; word-break: break-word; }
-  .actlog-action { font-weight: 600; color: var(--ink); }
-  .actlog-ip { font-family: var(--font-mono); color: var(--ink-soft); font-size: 11.5px; }
+  .actlog-table td.actlog-col-detail { width: 100%; min-width: 280px; white-space: normal; word-break: break-word; }
+  .actlog-action { font-weight: 600; color: var(--aa-ink); }
+  .actlog-ip { font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace); color: var(--aa-ink-3); font-size: 12px; }
 
-  /* Long detail text (edit/recall diffs) — clamp to 3 lines by
-     default, click the row to expand. No modal needed. */
-  .actlog-detail {
-    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
-    overflow: hidden; cursor: pointer; color: var(--ink);
-  }
+  /* long detail: clamp to 3 lines, click the row to expand */
+  .actlog-detail { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; color: var(--aa-ink); }
   .actlog-detail.is-expanded { display: block; -webkit-line-clamp: unset; }
   tr[data-detail-row] { cursor: pointer; }
 
-  /* Refresh button — deliberately NOT the site's usual spin animation
-     (see threads.html's #refreshBtn). Per this page's own request: on
-     click it turns solid red immediately (so a fast response still
-     reads as "something happened"), then reverts to the normal look
-     once the refresh finishes — success or failure both clear it, only
-     the wording of the button itself differs by outcome via JS. */
-  #actlogRefreshBtn.is-refreshing {
-    background: rgba(224, 87, 122, 0.16);
-    border-color: rgba(224, 87, 122, 0.55);
-    color: #e0577a;
+  /* pagination — same secondary buttons as the rest of the page */
+  .actlog-results-card .ipa-pagination { margin: 0; padding: 12px 18px; gap: 12px; border-top: 1px solid var(--aa-line); }
+  .actlog-results-card .ipa-page-link {
+    height: 32px; padding: 0 14px; border-radius: 8px; text-decoration: none;
+    background: var(--aa-surface-2); border: 1px solid var(--aa-line-strong); color: var(--aa-ink); font: 600 12.5px/1 inherit; cursor: pointer;
   }
+  .actlog-results-card .ipa-page-link:hover:not(:disabled) { color: var(--aa-ink); border-color: color-mix(in srgb, var(--aa-accent) 55%, transparent); background: var(--aa-surface-hover); }
+  .actlog-results-card .ipa-page-link:disabled { opacity: .45; cursor: default; }
+  .actlog-results-card .ipa-page-status { color: var(--aa-ink-2); font-weight: 600; font-size: 12.5px; }
 
-  /* Only the empty-state placeholder text gets a min-height (roughly 3
-     lines) so it doesn't collapse to a single line — the card itself
-     is left to size naturally from however many rows actually render,
-     with no min-height on the card, so a short page of results doesn't
-     leave a big empty gap underneath. */
-  #actlogEmpty { min-height: 160px; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--ink-soft); font-size: 13.5px; }
-  .actlog-state.err { color: #e0577a; }
+  /* empty / error state */
+  #actlogEmpty { min-height: 160px; margin: 16px; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--aa-ink-2); font-size: 13.5px; border: 1px dashed var(--aa-line-strong); border-radius: 14px; }
+  .actlog-state.err { color: var(--aa-danger); }
 
   @media (max-width: 640px) {
-    .actlog-title-card { flex-direction: column; }
+    .actlog-shell { padding: 0 16px 60px; }
+    .actlog-title-card { flex-wrap: wrap; }
     .actlog-filter-card { flex-wrap: wrap; }
-    #actlogSearch { width: 100%; }
+    .actlog-filter-card :is(select, input[type="text"]) { width: 100%; min-width: 0 !important; flex: 1 1 100%; }
   }
 </style>
 </head>
@@ -194,7 +194,7 @@ html[data-theme="light"] {
           <div class="actlog-title-sub">Who did what, when, and from where — 90-day retention</div>
         </div>
       </div>
-      <button type="button" class="icon-btn labeled" id="actlogRefreshBtn" title="Refresh">↻ Refresh</button>
+      <button type="button" id="actlogRefreshBtn" title="Refresh">↻ Refresh</button>
     </div>
 
     <div class="actlog-filter-card">
