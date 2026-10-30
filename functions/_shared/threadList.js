@@ -151,7 +151,9 @@ export function ensureThreadListSchema(store) {
  */
 export function recoverFromMissingListTable(store, err) {
   const msg = String((err && err.message) || err || "");
-  if (!/no such table: thread_list/i.test(msg)) return false;
+  // Also "no such column: ver" — a list table from before the ver column
+  // existed, now that the schema step is skipped for ready databases.
+  if (!/no such table: thread_list|no such column: ver/i.test(msg)) return false;
   schemaPromise.delete(store.country);
   readyMemo.delete(store.country);
   listMemo.delete(store.country);
@@ -198,13 +200,39 @@ export function listDeleteStmts(db, id) {
 const listMemo = new Map(); // country -> { version, rows }
 
 /** True once this country's thread_list is complete and safe to serve. */
+// 2026-10-30 — read the 'ready' marker FIRST, before any schema statement.
+// It used to run ensureThreadListSchema() (CREATE TABLE/INDEX + ALTER TABLE
+// — D1 write statements, serialized per database) on the first request of
+// EVERY fresh isolate. Right after a deploy every isolate is fresh and every
+// open Threads tab polls at once, so these writes queued up behind each
+// other on all three country databases and /api/threads could take very
+// long — the sidebar then sat on "Loading threads…". Once a country's list
+// is marked ready the tables necessarily exist (the marker lives in one of
+// them), so the DDL is only needed while the list is still being built.
+// A missing table/column later on is still handled by
+// recoverFromMissingListTable(), which resets this memo.
+async function readReadyMarker(store) {
+  const row = await store.db.prepare(`SELECT v FROM thread_list_meta WHERE k = 'ready'`).first();
+  return !!(row && row.v === "1");
+}
 export async function isThreadListReady(store) {
   if (!store.db) return false;
   if (readyMemo.has(store.country)) return true;
+  try {
+    if (await readReadyMarker(store)) {
+      readyMemo.add(store.country);
+      return true;
+    }
+  } catch (e) {
+    // "no such table: thread_list_meta" on a brand-new database is expected
+    // — fall through and create the tables. Anything else is logged.
+    if (!/no such table/i.test(String((e && e.message) || e))) {
+      console.error(`[threadList] ready check failed for ${store.country}: ${String((e && e.message) || e)}`);
+    }
+  }
   if (!(await ensureThreadListSchema(store))) return false;
   try {
-    const row = await store.db.prepare(`SELECT v FROM thread_list_meta WHERE k = 'ready'`).first();
-    if (row && row.v === "1") {
+    if (await readReadyMarker(store)) {
       readyMemo.add(store.country);
       return true;
     }
