@@ -41,6 +41,54 @@ html[data-theme="light"] {
     <button type="button" class="attach-lightbox-close" id="attachLightboxClose" title="Close">✕</button>
     <div class="attach-lightbox-body" id="attachLightboxBody"></div>
   </div>
+  <!-- 2026-10-30 — zoomable image viewer for the attachment lightbox
+       (TG Reply Threads only). Scoped to .zv-* / #attachLightboxBody.zv-mode. -->
+  <style id="zoomViewerStyles">
+    #attachLightboxBody.zv-mode { max-width: none; max-height: none; width: 100%; height: 100%; flex-direction: column; gap: 12px; }
+    .zv-stage {
+      position: relative; overflow: hidden; width: min(94vw, 1500px); height: calc(100vh - 150px); height: calc(100dvh - 150px);
+      border-radius: 14px; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none;
+    }
+    .zv-stage.is-panning { cursor: grabbing; }
+    .zv-stage.is-fit { cursor: zoom-in; }
+    .zv-stage img.zv-img {
+      position: absolute; left: 0; top: 0; max-width: none; max-height: none; border-radius: 0;
+      transform-origin: 0 0; will-change: transform; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      -webkit-user-drag: none; user-select: none; pointer-events: none;
+    }
+    .zv-stage.is-ready img.zv-img { transition: transform .12s ease-out; }
+    .zv-stage.is-panning img.zv-img, .zv-stage.no-anim img.zv-img { transition: none; }
+    /* Fixed dark-green bar (same look as the page header bands) — the
+       lightbox backdrop is always dark, so this does not follow the theme. */
+    .zv-bar {
+      display: inline-flex; align-items: center; gap: 4px; padding: 6px; border-radius: 14px;
+      background: linear-gradient(180deg, #11303a 0%, #0f2430 100%);
+      border: 1px solid rgba(45, 212, 191, 0.28);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+    .zv-bar button {
+      height: 34px; min-width: 34px; padding: 0 12px; border-radius: 9px; border: 1px solid transparent;
+      background: transparent; color: #eef4f7; font: 600 13px/1 inherit; cursor: pointer; white-space: nowrap;
+      transition: background .12s, border-color .12s, color .12s;
+    }
+    .zv-bar button.zv-icon {
+      padding: 0; font-size: 18px;
+      background: rgba(45, 212, 191, 0.12); border-color: rgba(45, 212, 191, 0.30); color: #5eead4;
+    }
+    .zv-bar button:hover:not(:disabled) { background: rgba(45, 212, 191, 0.18); border-color: rgba(45, 212, 191, 0.45); color: #ffffff; }
+    .zv-bar button:disabled { opacity: .35; cursor: default; }
+    .zv-bar button:focus-visible { outline: 2px solid #2dd4bf; outline-offset: 1px; }
+    .zv-bar .zv-pct { min-width: 64px; text-align: center; font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace); font-size: 12.5px; font-weight: 700; color: #eef4f7; font-variant-numeric: tabular-nums; }
+    .zv-bar .zv-sep { width: 1px; align-self: stretch; margin: 5px 4px; background: rgba(120, 220, 210, 0.22); }
+    @media (max-width: 640px) {
+      #attachLightbox:has(#attachLightboxBody.zv-mode) { padding: 68px 8px 12px; }
+      #attachLightboxBody.zv-mode { gap: 10px; }
+      .zv-stage { width: 100%; height: calc(100vh - 136px); height: calc(100dvh - 136px); border-radius: 10px; }
+      .zv-bar button { padding: 0 9px; }
+      .zv-bar .zv-pct { min-width: 54px; }
+    }
+  </style>
+
   <header class="topbar">
     <div class="topbar-left">
       <img src="/assets/img/logo.webp" alt="HeyVIP" class="logo-img" />
@@ -230,6 +278,7 @@ html[data-theme="light"] {
     let listInFlight = false;
     let listRetryTimer = null;
     let listRetryDelay = 2000;
+    const LIST_TIMEOUT_MS = 20000;
     let openThreadRefreshInFlight = false;
     let recallEntries = [];
     let selectedId = null;
@@ -1155,8 +1204,24 @@ html[data-theme="light"] {
         const syncKey = params.get("country") || "ALL";
         if (!q && listSync && listSyncKey === syncKey) params.set("since", listSync);
         const qs = params.toString();
-        const res = await authFetch(`/api/threads${qs ? "?" + qs : ""}`, { cache: "no-store" });
-        const data = await res.json().catch(() => null);
+        // 2026-10-30 — 20s timeout. Without it, one request that never
+        // answered (e.g. right after a deploy) kept listInFlight = true
+        // forever: the poller skips while a request is in flight, so the
+        // sidebar sat on "Loading threads…" until a manual refresh. A
+        // timeout now counts as a failed load and goes through the normal
+        // retry path below.
+        const listCtrl = new AbortController();
+        const listTimer = setTimeout(() => listCtrl.abort(), LIST_TIMEOUT_MS);
+        let res, data;
+        try {
+          res = await authFetch(`/api/threads${qs ? "?" + qs : ""}`, { cache: "no-store", signal: listCtrl.signal });
+          data = await res.json().catch(() => null);
+        } catch (err) {
+          if (err && err.name === "AbortError") throw new Error("Timed out loading threads");
+          throw err;
+        } finally {
+          clearTimeout(listTimer);
+        }
         if (seq !== listReqSeq) return; // superseded by a newer request
         if (!data || !data.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
         listState = "ok";
@@ -2478,6 +2543,7 @@ html[data-theme="light"] {
     }
 
     async function viewAttachment(fileId, name, country) {
+      closeZoomViewer();
       attachLightbox.classList.add("is-open");
       attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Loading…</div>`;
       try {
@@ -2485,7 +2551,7 @@ html[data-theme="light"] {
         if (type.startsWith("video/")) {
           attachLightboxBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
         } else if (type.startsWith("image/")) {
-          attachLightboxBody.innerHTML = `<img src="${url}" alt="${escapeAttr(name || "attachment")}" />`;
+          openZoomViewer(url, name);
         } else {
           const img = document.createElement("img");
           img.alt = name || "attachment";
@@ -2498,6 +2564,9 @@ html[data-theme="light"] {
             a.remove();
             attachLightboxBody.innerHTML = `<div class="attach-lightbox-status">Downloaded — this file type can't be previewed here.</div>`;
           }, { once: true });
+          img.addEventListener("load", () => {
+            if (attachLightbox.classList.contains("is-open")) openZoomViewer(url, name);
+          }, { once: true });
           attachLightboxBody.innerHTML = "";
           attachLightboxBody.appendChild(img);
           img.src = url;
@@ -2507,7 +2576,142 @@ html[data-theme="light"] {
       }
     }
 
+    // ---- Zoomable image viewer (2026-10-30) ---------------------------
+    // Mouse wheel zooms around the cursor; the bottom bar has − / % / + /
+    // Fit / 100%; drag to move a zoomed image; two-finger pinch on phones
+    // (zooms around the midpoint between the fingers). Images open at
+    // "Fit" (whole image visible, never upscaled), same as before.
+    let zoomViewer = null;
+    function closeZoomViewer() {
+      if (zoomViewer) { zoomViewer.destroy(); zoomViewer = null; }
+      attachLightboxBody.classList.remove("zv-mode");
+    }
+    function openZoomViewer(url, name) {
+      closeZoomViewer();
+      attachLightboxBody.classList.add("zv-mode");
+      attachLightboxBody.innerHTML = `
+        <div class="zv-stage is-fit" id="zvStage"><img class="zv-img" alt="${escapeAttr(name || "attachment")}" draggable="false" /></div>
+        <div class="zv-bar" role="toolbar" aria-label="Zoom">
+          <button type="button" class="zv-icon" data-zv="out" title="Zoom out" aria-label="Zoom out">−</button>
+          <span class="zv-pct" aria-live="polite">100%</span>
+          <button type="button" class="zv-icon" data-zv="in" title="Zoom in" aria-label="Zoom in">+</button>
+          <span class="zv-sep" aria-hidden="true"></span>
+          <button type="button" data-zv="fit" title="Fit the whole image on screen">Fit</button>
+          <button type="button" data-zv="actual" title="Original size">100%</button>
+        </div>`;
+      const stage = attachLightboxBody.querySelector(".zv-stage");
+      const img = stage.querySelector("img");
+      const pctEl = attachLightboxBody.querySelector(".zv-pct");
+      const btn = (k) => attachLightboxBody.querySelector(`[data-zv="${k}"]`);
+      const MAX_SCALE = 8;
+      let natW = 0, natH = 0, fit = 1, scale = 1, x = 0, y = 0;
+
+      function stageSize() { const r = stage.getBoundingClientRect(); return { w: r.width, h: r.height, left: r.left, top: r.top }; }
+      function minScale() { return Math.min(fit, 1) * 0.5; }
+      function clampPan() {
+        const { w, h } = stageSize();
+        const iw = natW * scale, ih = natH * scale;
+        x = iw <= w ? (w - iw) / 2 : Math.min(0, Math.max(w - iw, x));
+        y = ih <= h ? (h - ih) / 2 : Math.min(0, Math.max(h - ih, y));
+      }
+      function apply() {
+        clampPan();
+        img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        pctEl.textContent = `${Math.round(scale * 100)}%`;
+        btn("out").disabled = scale <= minScale() + 1e-6;
+        btn("in").disabled = scale >= MAX_SCALE - 1e-6;
+        stage.classList.toggle("is-fit", scale <= fit + 1e-6);
+      }
+      // Zoom to `next`, keeping the image point under (px, py) — stage
+      // coordinates — exactly where it was.
+      function zoomAt(next, px, py) {
+        next = Math.min(MAX_SCALE, Math.max(minScale(), next));
+        x = px - (px - x) * (next / scale);
+        y = py - (py - y) * (next / scale);
+        scale = next;
+        apply();
+      }
+      function zoomCenter(next) { const { w, h } = stageSize(); zoomAt(next, w / 2, h / 2); }
+      function fitToStage() {
+        const { w, h } = stageSize();
+        fit = Math.min(w / natW, h / natH, 1);
+        scale = fit; x = (w - natW * scale) / 2; y = (h - natH * scale) / 2;
+        apply();
+      }
+
+      const onWheel = (e) => {
+        e.preventDefault();
+        const { left, top } = stageSize();
+        const step = e.ctrlKey ? 0.01 : 0.0015; // trackpad pinch sends ctrlKey + small deltas
+        const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+        stage.classList.add("no-anim");
+        zoomAt(scale * Math.exp(-dy * step), e.clientX - left, e.clientY - top);
+        clearTimeout(onWheel.t); onWheel.t = setTimeout(() => stage.classList.remove("no-anim"), 120);
+      };
+
+      // Pointer events: one pointer = drag to move, two = pinch zoom.
+      const pts = new Map();
+      let last = null; // { x, y, dist } from the previous move
+      function snapshot() {
+        const [a, b] = [...pts.values()];
+        if (!b) return { x: a.x, y: a.y, dist: 0 };
+        return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+      }
+      const onDown = (e) => {
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        stage.setPointerCapture(e.pointerId);
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        last = snapshot();
+        stage.classList.add("is-panning");
+      };
+      const onMove = (e) => {
+        if (!pts.has(e.pointerId)) return;
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const now = snapshot();
+        const { left, top } = stageSize();
+        if (pts.size >= 2 && last.dist && now.dist) {
+          zoomAt(scale * (now.dist / last.dist), now.x - left, now.y - top);
+        }
+        x += now.x - last.x; y += now.y - last.y;
+        apply();
+        last = now;
+      };
+      const onUp = (e) => {
+        pts.delete(e.pointerId);
+        last = pts.size ? snapshot() : null;
+        if (!pts.size) stage.classList.remove("is-panning");
+      };
+      const onResize = () => { if (natW) { const wasFit = scale <= fit + 1e-6; const { w, h } = stageSize(); fit = Math.min(w / natW, h / natH, 1); if (wasFit) fitToStage(); else apply(); } };
+      const onBar = (e) => {
+        const b = e.target.closest("[data-zv]"); if (!b) return;
+        const k = b.dataset.zv;
+        if (k === "in") zoomCenter(scale * 1.25);
+        else if (k === "out") zoomCenter(scale / 1.25);
+        else if (k === "fit") fitToStage();
+        else if (k === "actual") zoomCenter(1);
+      };
+
+      stage.addEventListener("wheel", onWheel, { passive: false });
+      stage.addEventListener("pointerdown", onDown);
+      stage.addEventListener("pointermove", onMove);
+      stage.addEventListener("pointerup", onUp);
+      stage.addEventListener("pointercancel", onUp);
+      const bar = attachLightboxBody.querySelector(".zv-bar");
+      bar.addEventListener("click", onBar);
+      window.addEventListener("resize", onResize);
+
+      img.addEventListener("load", () => {
+        natW = img.naturalWidth; natH = img.naturalHeight;
+        fitToStage();
+        requestAnimationFrame(() => stage.classList.add("is-ready"));
+      }, { once: true });
+      img.src = url;
+
+      zoomViewer = { destroy() { window.removeEventListener("resize", onResize); } };
+    }
+
     function closeAttachLightbox() {
+      closeZoomViewer();
       attachLightbox.classList.remove("is-open");
       attachLightboxBody.innerHTML = "";
     }
