@@ -227,8 +227,20 @@
     // module's `countries` field mirrors — schemas.js file header has
     // the fuller explanation of why this is a real product difference,
     // not a layout preference).
+    // 2026-11-01 — Owner-gated topics (schemas.js `ownerGated: true`, e.g.
+    // Cyber Complaint): only Owner, or an account whose
+    // ownerGrantedModules lists it, ever sees them — regardless of
+    // allowedModules === "all" or admin rank. Mirrors canSeeModule() in
+    // functions/_shared/accounts.js (the server enforces this too).
+    canSeeGatedModule: function (moduleId) {
+      const a = getAuth();
+      if (!a) return false;
+      if (a.role === "owner") return true;
+      return Array.isArray(a.ownerGrantedModules) && a.ownerGrantedModules.includes(moduleId);
+    },
     filterAllowedModules: function (modules) {
       const a = getAuth();
+      modules = (modules || []).filter(function (m) { return !m.ownerGated || window.AgentAuth.canSeeGatedModule(m.id); });
       const country = window.AgentCountry ? window.AgentCountry.getCountry() : null;
       const isAll = window.AgentCountry && window.AgentCountry.isAll(country);
       const byCountry = isAll

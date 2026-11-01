@@ -189,6 +189,10 @@
     container.appendChild(wrap);
     fieldEls[f.key] = { wrap, control: wrap.querySelector("input,select,textarea"), def: f };
 
+    // defaultValue (2026-11-01) — preselects a value, e.g. Cyber
+    // Complaint's single-option Issue Type, so the rest of the form shows
+    // straight away instead of waiting for the agent to pick the only choice.
+    if (f.defaultValue !== undefined) fieldEls[f.key].control.value = f.defaultValue;
     if (f.defaultToday && f.type === "date") {
       fieldEls[f.key].control.value = new Date().toISOString().slice(0, 10);
     }
@@ -464,8 +468,17 @@
   // ---- Attachments dropzone (click / drag&drop / paste, max N files) ----
   const maxFiles = (module.attachments && module.attachments.max) || 3;
   const maxSizeMB = (module.attachments && module.attachments.maxSizeMB) || 20;
+  // 2026-11-01 — optional per-module total-size cap + video support
+  // (Cyber Complaint). Attachments travel inside one JSON request, so the
+  // total is capped to keep that request well inside Cloudflare's limits.
+  const maxTotalMB = (module.attachments && module.attachments.maxTotalMB) || null;
+  const allowVideo = !!(module.attachments && module.attachments.allowVideo);
+  if (module.attachments && module.attachments.accept) document.getElementById("fileInput").setAttribute("accept", module.attachments.accept);
   document.getElementById("attachLabel").textContent = `Supporting Screenshots (Max ${maxFiles})`;
-  document.getElementById("dzSub").textContent = `JPG, PNG, PDF — Max ${maxFiles} files, ${maxSizeMB}MB each`;
+  document.getElementById("dzSub").textContent = allowVideo
+    ? `JPG, PNG, PDF, MP4/MOV video — Max ${maxFiles} files, ${maxSizeMB}MB each${maxTotalMB ? `, ${maxTotalMB}MB total` : ""}`
+    : `JPG, PNG, PDF — Max ${maxFiles} files, ${maxSizeMB}MB each`;
+  if (allowVideo) document.getElementById("attachLabel").textContent = `Supporting Screenshots / Video (Max ${maxFiles})`;
 
   const dropzone = document.getElementById("dropzone");
   const fileInput = document.getElementById("fileInput");
@@ -475,7 +488,7 @@
   function renderFileList() {
     fileListEl.innerHTML = files
       .map(
-        (f, i) => `<div class="file-chip"><span class="name">${f.name}</span><button type="button" data-i="${i}">&times;</button></div>`
+        (f, i) => `<div class="file-chip"><span class="name">${/^video\//.test(f.type || "") ? "🎬 " : ""}${f.name}${allowVideo ? ` <small style="opacity:.6">${(f.size / 1048576).toFixed(1)}MB</small>` : ""}</span><button type="button" data-i="${i}">&times;</button></div>`
       )
       .join("");
     fileListEl.querySelectorAll("button").forEach((btn) => {
@@ -494,6 +507,8 @@
         rejected.push(f.name);
         continue;
       }
+      if (/^video\//.test(f.type || "") && !allowVideo) { rejected.push(f.name); continue; }
+      if (maxTotalMB && files.reduce((s, x) => s + x.size, 0) + f.size > maxTotalMB * 1024 * 1024) { rejected.push(`${f.name} (over ${maxTotalMB}MB total)`); continue; }
       files.push(f);
     }
     renderFileList();
@@ -599,8 +614,18 @@
       return;
     }
 
+    if (module.id === "cyber_complaint" && fieldEls.disputedAmount && fieldEls.withdrawAmount &&
+        Number(fieldEls.disputedAmount.control.value) > Number(fieldEls.withdrawAmount.control.value)) {
+      status.textContent = "Disputed amount can't be more than the Withdrawal amount.";
+      status.className = "status-msg err";
+      return;
+    }
     btn.disabled = true;
-    btn.textContent = "Submitting…";
+    // BUGFIX (2026-11-01) — was `btn.textContent = "Submitting…"`, which
+    // wiped the button's inner #submitLabel span, so the `finally` below
+    // threw on getElementById("submitLabel") and the button stayed stuck
+    // on "Submitting…" after every submission until a page refresh.
+    document.getElementById("submitLabel").textContent = "Submitting…";
 
     try {
       // Withdraw Issue: final duplicate-TID guard, right before actually
@@ -748,6 +773,7 @@
         window.showToast?.("Submitted successfully.", "ok");
       }
       form.reset();
+      fields.forEach((f) => { if (f.defaultValue !== undefined) fieldEls[f.key].control.value = f.defaultValue; });
       brandSelect.selectedIndex = 0;
       files = [];
       renderFileList();

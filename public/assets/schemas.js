@@ -543,6 +543,34 @@ const MODULES = [
       ],
     },
   },
+  // 2026-11-01 — Cyber Complaint (INR only). Owner-gated: hidden from
+  // every account (admins included) until an Owner — or someone they
+  // delegated access management to — ticks it under Agent Profile →
+  // Topic Access (stored as account.ownerGrantedModules, see
+  // OWNER_GATED_MODULES in functions/_shared/accounts.js). Allows up to
+  // 5 attachments including video, unlike the default 3 images/PDFs.
+  {
+    id: "cyber_complaint",
+    name: "Cyber Complaint",
+    icon: "🚨",
+    accent: "#F97316",
+    formTitle: "Cyber Complaint Report",
+    description: "Cyber cell & disputed withdrawal",
+    reporterLabel: "PIC",
+    countries: ["INR"],
+    ownerGated: true,
+    attachments: { max: 5, accept: "image/png,image/jpeg,image/webp,application/pdf,video/mp4,video/quicktime,video/webm,.mov,.mp4", maxSizeMB: 20, maxTotalMB: 30, allowVideo: true },
+    fields: [
+      { key: "issueType", label: "Issue Type", type: "select", required: true, emphasize: true, defaultValue: "Cyber Complaint", options: ["Cyber Complaint"] },
+      { key: "username", label: "User Name", type: "text", required: true, placeholder: "Player username..." },
+      { key: "tid", label: "TID", type: "text", required: true, placeholder: "Transaction ID..." },
+      { key: "withdrawDate", label: "Date of withdrawal", type: "date", required: true },
+      { key: "withdrawAmount", label: "Withdrawal amount", type: "number", required: true, placeholder: "0.00" },
+      { key: "disputedAmount", label: "Disputed amount", type: "number", required: true, placeholder: "0.00" },
+      { key: "utr", label: "UTR Number", type: "text", required: true, placeholder: "UTR number..." },
+      { key: "remark", label: "Remark", type: "textarea", required: false, placeholder: "Additional remarks..." },
+    ],
+  },
   {
     id: "risk_issue",
     name: "Risk Issue",

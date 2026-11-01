@@ -4033,3 +4033,71 @@ html[data-theme="dark"] {
 .recall-original--deleted .thread-summary-card { border: 1.5px solid rgba(239, 68, 68, .8) !important; border-left: 5px solid #ef4444 !important; background: color-mix(in srgb, #ef4444 14%, var(--aa-surface, #0d1520)) !important; box-shadow: 0 0 0 3px rgba(239, 68, 68, .12); }
 .recall-original--deleted .thread-summary-card hr, .recall-original--deleted .thread-summary-attachments { border-top-color: rgba(239, 68, 68, .35) !important; }
 .conversation-title.recall-deleted-title { color: #ef4444 !important; border-color: rgba(239, 68, 68, .45) !important; background: rgba(239, 68, 68, .1) !important; }
+
+/* ---- Agent Profile — unified access rows (2026-11-01) -----------------
+   Topic Access / Account Management Access / Integration Portal Access:
+   one row per permission + a fixed-width segmented control (Off / View /
+   Edit, or Off / On). Markup from apAccessRow()/apAccessSection() in
+   index.html. Uses the shared --aa-* tokens, so dark + light both work. */
+#agentProfileOverlay {
+  --ap-view: #60a5fa; --ap-view-bg: rgba(96, 165, 250, 0.16);
+  --ap-edit-bg: rgba(45, 212, 191, 0.14);
+  --ap-owner: #f97316; --ap-owner-bg: rgba(249, 115, 22, 0.14);
+  --ap-seg-bg: #0b131c;
+}
+html[data-theme="light"] #agentProfileOverlay {
+  --ap-view: #2563eb; --ap-view-bg: rgba(37, 99, 235, 0.10);
+  --ap-edit-bg: rgba(13, 148, 136, 0.12);
+  --ap-owner: #ea580c; --ap-owner-bg: rgba(234, 88, 12, 0.10);
+  --ap-seg-bg: #eef3f7;
+}
+#agentProfileOverlay .ap-sec { margin-top: 14px; border: 1px solid var(--aa-line); border-radius: 14px; background: var(--aa-surface); overflow: hidden; }
+#agentProfileOverlay .ap-sec-h { width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 16px; margin: 0; background: none; border: 0; color: var(--aa-ink); font: inherit; text-align: left; cursor: pointer; }
+#agentProfileOverlay .ap-sec-h:hover { background: var(--aa-surface-hover); }
+#agentProfileOverlay .ap-sec-icon { font-size: 16px; flex: none; }
+#agentProfileOverlay .ap-sec-ttl { flex: 1; min-width: 0; }
+#agentProfileOverlay .ap-sec-ttl b { display: block; font-size: 12px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+#agentProfileOverlay .ap-sec-ttl span { display: block; font-size: 11.5px; color: var(--aa-ink-3); margin-top: 2px; }
+#agentProfileOverlay .ap-sec-count { font-size: 11.5px; font-weight: 700; color: var(--aa-ink-2); background: var(--aa-surface-2); border: 1px solid var(--aa-line); padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+#agentProfileOverlay .ap-sec-chev { color: var(--aa-ink-3); font-size: 16px; line-height: 1; transition: transform .18s; }
+#agentProfileOverlay .ap-sec.is-open .ap-sec-chev { transform: rotate(90deg); }
+#agentProfileOverlay .ap-sec-b { display: none; border-top: 1px solid var(--aa-line); }
+#agentProfileOverlay .ap-sec.is-open .ap-sec-b { display: block; }
+#agentProfileOverlay .ap-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 9px 16px; background: var(--aa-surface-2); border-bottom: 1px solid var(--aa-line); }
+#agentProfileOverlay .ap-toolbar-lbl { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--aa-ink-3); }
+#agentProfileOverlay .ap-bulk { display: flex; gap: 6px; }
+#agentProfileOverlay .ap-bulk[hidden] { display: none; }
+#agentProfileOverlay .ap-bulk button { font: inherit; font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--aa-line-strong); background: transparent; color: var(--aa-ink-2); cursor: pointer; }
+#agentProfileOverlay .ap-bulk button:hover { color: var(--aa-ink); border-color: var(--aa-accent); }
+#agentProfileOverlay .ap-cols { display: grid; grid-template-columns: 1fr auto; padding: 7px 16px; font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--aa-ink-3); border-bottom: 1px solid var(--aa-line); }
+#agentProfileOverlay .ap-rows.ap-rows { display: block; gap: 0; }
+#agentProfileOverlay .ap-sub { padding: 8px 16px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--aa-ink-3); background: var(--aa-surface-2); border-top: 1px solid var(--aa-line); border-bottom: 1px solid var(--aa-line); }
+#agentProfileOverlay .ap-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--aa-line); }
+#agentProfileOverlay .ap-rows > .ap-row:last-child { border-bottom: 0; }
+#agentProfileOverlay .ap-row:hover { background: var(--aa-surface-hover); }
+#agentProfileOverlay .ap-row.is-changed::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--aa-accent); }
+#agentProfileOverlay .ap-row-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+#agentProfileOverlay .ap-row-em { width: 30px; height: 30px; flex: none; border-radius: 9px; display: grid; place-items: center; background: var(--aa-surface-2); border: 1px solid var(--aa-line); font-size: 15px; }
+#agentProfileOverlay .ap-row-tx { min-width: 0; }
+#agentProfileOverlay .ap-row-tx b { display: block; font-size: 13.5px; font-weight: 600; color: var(--aa-ink); }
+#agentProfileOverlay .ap-row-tx small { display: block; font-size: 11.5px; color: var(--aa-ink-3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#agentProfileOverlay .ap-row-tag { display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: .05em; padding: 1px 6px; border-radius: 5px; margin-left: 4px; vertical-align: 1px; background: var(--ap-owner-bg); color: var(--ap-owner); }
+#agentProfileOverlay .ap-seg { display: flex; width: 192px; padding: 3px; gap: 2px; border-radius: 10px; background: var(--ap-seg-bg); border: 1px solid var(--aa-line); }
+#agentProfileOverlay .ap-seg button { flex: 1 1 0; min-width: 0; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--aa-ink-3); cursor: pointer; transition: background .12s, color .12s; }
+#agentProfileOverlay .ap-seg.two button[data-v="on"] { flex-grow: 2; }
+#agentProfileOverlay .ap-seg button:hover:not(:disabled) { color: var(--aa-ink); }
+#agentProfileOverlay .ap-seg button.sel[data-v="off"] { background: var(--aa-surface-2); color: var(--aa-ink); box-shadow: inset 0 0 0 1px var(--aa-line-strong); }
+#agentProfileOverlay .ap-seg button.sel[data-v="view"] { background: var(--ap-view-bg); color: var(--ap-view); }
+#agentProfileOverlay .ap-seg button.sel[data-v="edit"],
+#agentProfileOverlay .ap-seg button.sel[data-v="on"] { background: var(--ap-edit-bg); color: var(--aa-accent); }
+#agentProfileOverlay .ap-seg.locked { opacity: .55; }
+#agentProfileOverlay .ap-seg.locked button { cursor: not-allowed; }
+#agentProfileOverlay .ap-row-lock { font-size: 11px; color: var(--aa-ink-3); text-align: right; margin-top: 4px; }
+#agentProfileOverlay .ap-changes { margin-right: auto; align-self: center; font-size: 12.5px; color: var(--aa-ink-2); }
+#agentProfileOverlay .ap-changes b { color: var(--aa-accent); }
+@media (max-width: 560px) {
+  #agentProfileOverlay .ap-row { grid-template-columns: 1fr; }
+  #agentProfileOverlay .ap-seg { width: 100%; }
+  #agentProfileOverlay .ap-cols span:last-child { display: none; }
+  #agentProfileOverlay .ap-row-lock { text-align: left; }
+}

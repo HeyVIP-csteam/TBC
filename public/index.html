@@ -35,13 +35,13 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=aec0eeed" />
+<link rel="stylesheet" href="/assets/style.css?v=8a3d30c2" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
-<script src="/assets/authguard.js?v=f4ea6b2b"></script>
+<script src="/assets/authguard.js?v=490145b9"></script>
 <script src="/assets/countries.js?v=78bdc076"></script>
-<script src="/assets/country-modules.js?v=7cb5b511"></script>
+<script src="/assets/country-modules.js?v=a2bd3039"></script>
 <script src="/assets/agent-country.js?v=9d067776"></script>
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/reply-sound.js?v=a889f48f"></script>
@@ -333,7 +333,7 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <script src="/assets/schemas.js?v=c135f22f"></script>
+  <script src="/assets/schemas.js?v=6483a64a"></script>
   <script src="/assets/active-agents-modal.js?v=a4c5d7a2"></script>
   <script src="/assets/spa-shell.js?v=dd82eee8"></script>
   <script>
@@ -2890,7 +2890,11 @@ html[data-theme="light"] {
     //     rank. `canManageAccess` below computes this per-target instead
     //     of the old flat "isSuperAdmin" check, so the UI doesn't offer
     //     edits the server will reject.
-    const AGENT_PROFILE_MODULE_LIST = window.MODULES || [];
+    // Owner-gated topics (e.g. Cyber Complaint) are NOT part of the normal
+    // Topic Access checklist / allowedModules — they get their own
+    // checkbox below, stored in ownerGrantedModules (2026-11-01).
+    const AGENT_PROFILE_MODULE_LIST = (window.MODULES || []).filter((m) => !m.ownerGated);
+    const OWNER_GATED_MODULE_LIST = (window.MODULES || []).filter((m) => m.ownerGated);
 
     function openAgentProfileModal(username) {
       const a = acctAccounts.find((acc) => acc.username === username);
@@ -2976,11 +2980,19 @@ html[data-theme="light"] {
         .filter((b) => selectedCountryCodes.includes(b.country))
         .map((b) => `<div class="brand-toggle-pill${allBrandsSelected || (a.allowedBrands || []).includes(b.name) || (a.allowedBrands || []).includes(b.id) ? " selected" : ""}" data-brand="${acctEsc(b.id)}">${acctEsc(b.name).toUpperCase()} <span class="brand-toggle-country">${acctEsc(b.country)}</span></div>`).join("");
       const allModulesSelected = a.allowedModules === "all" || a.allowedModules === undefined;
-      const moduleChecks = AGENT_PROFILE_MODULE_LIST.map((m) => `
-        <label class="agent-profile-module-check">
-          <input type="checkbox" class="ap-module-checkbox" value="${acctEsc(m.id)}" ${allModulesSelected || (Array.isArray(a.allowedModules) && a.allowedModules.includes(m.id)) ? "checked" : ""} ${canManageAccess ? "" : "disabled"} />
-          ${m.icon || ""} ${acctEsc(m.name)}
-        </label>`).join("");
+      // 2026-11-01 — unified access rows (see apAccessRow()). Each row keeps
+      // its original hidden checkbox, so saveAgentProfileModal() and the
+      // stored data are unchanged.
+      const RANK_LOCK_TEXT = "Requires outranking this account";
+      const moduleChecks = AGENT_PROFILE_MODULE_LIST.map((m) => {
+        const on = allModulesSelected || (Array.isArray(a.allowedModules) && a.allowedModules.includes(m.id));
+        const onlySome = Array.isArray(m.countries) && m.countries.length && m.countries.length < (window.COUNTRY_CODES || []).length;
+        return apAccessRow({
+          icon: m.icon, name: m.name, desc: onlySome ? m.countries.join(" · ") : "", type: "toggle", value: on ? "on" : "off",
+          locked: !canManageAccess, lockText: RANK_LOCK_TEXT,
+          inputs: `<input type="checkbox" class="ap-module-checkbox" value="${acctEsc(m.id)}" ${on ? "checked" : ""} ${canManageAccess ? "" : "disabled"} />`,
+        });
+      }).join("");
       // Announcement (2026-08) — moved out of the Account Management
       // Access checklist into Topic Access, positioned right above
       // Active Agents, per direct business-owner request. Gated the same
@@ -3001,11 +3013,11 @@ html[data-theme="light"] {
       // row in this Topic Access list. saveAgentProfileModal sends the
       // same boolean for both announcementsView and announcementsEdit.
       const announceChecked = accountCanSeeAdminSection(a, "announcements");
-      const announcementCheck = `
-        <label class="agent-profile-module-check">
-          <input type="checkbox" id="ap_announceSee" ${announceChecked ? "checked" : ""} ${canManageAccess ? "" : "disabled"} />
-          📢 Announcement
-        </label>`;
+      const announcementCheck = apAccessRow({
+        icon: "📢", name: "Announcement", desc: "Create & edit announcements", type: "toggle", value: announceChecked ? "on" : "off",
+        locked: !canManageAccess, lockText: RANK_LOCK_TEXT,
+        inputs: `<input type="checkbox" id="ap_announceSee" ${announceChecked ? "checked" : ""} ${canManageAccess ? "" : "disabled"} />`,
+      });
 
       // Active Agents — folded directly into the Topic Access list as
       // just another row (not its own collapsible, not even visually
@@ -3016,11 +3028,23 @@ html[data-theme="light"] {
       // with no .ap-module-checkbox class, so saveAgentProfileModal's
       // module-count query (which now targets that class specifically)
       // skips right over it.
-      const activeAgentsCheck = (authInfo?.role === "owner" && !isSelfProfile) ? `
-        <label class="agent-profile-module-check">
-          <input type="checkbox" id="ap_canViewActiveAgents" ${a.canViewActiveAgents ? "checked" : ""} />
-          👥 Active Agents
-        </label>` : "";
+      // Owner-gated topics (2026-11-01, first one: 🚨 Cyber Complaint) —
+      // off for everyone by default; only the Owner, or a delegate with
+      // canManageAdminAccess who outranks this account, can tick it
+      // (canManageThisAccountsAdminAccess — same rule the server checks).
+      const gatedModuleChecks = canManageThisAccountsAdminAccess ? OWNER_GATED_MODULE_LIST.map((m) => {
+        const on = Array.isArray(a.ownerGrantedModules) && a.ownerGrantedModules.includes(m.id);
+        return apAccessRow({
+          icon: m.icon, name: m.name, tag: "OWNER", ownerFlag: true, type: "toggle", value: on ? "on" : "off",
+          desc: `${(m.countries || []).join(" · ")}${(m.countries || []).length ? " · " : ""}hidden until turned on`,
+          inputs: `<input type="checkbox" class="ap-gated-module-checkbox" value="${acctEsc(m.id)}" ${on ? "checked" : ""} />`,
+        });
+      }).join("") : "";
+
+      const activeAgentsCheck = (authInfo?.role === "owner" && !isSelfProfile) ? apAccessRow({
+        icon: "👥", name: "Active Agents", tag: "OWNER ONLY", ownerFlag: true, desc: "Who is online right now", type: "toggle", value: a.canViewActiveAgents ? "on" : "off",
+        inputs: `<input type="checkbox" id="ap_canViewActiveAgents" ${a.canViewActiveAgents ? "checked" : ""} />`,
+      }) : "";
 
       // Activity Logs (2026-08) — same Owner-only, never-on-own-profile
       // treatment as Active Agents above, and for the same reason:
@@ -3033,11 +3057,10 @@ html[data-theme="light"] {
       // it's an admin-panel permission, not a ticket-topic permission,
       // so it belongs with the other admin-access controls even though
       // its storage mechanism differs from theirs.
-      const activityLogsCheck = (authInfo?.role === "owner" && !isSelfProfile) ? `
-        <label class="agent-profile-module-check">
-          <input type="checkbox" id="ap_canViewActivityLogs" ${a.canViewActivityLogs ? "checked" : ""} />
-          🔎 Activity Logs
-        </label>` : "";
+      const activityLogsCheck = (authInfo?.role === "owner" && !isSelfProfile) ? apAccessRow({
+        icon: "🔎", name: "Activity Logs", tag: "OWNER ONLY", ownerFlag: true, desc: "Login, ticket & account change history", type: "toggle", value: a.canViewActivityLogs ? "on" : "off",
+        inputs: `<input type="checkbox" id="ap_canViewActivityLogs" ${a.canViewActivityLogs ? "checked" : ""} />`,
+      }) : "";
 
       // Integration Portal (2026-08) — same single-checkbox-grants-both
       // treatment as Announcement above (storage: the "integrationPortal"
@@ -3049,11 +3072,11 @@ html[data-theme="light"] {
       // Web Link) are actually visible/editable is the separate
       // "Integration Portal Access" box further down, Owner/delegate-only.
       const integrationPortalChecked = accountCanSeeAdminSection(a, "integrationPortal");
-      const integrationPortalCheck = `
-        <label class="agent-profile-module-check">
-          <input type="checkbox" id="ap_integrationPortalSee" ${integrationPortalChecked ? "checked" : ""} ${canManageAccess ? "" : "disabled"} />
-          🔗 Integration Portal
-        </label>`;
+      const integrationPortalCheck = apAccessRow({
+        icon: "🔗", name: "Integration Portal", desc: "Shows the Integration Portal group in the sidebar", type: "toggle", value: integrationPortalChecked ? "on" : "off",
+        locked: !canManageAccess, lockText: RANK_LOCK_TEXT,
+        inputs: `<input type="checkbox" id="ap_integrationPortalSee" ${integrationPortalChecked ? "checked" : ""} ${canManageAccess ? "" : "disabled"} />`,
+      });
 
       // ---- Account Management Access / Integration Portal Access
       // (2026-07, split 2026-08) — both boxes only rendered for whoever
@@ -3076,19 +3099,20 @@ html[data-theme="light"] {
           // that section's own note where it's defined. Rendered
           // disabled (not hidden) so it still reflects the target's real
           // current state and round-trips correctly on an unrelated save.
-          const forceDisabled = OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(s.id) && authInfo?.role !== "owner";
-          const checkboxHtml = `
-          <label class="agent-profile-module-check${forceDisabled ? " ap-force-disabled" : ""}">
-            <input type="checkbox" class="ap-admin-section-checkbox" value="${acctEsc(s.id)}" ${isChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} />
-            ${s.icon} ${acctEsc(s.name)}${forceDisabled ? ' <span class="ap-owner-only-tag">Owner only</span>' : ""}
-          </label>`;
-          if (!EDITABLE_ADMIN_SECTIONS.includes(s.id)) return checkboxHtml;
+          const isOwnerOnly = OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(s.id);
+          const forceDisabled = isOwnerOnly && authInfo?.role !== "owner";
+          const checkbox = `<input type="checkbox" class="ap-admin-section-checkbox" value="${acctEsc(s.id)}" ${isChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} />`;
+          const common = { icon: s.icon, name: s.name, desc: ADMIN_SECTION_DESC[s.id] || "", tag: isOwnerOnly ? "OWNER ONLY" : "", ownerFlag: isOwnerOnly, locked: forceDisabled, lockText: "Only the Owner can change this" };
+          if (!EDITABLE_ADMIN_SECTIONS.includes(s.id)) {
+            return apAccessRow({ ...common, type: "toggle", value: isChecked ? "on" : "off", inputs: checkbox });
+          }
           const isEditChecked = accountCanEditAdminSection(a, s.id);
-          return checkboxHtml + `
-          <div class="agent-profile-edit-level-row" data-for-section="${acctEsc(s.id)}" style="${isChecked ? "" : "display:none;"}">
-            <label><input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="view" ${isEditChecked ? "" : "checked"} ${forceDisabled ? "disabled" : ""} /> View only</label>
-            <label><input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="edit" ${isEditChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} /> Can Edit</label>
-          </div>`;
+          return apAccessRow({
+            ...common, type: "level", value: !isChecked ? "off" : (isEditChecked ? "edit" : "view"),
+            inputs: checkbox +
+              `<input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="view" ${isEditChecked ? "" : "checked"} ${forceDisabled ? "disabled" : ""} />` +
+              `<input type="radio" name="apEditLevel_${acctEsc(s.id)}" value="edit" ${isEditChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} />`,
+          });
         }).join("");
       }
       const adminSectionChecks = adminSectionChecksHtml(ACCOUNT_MGMT_SECTIONS_LIST);
@@ -3096,6 +3120,12 @@ html[data-theme="light"] {
       // The delegation flag itself — can ONLY be set by an Owner, never
       // by a delegate (no re-delegation chains).
       const showDelegationToggle = authInfo?.role === "owner" && !isSelfProfile;
+      const delegationRow = showDelegationToggle ? apAccessRow({
+        icon: "🔑", name: "Manage access for others", tag: "OWNER ONLY", ownerFlag: true, type: "toggle", value: a.canManageAdminAccess ? "on" : "off",
+        desc: "Can change Account Management / Integration Portal access & Cyber Complaint for lower ranks",
+        inputs: `<input type="checkbox" id="ap_canManageAdminAccess" ${a.canManageAdminAccess ? "checked" : ""} />`,
+      }) : "";
+      const specialRows = activityLogsCheck + delegationRow;
 
       overlay.innerHTML = `
         <div class="edit-details-modal">
@@ -3141,49 +3171,33 @@ html[data-theme="light"] {
               <div class="brand-toggle-grid" id="ap_brandGrid" style="${canManageAccess ? "" : "pointer-events:none; opacity:0.65;"}">${brandPills}</div>
             </div>
 
-            <div class="agent-profile-collapsible" data-section="topicAccess">
-              <button type="button" class="agent-profile-collapsible-header" data-collapse-toggle>
-                <span class="agent-profile-section-label agent-profile-section-label-lg">🔒 Topic Access</span>
-                <span class="agent-profile-chev">→</span>
-              </button>
-              <div class="agent-profile-collapsible-body" style="display:none;">
-                ${!canManageAccess ? '<p class="agent-profile-locked-note" style="margin:-4px 0 8px;">(requires outranking this account)</p>' : ""}
-                <div class="agent-profile-module-list">${moduleChecks}${announcementCheck}${activeAgentsCheck}${integrationPortalCheck}</div>
-              </div>
-            </div>
+            ${apAccessSection({
+              key: "topicAccess", icon: "🔒", title: "Topic Access", hint: "Which ticket topics & tools this account can use",
+              listClass: "agent-profile-module-list",
+              note: !canManageAccess ? "Requires outranking this account" : "",
+              groups: [
+                { rows: moduleChecks + gatedModuleChecks },
+                { label: "Tools", rows: announcementCheck + activeAgentsCheck + integrationPortalCheck },
+              ],
+            })}
 
-            ${canManageThisAccountsAdminAccess ? `
-            <div class="agent-profile-collapsible" data-section="adminAccess">
-              <button type="button" class="agent-profile-collapsible-header" data-collapse-toggle>
-                <span class="agent-profile-section-label agent-profile-section-label-lg">🔒 Account Management Access <span class="agent-profile-section-hint">(which admin sidebar sections this account can see/edit)</span></span>
-                <span class="agent-profile-chev">→</span>
-              </button>
-              <div class="agent-profile-collapsible-body" style="display:none;">
-                <div class="agent-profile-admin-section-list">${adminSectionChecks}</div>
-                ${activityLogsCheck ? `
-                <hr class="agent-profile-divider" />
-                ${activityLogsCheck}` : ""}
-                ${showDelegationToggle ? `
-                <hr class="agent-profile-divider" />
-                <label class="agent-profile-module-check">
-                  <input type="checkbox" id="ap_canManageAdminAccess" ${a.canManageAdminAccess ? "checked" : ""} />
-                  Can manage Account Management Access for other accounts
-                </label>` : ""}
-              </div>
-            </div>
-            <div class="agent-profile-collapsible" data-section="integrationPortalAccess">
-              <button type="button" class="agent-profile-collapsible-header" data-collapse-toggle>
-                <span class="agent-profile-section-label agent-profile-section-label-lg">🔗 Integration Portal Access <span class="agent-profile-section-hint">(TG routes, sheets &amp; external links — view/edit per item)</span></span>
-                <span class="agent-profile-chev">→</span>
-              </button>
-              <div class="agent-profile-collapsible-body" style="display:none;">
-                <div class="agent-profile-admin-section-list">${integrationPortalSectionChecks}</div>
-              </div>
-            </div>` : ""}
+            ${canManageThisAccountsAdminAccess ? apAccessSection({
+              key: "adminAccess", icon: "🛡️", title: "Account Management Access", hint: "Which admin sidebar sections this account can see / edit",
+              listClass: "agent-profile-admin-section-list",
+              groups: [
+                { rows: adminSectionChecks },
+                { label: "Special", rows: specialRows, outsideList: true },
+              ],
+            }) + apAccessSection({
+              key: "integrationPortalAccess", icon: "🔗", title: "Integration Portal Access", hint: "TG routes, sheets & external links — view / edit per item",
+              listClass: "agent-profile-admin-section-list",
+              groups: [{ rows: integrationPortalSectionChecks }],
+            }) : ""}
           </div>
 
           <div class="edit-details-status" id="agentProfileStatus"></div>
           <div class="edit-details-actions">
+            <span class="ap-changes" id="apChanges"></span>
             <button type="button" class="am-btn-secondary" id="agentProfileCancel">Cancel</button>
             <button type="button" class="btn-submit" id="agentProfileSave">Save</button>
           </div>
@@ -3198,6 +3212,7 @@ html[data-theme="light"] {
       // so this only needs to run when that box exists.
       if (canManageThisAccountsAdminAccess) wireAdminSectionEditToggles();
       wireAgentProfileCollapsibles();
+      wireApAccessRows(overlay);
 
       function close() { overlay.remove(); }
       document.getElementById("agentProfileClose").addEventListener("click", close);
@@ -3291,6 +3306,134 @@ html[data-theme="light"] {
           sync();
         });
       }
+    }
+
+    // ---- Unified access rows (2026-11-01) -------------------------------
+    // One row per permission: icon + name (+ tag/description) on the left,
+    // a fixed-width segmented control on the right — "Off / View / Edit"
+    // for sections with a view-vs-edit split, "Off / On" for everything
+    // else. Replaces the old checkbox + separate "View only / Can Edit"
+    // radio row, which landed in different grid cells than its own
+    // checkbox. Each row still carries its ORIGINAL inputs (hidden), and
+    // the control just sets them, so saveAgentProfileModal() and the
+    // stored account data are exactly what they were before.
+    const ADMIN_SECTION_DESC = {
+      createAccount: "Create accounts ranked below their own",
+      whitelistIp: "Office IP whitelist & pending requests",
+      settings: "Announcement rotation, reply sound…",
+      agentProfile: "This page — role, office, brands, access",
+      report: "Issue counts by day / month",
+      tgRoutes: "Where each brand/topic posts in Telegram",
+      issueSubmissionSheet: "Google Sheet & tab each submission writes to",
+      depositSheets: "Deposit Issue / Backup sheet links",
+      bettingLinks: "HeyVIP Betting Rules links",
+      webLink: "Brand pill links on the top bar",
+      promoCodeSheet: "Sheet used by Promo Code Search",
+      botToken: "Telegram bot token & webhook secret",
+    };
+    function apAccessRow({ icon, name, desc, tag, ownerFlag, type, value, locked, lockText, inputs }) {
+      const opts = type === "level" ? [["off", "Off"], ["view", "View"], ["edit", "Edit"]] : [["off", "Off"], ["on", "On"]];
+      const buttons = opts.map(([v, label]) =>
+        `<button type="button" role="radio" data-v="${v}" aria-checked="${value === v}" class="${value === v ? "sel" : ""}" ${locked ? "disabled" : ""}>${label}</button>`).join("");
+      return `
+        <div class="ap-row" data-type="${type}" data-initial="${value}" data-value="${value}"${ownerFlag ? ' data-owner="1"' : ""}${locked ? ' data-locked="1"' : ""}>
+          <div class="ap-row-name">
+            <span class="ap-row-em">${icon || ""}</span>
+            <span class="ap-row-tx"><b>${acctEsc(name)}${tag ? ` <span class="ap-row-tag">${acctEsc(tag)}</span>` : ""}</b>${desc ? `<small>${acctEsc(desc)}</small>` : ""}</span>
+          </div>
+          <div class="ap-row-ctl">
+            <div class="ap-seg${type === "toggle" ? " two" : ""}${locked ? " locked" : ""}" role="radiogroup" aria-label="${acctEsc(name)}">${buttons}</div>
+            ${locked && lockText ? `<div class="ap-row-lock">🔒 ${acctEsc(lockText)}</div>` : ""}
+          </div>
+          <span class="ap-row-inputs" hidden>${inputs || ""}</span>
+        </div>`;
+    }
+    function apAccessSection({ key, icon, title, hint, listClass, note, groups }) {
+      const nonEmpty = groups.filter((g) => g.rows && g.rows.trim());
+      const hasLevel = nonEmpty.some((g) => g.rows.includes('data-type="level"'));
+      const inList = nonEmpty.filter((g) => !g.outsideList).map((g) => `${g.label ? `<div class="ap-sub">${acctEsc(g.label)}</div>` : ""}${g.rows}`).join("");
+      const outside = nonEmpty.filter((g) => g.outsideList).map((g) => `${g.label ? `<div class="ap-sub">${acctEsc(g.label)}</div>` : ""}${g.rows}`).join("");
+      return `
+        <div class="ap-sec" data-section="${key}">
+          <button type="button" class="ap-sec-h" aria-expanded="false">
+            <span class="ap-sec-icon">${icon}</span>
+            <span class="ap-sec-ttl"><b>${acctEsc(title)}</b><span>${acctEsc(hint)}</span></span>
+            <span class="ap-sec-count"></span>
+            <span class="ap-sec-chev">›</span>
+          </button>
+          <div class="ap-sec-b">
+            <div class="ap-toolbar">
+              <span class="ap-toolbar-lbl">${note ? `🔒 ${acctEsc(note)}` : "Quick set"}</span>
+              <div class="ap-bulk">
+                <button type="button" data-ap-bulk="off">All off</button>
+                ${hasLevel ? '<button type="button" data-ap-bulk="view">All view</button>' : ""}
+                <button type="button" data-ap-bulk="${hasLevel ? "edit" : "on"}">${hasLevel ? "All edit" : "All on"}</button>
+              </div>
+            </div>
+            <div class="ap-cols"><span>Permission</span><span>Access</span></div>
+            <div class="${listClass} ap-rows">${inList}</div>
+            ${outside ? `<div class="ap-rows">${outside}</div>` : ""}
+          </div>
+        </div>`;
+    }
+    function apSetRowValue(row, v) {
+      const type = row.dataset.type;
+      if (type === "toggle" && v !== "off") v = "on";
+      if (type === "level" && v === "on") v = "edit";
+      row.dataset.value = v;
+      const cb = row.querySelector('.ap-row-inputs input[type="checkbox"]');
+      if (cb) cb.checked = v !== "off";
+      if (type === "level" && v !== "off") {
+        const radio = row.querySelector(`.ap-row-inputs input[type="radio"][value="${v}"]`);
+        if (radio) radio.checked = true;
+      }
+      row.querySelectorAll(".ap-seg button").forEach((b) => {
+        const on = b.dataset.v === v;
+        b.classList.toggle("sel", on);
+        b.setAttribute("aria-checked", String(on));
+      });
+      row.classList.toggle("is-changed", v !== row.dataset.initial);
+    }
+    function apRefreshCounts(root) {
+      root.querySelectorAll(".ap-sec").forEach((sec) => {
+        const rows = Array.from(sec.querySelectorAll(".ap-row"));
+        const on = rows.filter((r) => r.dataset.value !== "off").length;
+        const countEl = sec.querySelector(".ap-sec-count");
+        if (countEl) countEl.textContent = `${on} / ${rows.length} on`;
+        const allLocked = rows.length && rows.every((r) => r.dataset.locked === "1");
+        sec.querySelector(".ap-bulk")?.toggleAttribute("hidden", !!allLocked);
+      });
+      const changed = root.querySelectorAll(".ap-row.is-changed").length;
+      const el = root.querySelector("#apChanges");
+      if (el) el.innerHTML = changed ? `<b>${changed}</b> unsaved change${changed === 1 ? "" : "s"}` : "";
+    }
+    function wireApAccessRows(root) {
+      root.querySelectorAll(".ap-sec-h").forEach((h) => {
+        h.addEventListener("click", () => {
+          const sec = h.closest(".ap-sec");
+          const open = sec.classList.toggle("is-open");
+          h.setAttribute("aria-expanded", String(open));
+        });
+      });
+      root.querySelectorAll(".ap-row .ap-seg button").forEach((b) => {
+        b.addEventListener("click", () => {
+          const row = b.closest(".ap-row");
+          if (row.dataset.locked === "1") return;
+          apSetRowValue(row, b.dataset.v);
+          apRefreshCounts(root);
+        });
+      });
+      // Quick set never touches locked rows or anything Owner-only/Owner-gated.
+      root.querySelectorAll("[data-ap-bulk]").forEach((b) => {
+        b.addEventListener("click", () => {
+          b.closest(".ap-sec").querySelectorAll(".ap-row").forEach((row) => {
+            if (row.dataset.locked === "1" || row.dataset.owner === "1") return;
+            apSetRowValue(row, b.dataset.apBulk);
+          });
+          apRefreshCounts(root);
+        });
+      });
+      apRefreshCounts(root);
     }
 
     function wireAgentProfileCollapsibles() {
@@ -3413,6 +3556,10 @@ html[data-theme="light"] {
       const delegationToggle = document.getElementById("ap_canManageAdminAccess");
       if (delegationToggle) {
         payload.canManageAdminAccess = delegationToggle.checked;
+      }
+      const gatedModuleBoxes = Array.from(document.querySelectorAll(".agent-profile-module-list input.ap-gated-module-checkbox"));
+      if (gatedModuleBoxes.length) {
+        payload.ownerGrantedModules = gatedModuleBoxes.filter((c) => c.checked).map((c) => c.value);
       }
       const activeAgentsToggle = document.getElementById("ap_canViewActiveAgents");
       if (activeAgentsToggle) {
