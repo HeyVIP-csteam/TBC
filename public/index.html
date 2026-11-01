@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=8a3d30c2" />
+<link rel="stylesheet" href="/assets/style.css?v=6d06b526" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -2988,7 +2988,7 @@ html[data-theme="light"] {
         const on = allModulesSelected || (Array.isArray(a.allowedModules) && a.allowedModules.includes(m.id));
         const onlySome = Array.isArray(m.countries) && m.countries.length && m.countries.length < (window.COUNTRY_CODES || []).length;
         return apAccessRow({
-          icon: m.icon, name: m.name, desc: onlySome ? m.countries.join(" · ") : "", type: "toggle", value: on ? "on" : "off",
+          icon: m.icon, name: m.name, desc: onlySome ? m.countries.join(" · ") : "", type: "toggle", value: on ? "on" : "off", countries: m.countries,
           locked: !canManageAccess, lockText: RANK_LOCK_TEXT,
           inputs: `<input type="checkbox" class="ap-module-checkbox" value="${acctEsc(m.id)}" ${on ? "checked" : ""} ${canManageAccess ? "" : "disabled"} />`,
         });
@@ -3035,14 +3035,16 @@ html[data-theme="light"] {
       const gatedModuleChecks = canManageThisAccountsAdminAccess ? OWNER_GATED_MODULE_LIST.map((m) => {
         const on = Array.isArray(a.ownerGrantedModules) && a.ownerGrantedModules.includes(m.id);
         return apAccessRow({
-          icon: m.icon, name: m.name, tag: "OWNER", ownerFlag: true, type: "toggle", value: on ? "on" : "off",
+          icon: m.icon, name: m.name, type: "toggle", value: on ? "on" : "off", countries: m.countries,
           desc: `${(m.countries || []).join(" · ")}${(m.countries || []).length ? " · " : ""}hidden until turned on`,
           inputs: `<input type="checkbox" class="ap-gated-module-checkbox" value="${acctEsc(m.id)}" ${on ? "checked" : ""} />`,
         });
       }).join("") : "";
 
-      const activeAgentsCheck = (authInfo?.role === "owner" && !isSelfProfile) ? apAccessRow({
-        icon: "👥", name: "Active Agents", tag: "OWNER ONLY", ownerFlag: true, desc: "Who is online right now", type: "toggle", value: a.canViewActiveAgents ? "on" : "off",
+      // 2026-11-01 — Owner or a "Manage access for others" delegate who
+      // outranks this account (was Owner-only; matches the server).
+      const activeAgentsCheck = canManageThisAccountsAdminAccess ? apAccessRow({
+        icon: "👥", name: "Active Agents", desc: "Who is online right now", type: "toggle", value: a.canViewActiveAgents ? "on" : "off",
         inputs: `<input type="checkbox" id="ap_canViewActiveAgents" ${a.canViewActiveAgents ? "checked" : ""} />`,
       }) : "";
 
@@ -3057,8 +3059,8 @@ html[data-theme="light"] {
       // it's an admin-panel permission, not a ticket-topic permission,
       // so it belongs with the other admin-access controls even though
       // its storage mechanism differs from theirs.
-      const activityLogsCheck = (authInfo?.role === "owner" && !isSelfProfile) ? apAccessRow({
-        icon: "🔎", name: "Activity Logs", tag: "OWNER ONLY", ownerFlag: true, desc: "Login, ticket & account change history", type: "toggle", value: a.canViewActivityLogs ? "on" : "off",
+      const activityLogsCheck = canManageThisAccountsAdminAccess ? apAccessRow({
+        icon: "🔎", name: "Activity Logs", desc: "Login, ticket & account change history", type: "toggle", value: a.canViewActivityLogs ? "on" : "off",
         inputs: `<input type="checkbox" id="ap_canViewActivityLogs" ${a.canViewActivityLogs ? "checked" : ""} />`,
       }) : "";
 
@@ -3099,10 +3101,12 @@ html[data-theme="light"] {
           // that section's own note where it's defined. Rendered
           // disabled (not hidden) so it still reflects the target's real
           // current state and round-trips correctly on an unrelated save.
-          const isOwnerOnly = OWNER_ONLY_BY_DEFAULT_SECTIONS.includes(s.id);
-          const forceDisabled = isOwnerOnly && authInfo?.role !== "owner";
+          // 2026-11-01 — Report / Bot Token are no longer locked for
+          // delegates: this whole box only renders for the Owner or a
+          // "Manage access for others" delegate, and both may grant them.
+          const forceDisabled = false;
           const checkbox = `<input type="checkbox" class="ap-admin-section-checkbox" value="${acctEsc(s.id)}" ${isChecked ? "checked" : ""} ${forceDisabled ? "disabled" : ""} />`;
-          const common = { icon: s.icon, name: s.name, desc: ADMIN_SECTION_DESC[s.id] || "", tag: isOwnerOnly ? "OWNER ONLY" : "", ownerFlag: isOwnerOnly, locked: forceDisabled, lockText: "Only the Owner can change this" };
+          const common = { icon: s.icon, name: s.name, desc: ADMIN_SECTION_DESC[s.id] || "", locked: forceDisabled };
           if (!EDITABLE_ADMIN_SECTIONS.includes(s.id)) {
             return apAccessRow({ ...common, type: "toggle", value: isChecked ? "on" : "off", inputs: checkbox });
           }
@@ -3121,8 +3125,8 @@ html[data-theme="light"] {
       // by a delegate (no re-delegation chains).
       const showDelegationToggle = authInfo?.role === "owner" && !isSelfProfile;
       const delegationRow = showDelegationToggle ? apAccessRow({
-        icon: "🔑", name: "Manage access for others", tag: "OWNER ONLY", ownerFlag: true, type: "toggle", value: a.canManageAdminAccess ? "on" : "off",
-        desc: "Can change Account Management / Integration Portal access & Cyber Complaint for lower ranks",
+        icon: "🔑", name: "Manage access for others", ownerFlag: true, type: "toggle", value: a.canManageAdminAccess ? "on" : "off",
+        desc: "Can turn any of these permissions on or off for lower-ranked accounts",
         inputs: `<input type="checkbox" id="ap_canManageAdminAccess" ${a.canManageAdminAccess ? "checked" : ""} />`,
       }) : "";
       const specialRows = activityLogsCheck + delegationRow;
@@ -3254,6 +3258,7 @@ html[data-theme="light"] {
           p.classList.toggle("selected");
           sync();
           renderAgentProfileBrandGrid();
+          apFilterTopicRowsByCountry();
         });
       });
       if (selectAllBtn) {
@@ -3262,6 +3267,7 @@ html[data-theme="light"] {
           pills.forEach((p) => p.classList.toggle("selected", !allSelected));
           sync();
           renderAgentProfileBrandGrid();
+          apFilterTopicRowsByCountry();
         });
       }
     }
@@ -3331,12 +3337,12 @@ html[data-theme="light"] {
       promoCodeSheet: "Sheet used by Promo Code Search",
       botToken: "Telegram bot token & webhook secret",
     };
-    function apAccessRow({ icon, name, desc, tag, ownerFlag, type, value, locked, lockText, inputs }) {
+    function apAccessRow({ icon, name, desc, tag, ownerFlag, type, value, locked, lockText, inputs, countries }) {
       const opts = type === "level" ? [["off", "Off"], ["view", "View"], ["edit", "Edit"]] : [["off", "Off"], ["on", "On"]];
       const buttons = opts.map(([v, label]) =>
         `<button type="button" role="radio" data-v="${v}" aria-checked="${value === v}" class="${value === v ? "sel" : ""}" ${locked ? "disabled" : ""}>${label}</button>`).join("");
       return `
-        <div class="ap-row" data-type="${type}" data-initial="${value}" data-value="${value}"${ownerFlag ? ' data-owner="1"' : ""}${locked ? ' data-locked="1"' : ""}>
+        <div class="ap-row" data-type="${type}" data-initial="${value}" data-value="${value}"${Array.isArray(countries) && countries.length ? ` data-countries="${acctEsc(countries.join(","))}"` : ""}${ownerFlag ? ' data-owner="1"' : ""}${locked ? ' data-locked="1"' : ""}>
           <div class="ap-row-name">
             <span class="ap-row-em">${icon || ""}</span>
             <span class="ap-row-tx"><b>${acctEsc(name)}${tag ? ` <span class="ap-row-tag">${acctEsc(tag)}</span>` : ""}</b>${desc ? `<small>${acctEsc(desc)}</small>` : ""}</span>
@@ -3396,7 +3402,7 @@ html[data-theme="light"] {
     }
     function apRefreshCounts(root) {
       root.querySelectorAll(".ap-sec").forEach((sec) => {
-        const rows = Array.from(sec.querySelectorAll(".ap-row"));
+        const rows = Array.from(sec.querySelectorAll(".ap-row")).filter((r) => !r.hidden);
         const on = rows.filter((r) => r.dataset.value !== "off").length;
         const countEl = sec.querySelector(".ap-sec-count");
         if (countEl) countEl.textContent = `${on} / ${rows.length} on`;
@@ -3406,6 +3412,24 @@ html[data-theme="light"] {
       const changed = root.querySelectorAll(".ap-row.is-changed").length;
       const el = root.querySelector("#apChanges");
       if (el) el.innerHTML = changed ? `<b>${changed}</b> unsaved change${changed === 1 ? "" : "s"}` : "";
+    }
+    // Topic Access only lists topics offered in the account's selected
+    // Currencies (e.g. an INR-only account doesn't see PHP's Deposit
+    // Request / Bank Issue), re-run whenever a Currency pill changes —
+    // same idea as the Brands grid. Rows are HIDDEN, not removed: their
+    // inputs stay in the form, so saving still sends exactly the same
+    // allowedModules value as before (nothing gets dropped or added).
+    // No currency selected = show every topic.
+    function apFilterTopicRowsByCountry() {
+      const root = document.getElementById("agentProfileOverlay");
+      if (!root) return;
+      const pills = Array.from(root.querySelectorAll("#ap_countryGrid .brand-toggle-pill"));
+      const selected = pills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.country);
+      root.querySelectorAll(".ap-sec[data-section=topicAccess] .ap-row[data-countries]").forEach((row) => {
+        const rowCountries = row.dataset.countries.split(",");
+        row.hidden = selected.length > 0 && !rowCountries.some((c) => selected.includes(c));
+      });
+      apRefreshCounts(root);
     }
     function wireApAccessRows(root) {
       root.querySelectorAll(".ap-sec-h").forEach((h) => {
@@ -3423,7 +3447,9 @@ html[data-theme="light"] {
           apRefreshCounts(root);
         });
       });
-      // Quick set never touches locked rows or anything Owner-only/Owner-gated.
+      // Quick set never touches locked rows, or the "Manage access for
+      // others" delegation flag (data-owner) — that one stays a deliberate,
+      // one-at-a-time Owner decision.
       root.querySelectorAll("[data-ap-bulk]").forEach((b) => {
         b.addEventListener("click", () => {
           b.closest(".ap-sec").querySelectorAll(".ap-row").forEach((row) => {
@@ -3433,7 +3459,7 @@ html[data-theme="light"] {
           apRefreshCounts(root);
         });
       });
-      apRefreshCounts(root);
+      apFilterTopicRowsByCountry();
     }
 
     function wireAgentProfileCollapsibles() {
