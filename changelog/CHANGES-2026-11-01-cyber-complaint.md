@@ -116,3 +116,20 @@ radio 会跑到别的项目下面（例如勾 IP Access，选项却出现在 Cre
 新版和旧版送出的数据完全一样。
 
 改动文件：`public/index.html`、`public/assets/style.css`（以及 HTML 的 `?v=` 版本号）。
+
+## 补充 — Topic Access 只显示账号所属国家的 Topic
+
+旧版本来就会把所有国家的 Topic 都列出来（INR 账号也会看到 PHP 的 Deposit Request / Bank Issue），
+新版加上国家小字后更明显。现在只显示该账号已选 Currencies 里有的 Topic，
+切换 Currencies 时即时更新（跟 Brands 一样）；没选任何 Currency 时显示全部。
+不属于这些国家的行只是隐藏，不是删除，所以保存的 allowedModules 跟以前完全一样（已测试比对）。
+
+## 补充 — 去掉 OWNER 标签；被授权的人可以开全部权限
+
+- Agent Profile 不再显示 OWNER / OWNER ONLY 标签。
+- 被 Owner 打开「Manage access for others」的账号，现在可以帮**等级比自己低**的账号开 / 关**所有**权限：
+  Cyber Complaint、Active Agents、Activity Logs、Report、Bot Token Settings 以及其他所有项目。
+  （以前 Active Agents / Activity Logs / Report / Bot Token 只有 Owner 能开。）
+- 「Manage access for others」本身仍然只有 Owner 能给，被授权的人看不到这一行。
+- Quick set 现在会包含这些项目，只有「Manage access for others」不会被一键改动。
+- 后端同步放宽（`functions/api/admin/accounts.js`），没有被授权的 SuperAdmin 仍然会被拒绝（已测试）。
