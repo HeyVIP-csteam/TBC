@@ -653,7 +653,7 @@ function stripSecret(account) {
 // `passwordChangedBy` is only meaningful when `password` is also given —
 // the username of whoever triggered the change (their own, for
 // self-service; the admin's, for an admin-driven reset).
-export async function saveAccount(env, { username, password, passwordChangedBy, role, officeId, allowedBrands, allowedModules, allowedCountries, fullName, pid, allowedAdminSections, adminSectionEditAccess, canManageAdminAccess, canViewActiveAgents, canViewActivityLogs }) {
+export async function saveAccount(env, { username, password, passwordChangedBy, role, officeId, allowedBrands, allowedModules, allowedCountries, fullName, pid, allowedAdminSections, adminSectionEditAccess, canManageAdminAccess, canViewActiveAgents, canViewActivityLogs, ownerGrantedModules }) {
   const key = username.toLowerCase();
   const existing = await getAccount(env, key);
   let salt = existing?.salt;
@@ -744,6 +744,8 @@ export async function saveAccount(env, { username, password, passwordChangedBy, 
     // Owner-only flag, see canViewActivityLogs() above — same
     // patch/merge semantics as canViewActiveAgents just above.
     canViewActivityLogs: canViewActivityLogs !== undefined ? !!canViewActivityLogs : !!existing?.canViewActivityLogs,
+    // 2026-11-01 — see OWNER_GATED_MODULES above canSeeModule().
+    ownerGrantedModules: ownerGrantedModules !== undefined ? normalizeOwnerGrantedModules(ownerGrantedModules) : normalizeOwnerGrantedModules(existing?.ownerGrantedModules),
     lastActiveAt: existing?.lastActiveAt || null,
     lastPasswordChange,
     // Lock state is intentionally NOT a parameter of saveAccount() — it's
@@ -1009,7 +1011,31 @@ export function canSeeBrand(account, brandIdentifier, country) {
 // 一个文件。CRITICAL: 这个不会被 admin/superadmin 等级绕过。
 export { canSeeCountry } from "./countryAccess.js";
 
+// 2026-11-01 — "Owner-gated" topics (first one: cyber_complaint, INR).
+// These are hidden from EVERYONE by default — including admin/superadmin
+// (who normally bypass Topic Access) and accounts whose allowedModules is
+// "all" (which would otherwise pick up every new topic automatically).
+// The only way to see/submit one is role "owner", or the topic id being
+// listed in the account's own `ownerGrantedModules` array, which only
+// Owner (or a canManageOthersAdminAccess delegate who outranks the
+// target) can set — see functions/api/admin/accounts.js. Kept as its own
+// field rather than inside allowedModules so an "all" account stays "all"
+// and the existing Topic Access checklist logic doesn't have to change.
+export const OWNER_GATED_MODULES = ["cyber_complaint"];
+export function isOwnerGatedModule(moduleId) {
+  return OWNER_GATED_MODULES.includes(moduleId);
+}
+export function normalizeOwnerGrantedModules(value) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.filter((m) => OWNER_GATED_MODULES.includes(m))));
+}
+
 export function canSeeModule(account, moduleId) {
+  if (!account) return false;
+  if (isOwnerGatedModule(moduleId)) {
+    if (account.role === "owner") return true;
+    return Array.isArray(account.ownerGrantedModules) && account.ownerGrantedModules.includes(moduleId);
+  }
   if (rankOf(account.role) >= ROLE_RANK.admin) return true; // admin & superadmin see everything
   // `undefined` here (not just "all") covers accounts saved before this
   // field existed — saveAccount() backfills existing accounts to "all"

@@ -41,7 +41,7 @@
  * when a country is specified: only that country's KV/D1 gets queried
  * at all, so there's no "everything" for a client bug to leak through.
  */
-import { verifyRequest, canSeeBrand, canSeeCountry } from "../_shared/accounts.js";
+import { verifyRequest, canSeeBrand, canSeeCountry, canSeeModule, isOwnerGatedModule } from "../_shared/accounts.js";
 import { resolveAllowedCountries } from "../_shared/countryAccess.js";
 import { COUNTRY_CODES, isValidCountry, resolveThreadsStore } from "../_shared/countries.js";
 import { listThreads, listThreadsSync } from "../_shared/threads.js";
@@ -116,8 +116,14 @@ async function handleGet({ request, env }, waitUntil) {
     const [c, v] = part.split(":");
     if (c && v !== undefined && v !== "") sinceMap[c] = v;
   }
+  // Owner-gated topics (e.g. Cyber Complaint, 2026-11-01) are hidden from
+  // the list/search entirely unless this account was granted that topic.
+  // Only gated modules are checked here — every other module keeps its
+  // existing behavior (Topic Access never filtered this list before).
   const visible = (t, country) =>
-    canSeeCountry(account, country) && (canSeeBrand(account, t.brandId, country) || canSeeBrand(account, t.brand, country));
+    canSeeCountry(account, country) &&
+    (!isOwnerGatedModule(t.module) || canSeeModule(account, t.module)) &&
+    (canSeeBrand(account, t.brandId, country) || canSeeBrand(account, t.brand, country));
   const forClient = ({ extraSearchText, deleted, ...t }, country) => ({ ...t, country });
 
   // Query each allowed country's own storage in parallel. A country whose

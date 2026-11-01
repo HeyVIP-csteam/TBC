@@ -18,6 +18,7 @@ import { resolveThreadsStore, resolveScreenshotsBucket } from "../_shared/countr
 // internally below via depositChannelModuleId(). Without this filter, a
 // crafted request with module:"deposit_sgpay" would sail through the
 // VALID_MODULES check and create a nonsense "Deposit — SGPay" ticket.
+const MAX_ATTACHMENTS = { cyber_complaint: 5 };
 const VALID_MODULES = Object.keys(MODULE_META).filter((id) => !DEPOSIT_CHANNEL_PSEUDO_MODULES.includes(id));
 
 // Top-level safety net. Everything below already handles its OWN expected
@@ -99,6 +100,13 @@ async function handleSubmit({ request, env, waitUntil }) {
   }
   if (!reporter || !Array.isArray(fields)) {
     return json({ ok: false, error: "Missing reporter or fields." }, 400);
+  }
+  // 2026-11-01 — per-module attachment cap, enforced server-side too (the
+  // form already limits it). Cyber Complaint allows 5; everything else
+  // keeps the existing 3.
+  const maxAttachments = MAX_ATTACHMENTS[moduleId] || 3;
+  if (Array.isArray(attachments) && attachments.length > maxAttachments) {
+    return json({ ok: false, error: `At most ${maxAttachments} attachments are allowed for ${MODULE_META[moduleId]?.name || moduleId}.` }, 400);
   }
 
   // Duplicate-submission guard — protects against the SAME click ending up
@@ -449,6 +457,17 @@ function looksLikeImage(type, name) {
   return /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test(name || "");
 }
 
+// 2026-11-01 — video attachments (Cyber Complaint allows them). Sent with
+// sendVideo so they play inline in Telegram, and can share an album with
+// photos (sendMediaGroup accepts a photo/video mix).
+function looksLikeVideo(type, name) {
+  if ((type || "").startsWith("video/")) return true;
+  return /\.(mp4|mov|m4v|webm)$/i.test(name || "");
+}
+function isAlbumMedia(a) {
+  return looksLikeImage(a.type, a.name) || looksLikeVideo(a.type, a.name);
+}
+
 async function sendTelegramWithAttachments({ botToken, route, text, attachments }) {
   if (!attachments.length) {
     const r = await sendTelegramMessage({ botToken, route, text });
@@ -479,7 +498,7 @@ async function sendTelegramWithAttachments({ botToken, route, text, attachments 
     return { messageId, messageIds: [messageId], attachmentLinks: [buildMessageLink(route, messageId)], attachmentFileIds: fileId ? [fileId] : [] };
   }
 
-  const allImages = attachments.every((a) => looksLikeImage(a.type, a.name));
+  const allImages = attachments.every(isAlbumMedia); // photos and/or videos — Telegram albums accept both
   if (allImages) {
     const sent = await sendMediaGroup({ botToken, route, text, attachments });
     return {
@@ -522,7 +541,7 @@ function visibleLength(html) {
 // Send attachments with no caption: all-images -> one album, otherwise
 // one message each. Returns [{messageId, fileId}].
 async function sendAttachmentsNoCaption({ botToken, route, attachments }) {
-  if (attachments.length > 1 && attachments.every((a) => looksLikeImage(a.type, a.name))) {
+  if (attachments.length > 1 && attachments.every(isAlbumMedia)) {
     return sendMediaGroup({ botToken, route, text: undefined, attachments });
   }
   const out = [];
@@ -537,6 +556,7 @@ async function sendSingleWithCaption({ botToken, route, text, attachment, forceD
   let bytes = base64ToBytes(dataUrlToBase64(dataUrl));
 
   const isImage = !forceDocument && looksLikeImage(type, name);
+  const isVideo = !forceDocument && !isImage && looksLikeVideo(type, name);
   // Compress BEFORE handing bytes to Telegram, not after Telegram already
   // rejected them — see _shared/telegramImageCompress.js. No-op if the
   // image is already under the target size or not an image at all (this
@@ -550,13 +570,14 @@ async function sendSingleWithCaption({ botToken, route, text, attachment, forceD
   }
   const blob = new Blob([bytes], { type: type || "application/octet-stream" });
 
-  const method = isImage ? "sendPhoto" : "sendDocument";
-  const field = isImage ? "photo" : "document";
+  const method = isImage ? "sendPhoto" : isVideo ? "sendVideo" : "sendDocument";
+  const field = isImage ? "photo" : isVideo ? "video" : "document";
 
   const form = new FormData();
   form.append("chat_id", route.chatId);
   if (route.topicId) form.append("message_thread_id", String(route.topicId));
   form.append(field, blob, name || "attachment");
+  if (isVideo) form.append("supports_streaming", "true");
   if (text) {
     form.append("caption", text);
     form.append("parse_mode", "HTML");
@@ -582,11 +603,18 @@ async function sendSingleWithCaption({ botToken, route, text, attachment, forceD
     if (isImage && !forceDocument && /PHOTO_INVALID_DIMENSIONS/.test(data.description || "")) {
       return sendSingleWithCaption({ botToken, route, text, attachment, forceDocument: true });
     }
+    // A video Telegram can't process as a playable video (unusual codec
+    // etc.) still goes through as a plain file instead of failing.
+    if (isVideo && !forceDocument) {
+      return sendSingleWithCaption({ botToken, route, text, attachment, forceDocument: true });
+    }
     throw new Error(data.description || "unknown Telegram error");
   }
   const fileId = isImage
     ? data.result.photo?.[data.result.photo.length - 1]?.file_id || null
-    : data.result.document?.file_id || null;
+    : isVideo
+      ? data.result.video?.file_id || data.result.document?.file_id || null
+      : data.result.document?.file_id || null;
   return { messageId: data.result.message_id, fileId };
 }
 
@@ -596,7 +624,8 @@ async function sendMediaGroup({ botToken, route, text, attachments }) {
   if (route.topicId) form.append("message_thread_id", String(route.topicId));
 
   const media = attachments.map((att, i) => {
-    const entry = { type: "photo", media: `attach://file${i}` };
+    const entry = { type: looksLikeVideo(att.type, att.name) && !looksLikeImage(att.type, att.name) ? "video" : "photo", media: `attach://file${i}` };
+    if (entry.type === "video") entry.supports_streaming = true;
     if (i === 0 && text) {
       entry.caption = text;
       entry.parse_mode = "HTML";
@@ -613,6 +642,10 @@ async function sendMediaGroup({ botToken, route, text, attachments }) {
   for (let i = 0; i < attachments.length; i++) {
     const att = attachments[i];
     const rawBytes = base64ToBytes(dataUrlToBase64(att.dataUrl));
+    if (media[i].type === "video") {
+      form.append(`file${i}`, new Blob([rawBytes], { type: att.type || "video/mp4" }), att.name || `video${i}.mp4`);
+      continue;
+    }
     const { bytes, type, name } = await compressImageForTelegram(rawBytes, { type: att.type, name: att.name });
     const blob = new Blob([bytes], { type: type || "image/jpeg" });
     form.append(`file${i}`, blob, name || `photo${i}`);
@@ -626,7 +659,7 @@ async function sendMediaGroup({ botToken, route, text, attachments }) {
   }
   return data.result.map((m) => ({
     messageId: m.message_id,
-    fileId: m.photo?.[m.photo.length - 1]?.file_id || null,
+    fileId: m.photo?.[m.photo.length - 1]?.file_id || m.video?.file_id || null,
   }));
 }
 

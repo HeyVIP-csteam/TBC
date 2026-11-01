@@ -80,6 +80,9 @@ export function resolveColumnValues(columns, { fieldMap, brand, reporter, screen
       // field the agent filled in). Used by modules whose form doesn't
       // ask the agent to pick a date at all (e.g. Withdraw Issue).
       if (col === "autoDate") return formatDateDDMMYYYY(new Date().toISOString().slice(0, 10));
+      // "date:<fieldKey>" — a date field the agent picked, written as
+      // DD/MM/YYYY (2026-11-01, Cyber Complaint's "Date of withdrawal").
+      if (col.startsWith("date:")) return formatDateDDMMYYYY(fieldMap[col.slice(5)]) || "-";
       return fieldMap[col] || "-";
     }
     // { details: ["remark", "issueDetails"] } — first non-empty field wins
@@ -283,6 +286,32 @@ export function buildWithdrawIssueDynamicMessage({ brandName, brandCountry, fiel
   return lines.join("\n");
 }
 
+// 2026-11-01 — Cyber Complaint (INR). Exact row order/wording requested
+// by the business owner ("Label : value"), plus a PIC row at the end.
+// Amounts get a ₹ prefix in the message only (the Sheet keeps the plain
+// number so it can still be summed).
+function formatRupees(value) {
+  if (value === undefined || value === null || String(value).trim() === "") return "-";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  return "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+export function buildCyberComplaintMessage({ brandName, brandCountry, fieldMap, reporter }) {
+  const row = (label, value) => `<b>${label} :</b> ${escapeHtml(value === undefined || value === null || value === "" ? "-" : value)}`;
+  return [
+    row("Brand", brandCurrencyLabel(brandName, brandCountry)),
+    row("Issue Type", fieldMap.issueType || "Cyber Complaint"),
+    row("User Name", fieldMap.username),
+    row("TID", fieldMap.tid),
+    row("Date of withdrawal", formatDateDDMMYYYY(fieldMap.withdrawDate)),
+    row("Withdrawal amount", formatRupees(fieldMap.withdrawAmount)),
+    row("Disputed amount", formatRupees(fieldMap.disputedAmount)),
+    row("UTR Number", fieldMap.utr),
+    row("Remark", fieldMap.remark),
+    row("PIC", reporter),
+  ].join("\n");
+}
+
 export function buildMessage({ meta, brandName, reporter, fields, moduleId, fieldMap }) {
   const lines = [
     `${meta.emoji} <b>New ${escapeHtml(meta.name)} — ${escapeHtml(brandName)}</b>`,
@@ -329,6 +358,7 @@ export function buildTicketMessage({ moduleId, brandId, meta, brand, fieldMap, f
   }
   if (moduleId === "risk_issue") return buildRiskIssueDynamicMessage({ brandName: brand.name, brandCountry: brand.country, fields, fieldMap, reporter });
   if (moduleId === "account_issue") return buildAccountIssueDynamicMessage({ brandName: brand.name, brandCountry: brand.country, fields, fieldMap, reporter });
+  if (moduleId === "cyber_complaint") return buildCyberComplaintMessage({ brandName: brand.name, brandCountry: brand.country, fieldMap, reporter });
   if (moduleId === "withdraw_issue") return buildWithdrawIssueDynamicMessage({ brandName: brand.name, brandCountry: brand.country, fields, fieldMap, reporter });
   if (moduleId === "promotion_request" && promotionMessageTemplate[`${brandId}|${fieldMap.promotion}`]) {
     return buildPromotionRequestMessage(promotionMessageTemplate[`${brandId}|${fieldMap.promotion}`], { brandName: brand.name, brandCountry: brand.country, fieldMap, reporter });

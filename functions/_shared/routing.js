@@ -53,6 +53,7 @@ export const BRANDS = {
       daily_report: { chatId: "", topicId: null },
       genie_issue: { chatId: "", topicId: null },
       withdraw_issue: { chatId: "", topicId: null },
+      cyber_complaint: { chatId: "", topicId: null },
     },
   },
   betjili_inr: {
@@ -68,6 +69,7 @@ export const BRANDS = {
       daily_report: { chatId: "", topicId: null },
       genie_issue: { chatId: "", topicId: null },
       withdraw_issue: { chatId: "", topicId: null },
+      cyber_complaint: { chatId: "", topicId: null },
     },
   },
   mostplay_inr: {
@@ -83,6 +85,7 @@ export const BRANDS = {
       daily_report: { chatId: "", topicId: null },
       genie_issue: { chatId: "", topicId: null },
       withdraw_issue: { chatId: "", topicId: null },
+      cyber_complaint: { chatId: "", topicId: null },
     },
   },
   betvisa_inr: {
@@ -98,6 +101,7 @@ export const BRANDS = {
       daily_report: { chatId: "", topicId: null },
       genie_issue: { chatId: "", topicId: null },
       withdraw_issue: { chatId: "", topicId: null },
+      cyber_complaint: { chatId: "", topicId: null },
     },
   },
   jeetway_inr: {
@@ -113,6 +117,7 @@ export const BRANDS = {
       daily_report: { chatId: "", topicId: null },
       genie_issue: { chatId: "", topicId: null },
       withdraw_issue: { chatId: "", topicId: null },
+      cyber_complaint: { chatId: "", topicId: null },
     },
   },
 
@@ -264,6 +269,7 @@ export const RECORD_TO_SHEET = {
   // SHEET_LAYOUT.deposit_request/bank_issue below for the ported entries.
   deposit_request: true,
   bank_issue: true,
+  cyber_complaint: true,
 };
 
 // Emoji + display name per module, used to build the Telegram message header.
@@ -275,6 +281,10 @@ export const MODULE_META = {
   daily_report: { emoji: "📊", name: "Daily Report", accent: "#34D399" },
   genie_issue: { emoji: "🤖", name: "Genie Issue", accent: "#A78BFA" },
   withdraw_issue: { emoji: "💸", name: "Withdraw Issue", accent: "#4ADE80" },
+  // 2026-11-01 — INR only (see countryModules.js), Owner-gated (see
+  // OWNER_GATED_MODULES in accounts.js): hidden from everyone until an
+  // Owner turns it on per account.
+  cyber_complaint: { emoji: "🚨", name: "Cyber Complaint", accent: "#F97316" },
 
   // MERGED (2026-08-20) — PHP-only, ported from PHP's original routing.js
   // (never actually merged in before now — see submit.js's own
@@ -1026,6 +1036,18 @@ export const SHEET_LAYOUT = {
     tab: "Withdraw Issue",
     startColumn: "A",
     columns: ["autoDate", "brand", "username", "issueType", "tid", "submittedAmount", "receivedAmount", "remark", "pic"],
+  },
+  // 2026-11-01 — Cyber Complaint (INR). Matches the "Complaint Cases" tab
+  // header the business owner set up in each INR brand's Record Issue
+  // sheet: Date | Brand | Issue Type | User Name | TID | Date of
+  // withdrawal | Withdrawal amount | Disputed amount | UTR Number |
+  // Remark | PIC. "date:withdrawDate" = that field reformatted to
+  // DD/MM/YYYY (see resolveColumnValues()). Tab/sheet can be overridden
+  // per brand from Integration Portal → Issue Submission Gsheet.
+  cyber_complaint: {
+    tab: "Complaint Cases",
+    startColumn: "A",
+    columns: ["autoDate", "brand", "issueType", "username", "tid", "date:withdrawDate", "withdrawAmount", "disputedAmount", "utr", "remark", "pic"],
   },
 };
 

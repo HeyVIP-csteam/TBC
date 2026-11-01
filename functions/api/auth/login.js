@@ -358,7 +358,7 @@ async function handleLogin({ request, env, waitUntil }) {
     // countries an agent can even operate in. Nothing client-side could
     // build a country switcher or filter brands/modules by country
     // without this — see assets/agent-country.js.
-    account: { username: account.username, role: account.role, allowedBrands: account.allowedBrands, allowedModules: account.allowedModules, allowedCountries: account.allowedCountries, officeId: account.officeId, allowedAdminSections: account.allowedAdminSections, adminSectionEditAccess: account.adminSectionEditAccess, canManageAdminAccess: account.canManageAdminAccess, canViewActiveAgents: account.canViewActiveAgents, canViewActivityLogs: account.canViewActivityLogs },
+    account: { username: account.username, role: account.role, allowedBrands: account.allowedBrands, allowedModules: account.allowedModules, allowedCountries: account.allowedCountries, officeId: account.officeId, allowedAdminSections: account.allowedAdminSections, adminSectionEditAccess: account.adminSectionEditAccess, canManageAdminAccess: account.canManageAdminAccess, canViewActiveAgents: account.canViewActiveAgents, canViewActivityLogs: account.canViewActivityLogs, ownerGrantedModules: account.ownerGrantedModules || [] },
   });
 }
 

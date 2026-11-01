@@ -49,7 +49,7 @@ import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, RECO
 import { appendRowByColumns, writeRowForDate } from "../_shared/googleSheets.js";
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
 import { getThread, createThread, addForwardedToLink } from "../_shared/threads.js";
-import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry } from "../_shared/accounts.js";
+import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry, isOwnerGatedModule } from "../_shared/accounts.js";
 import { buildTicketMessage, buildTitleAndSummary, resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY } from "../_shared/messageBuilders.js";
 import { getRouteOverride } from "../_shared/routes.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
@@ -117,6 +117,11 @@ async function handlePost({ request, env }) {
 
   const sourceThread = await getThread(store, sourceThreadId);
   if (!sourceThread) return json({ ok: false, error: "Source ticket not found." }, 404);
+  // Owner-gated source topic (e.g. Cyber Complaint) — someone without that
+  // grant can't see the ticket, so they can't forward from it either.
+  if (isOwnerGatedModule(sourceThread.module) && !canSeeModule(account, sourceThread.module)) {
+    return json({ ok: false, error: "Source ticket not found." }, 404);
+  }
   if (sourceThread.module === moduleId) {
     return json({ ok: false, error: "This ticket is already in that Topic — nothing to forward." }, 400);
   }

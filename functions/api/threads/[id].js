@@ -53,7 +53,7 @@ import {
   updateRootText, updateThreadDetails, markRootRecalled, editMessageInThread, removeMessageFromThread,
   logDeletion, purgeOrphanIfStray,
 } from "../../_shared/threads.js";
-import { verifyRequest, canSeeBrand, canSeeCountry, requestIP, rankOf, ROLE_RANK } from "../../_shared/accounts.js";
+import { verifyRequest, canSeeBrand, canSeeCountry, canSeeModule, isOwnerGatedModule, requestIP, rankOf, ROLE_RANK } from "../../_shared/accounts.js";
 import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken } from "../../_shared/routing.js";
 import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
 import { updateRowByColumns } from "../../_shared/googleSheets.js";
@@ -125,7 +125,8 @@ export async function onRequestGet({ request, env, params }) {
   // ever running at all, even though `thread.brand` ("Crickex") is
   // perfectly valid and would resolve fine via the country-scoped
   // fallback. Try both independently; either one succeeding is enough.
-  if (thread && (!thread.deleted || includeDeleted) && (canSeeBrand(account, thread.brandId, country) || canSeeBrand(account, thread.brand, country))) {
+  const gatedOk = !thread || !isOwnerGatedModule(thread.module) || canSeeModule(account, thread.module);
+  if (thread && gatedOk && (!thread.deleted || includeDeleted) && (canSeeBrand(account, thread.brandId, country) || canSeeBrand(account, thread.brand, country))) {
     return json({ ok: true, thread: { ...thread, country } }, 200, { "Server-Timing": `auth;dur=${tAuth - tStart}, thread;dur=${Date.now() - tAuth}` });
   }
   // thread === null means genuinely no record anywhere (not just a
@@ -221,7 +222,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
   const existingThread = await getThread(store, id);
   // Same brandId-vs-brand fix as onRequestGet above — a garbage/
   // unresolvable brandId must not veto a perfectly good brand name.
-  if (!existingThread || existingThread.deleted || !(canSeeBrand(account, existingThread.brandId, country) || canSeeBrand(account, existingThread.brand, country))) {
+  if (!existingThread || existingThread.deleted || (isOwnerGatedModule(existingThread.module) && !canSeeModule(account, existingThread.module)) || !(canSeeBrand(account, existingThread.brandId, country) || canSeeBrand(account, existingThread.brand, country))) {
     // Same orphan cleanup as the GET handler above — only fires when
     // existingThread is genuinely null (no record anywhere), never for a
     // thread that's merely soft-deleted or outside this account's brands.

@@ -52,7 +52,7 @@
  *     caller rank >= admin AND (editing themselves OR strictly
  *     outranking the target).
  */
-import { listAccounts, saveAccount, deleteAccount, getAccount, authenticateStaff, anySuperAdminExists, setAccountLocked, ROLE_RANK, rankOf, canSeeAdminSection, canEditAdminSection, canManageOthersAdminAccess, withSectionToggled, effectiveAllowedAdminSections, effectiveAdminSectionEditAccess, ADMIN_SECTIONS, EDITABLE_ADMIN_SECTIONS, OWNER_ONLY_BY_DEFAULT_SECTIONS, requestIP } from "../../_shared/accounts.js";
+import { listAccounts, saveAccount, deleteAccount, getAccount, authenticateStaff, anySuperAdminExists, setAccountLocked, ROLE_RANK, rankOf, canSeeAdminSection, canEditAdminSection, canManageOthersAdminAccess, withSectionToggled, effectiveAllowedAdminSections, effectiveAdminSectionEditAccess, ADMIN_SECTIONS, EDITABLE_ADMIN_SECTIONS, OWNER_ONLY_BY_DEFAULT_SECTIONS, requestIP, normalizeOwnerGrantedModules } from "../../_shared/accounts.js";
 import { logActivity } from "../../_shared/activityLog.js";
 import { resolveAllowedCountries } from "../../_shared/countryAccess.js";
 import { COUNTRY_CODES } from "../../_shared/countries.js";
@@ -164,6 +164,14 @@ async function handlePost({ request, env, waitUntil }) {
   // _shared/accounts.js.
   if (body.action === "save" && body.canViewActivityLogs !== undefined && auth.account?.role !== "owner") {
     return json({ ok: false, error: "Only the account owner can grant or revoke Activity Logs access." }, 403);
+  }
+
+  // ownerGrantedModules (2026-11-01 — Owner-gated topics, e.g. Cyber
+  // Complaint): Owner, or a canManageOthersAdminAccess delegate. The
+  // delegate additionally has to strictly outrank the target — checked
+  // below, once the target is loaded.
+  if (body.action === "save" && body.ownerGrantedModules !== undefined && !canManageOthersAdminAccess(auth.account)) {
+    return json({ ok: false, error: "Only the account owner (or someone they delegated access management to) can turn on Cyber Complaint access." }, 403);
   }
 
   // Bootstrap mode (no real account yet) is treated as superadmin-rank
@@ -324,6 +332,11 @@ async function handlePost({ request, env, waitUntil }) {
       if ((adminSectionsChanging || adminSectionEditAccessChanging) && auth.account?.role !== "owner" && !canManage(actorRank, targetRank)) {
         return json({ ok: false, error: "You can only change Account Management Access for accounts ranked below your own." }, 403);
       }
+      const gatedModulesChanging = body.ownerGrantedModules !== undefined &&
+        JSON.stringify(normalizeOwnerGrantedModules(body.ownerGrantedModules)) !== JSON.stringify(normalizeOwnerGrantedModules(existingTarget.ownerGrantedModules));
+      if (gatedModulesChanging && auth.account?.role !== "owner" && !canManage(actorRank, targetRank)) {
+        return json({ ok: false, error: "You can only change Cyber Complaint access for accounts ranked below your own." }, 403);
+      }
 
       // Announcement view/edit — moved (2026-08) out of the Account
       // Management Access checklist into Topic Access in the UI (see
@@ -446,6 +459,7 @@ async function handlePost({ request, env, waitUntil }) {
         canManageAdminAccess: body.canManageAdminAccess !== undefined ? body.canManageAdminAccess : undefined,
         canViewActiveAgents: body.canViewActiveAgents !== undefined ? body.canViewActiveAgents : undefined,
         canViewActivityLogs: body.canViewActivityLogs !== undefined ? body.canViewActivityLogs : undefined,
+        ownerGrantedModules: body.ownerGrantedModules !== undefined ? body.ownerGrantedModules : undefined,
       });
 
       if (!existingTarget) {
@@ -463,6 +477,12 @@ async function handlePost({ request, env, waitUntil }) {
         if (body.canManageAdminAccess !== undefined && !!body.canManageAdminAccess !== !!existingTarget.canManageAdminAccess) diffs.push(`delegated admin-access management ${body.canManageAdminAccess ? "granted" : "revoked"}`);
         if (body.canViewActiveAgents !== undefined && !!body.canViewActiveAgents !== !!existingTarget.canViewActiveAgents) diffs.push(`Active Agents access ${body.canViewActiveAgents ? "granted" : "revoked"}`);
         if (body.canViewActivityLogs !== undefined && !!body.canViewActivityLogs !== !!existingTarget.canViewActivityLogs) diffs.push(`Activity Logs access ${body.canViewActivityLogs ? "granted" : "revoked"}`);
+        if (body.ownerGrantedModules !== undefined) {
+          const before = normalizeOwnerGrantedModules(existingTarget.ownerGrantedModules);
+          const after = normalizeOwnerGrantedModules(body.ownerGrantedModules);
+          for (const m of after) if (!before.includes(m)) diffs.push(`${m} access granted`);
+          for (const m of before) if (!after.includes(m)) diffs.push(`${m} access revoked`);
+        }
         if (body.fullName !== undefined && body.fullName !== (existingTarget.fullName || "")) diffs.push(`full name changed`);
         if (body.pid !== undefined && body.pid !== (existingTarget.pid || "")) diffs.push(`PID changed`);
         if (diffs.length) {

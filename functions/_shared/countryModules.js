@@ -17,7 +17,7 @@
 
 export const MODULES_BY_COUNTRY = {
   INR: [
-    "qa", "account_issue", "deposit_issue", "deposit_backup", "withdraw_issue",
+    "qa", "account_issue", "deposit_issue", "deposit_backup", "withdraw_issue", "cyber_complaint",
     "risk_issue", "promotion_request", "daily_report", "genie_issue",
   ],
   PKR: [
