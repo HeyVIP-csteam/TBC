@@ -156,14 +156,18 @@ async function handlePost({ request, env, waitUntil }) {
   // path at all (unlike allowedAdminSections above, this one isn't even
   // extended to canManageOthersAdminAccess delegates). See
   // canViewActiveAgents() in _shared/accounts.js for the full reasoning.
-  if (body.action === "save" && body.canViewActiveAgents !== undefined && auth.account?.role !== "owner") {
-    return json({ ok: false, error: "Only the account owner can grant or revoke Active Agents access." }, 403);
+  // 2026-11-01 — opened up to canManageOthersAdminAccess delegates too
+  // (business-owner decision: anyone the Owner trusted with "Manage
+  // access for others" can grant every permission except that flag
+  // itself). Delegates must still outrank the target — checked below.
+  if (body.action === "save" && body.canViewActiveAgents !== undefined && !canManageOthersAdminAccess(auth.account)) {
+    return json({ ok: false, error: "Only the account owner (or someone they delegated access management to) can grant or revoke Active Agents access." }, 403);
   }
   // canViewActivityLogs: same flat, per-account, Owner-only treatment as
   // canViewActiveAgents right above — see canViewActivityLogs() in
   // _shared/accounts.js.
-  if (body.action === "save" && body.canViewActivityLogs !== undefined && auth.account?.role !== "owner") {
-    return json({ ok: false, error: "Only the account owner can grant or revoke Activity Logs access." }, 403);
+  if (body.action === "save" && body.canViewActivityLogs !== undefined && !canManageOthersAdminAccess(auth.account)) {
+    return json({ ok: false, error: "Only the account owner (or someone they delegated access management to) can grant or revoke Activity Logs access." }, 403);
   }
 
   // ownerGrantedModules (2026-11-01 — Owner-gated topics, e.g. Cyber
@@ -211,9 +215,12 @@ async function handlePost({ request, env, waitUntil }) {
       (Array.isArray(body.allowedAdminSections) && body.allowedAdminSections.includes(sectionId) && !(Array.isArray(existingAllowedSections) && existingAllowedSections.includes(sectionId))) ||
       (Array.isArray(body.adminSectionEditAccess) && body.adminSectionEditAccess.includes(sectionId) && !(Array.isArray(existingEditSections) && existingEditSections.includes(sectionId)))
     );
-    if (newlyGrantedOwnerOnlySection && auth.account?.role !== "owner") {
+    // 2026-11-01 — delegates (canManageOthersAdminAccess) may now grant
+    // these too; the general allowedAdminSections gate above already
+    // requires that, plus outranking the target (checked further down).
+    if (newlyGrantedOwnerOnlySection && !canManageOthersAdminAccess(auth.account)) {
       const label = newlyGrantedOwnerOnlySection === "botToken" ? "Bot Token Settings" : newlyGrantedOwnerOnlySection === "report" ? "Report" : newlyGrantedOwnerOnlySection;
-      return json({ ok: false, error: `Only the account owner can grant ${label} access.` }, 403);
+      return json({ ok: false, error: `Only the account owner (or someone they delegated access management to) can grant ${label} access.` }, 403);
     }
 
     // CANNOT GRANT MORE COUNTRY/BRAND ACCESS THAN YOU YOURSELF HAVE
@@ -336,6 +343,12 @@ async function handlePost({ request, env, waitUntil }) {
         JSON.stringify(normalizeOwnerGrantedModules(body.ownerGrantedModules)) !== JSON.stringify(normalizeOwnerGrantedModules(existingTarget.ownerGrantedModules));
       if (gatedModulesChanging && auth.account?.role !== "owner" && !canManage(actorRank, targetRank)) {
         return json({ ok: false, error: "You can only change Cyber Complaint access for accounts ranked below your own." }, 403);
+      }
+      const flagsChanging =
+        (body.canViewActiveAgents !== undefined && !!body.canViewActiveAgents !== !!existingTarget.canViewActiveAgents) ||
+        (body.canViewActivityLogs !== undefined && !!body.canViewActivityLogs !== !!existingTarget.canViewActivityLogs);
+      if (flagsChanging && auth.account?.role !== "owner" && !canManage(actorRank, targetRank)) {
+        return json({ ok: false, error: "You can only change Active Agents / Activity Logs access for accounts ranked below your own." }, 403);
       }
 
       // Announcement view/edit — moved (2026-08) out of the Account
