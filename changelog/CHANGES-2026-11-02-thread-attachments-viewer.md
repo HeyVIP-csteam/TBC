@@ -33,3 +33,12 @@ No backend / data changes.
   stay readable on any page.
 - Applies everywhere the viewer is used (TG Reply Threads, Issue Submission
   forms, Forward modal). Files: assets/attach-viewer.js, assets/style.css.
+
+## Fix (v3) — photos no longer blurry
+- Cause: the viewer stretched every photo to fill the window, so a small
+  screenshot (e.g. 600px wide) was blown up 2–3× and looked blurry; zoom used
+  CSS scale() on the already-drawn picture, which blurred it further.
+- Now: a photo opens at most at its real pixel size (big photos still shrink
+  to fit the window); zoom re-lays-out the image at the larger size so the
+  browser re-samples the original file. Videos still fill the window.
+- Files: assets/attach-viewer.js, assets/style.css.
