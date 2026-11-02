@@ -4321,7 +4321,7 @@ html.att-lb-lock { overflow: hidden; }
 .att-lb-stage { flex: 1; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 4px 16px; }
 @media (max-width: 600px) { .att-lb-nav { display: none; } .att-lb-stage { padding: 4px 8px; } }
 .att-lb-stage img, .att-lb-stage video { display: block; flex: none; border-radius: 10px; box-shadow: 0 24px 70px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.08); background: transparent; }
-.att-lb-stage img { transition: transform .2s; cursor: zoom-in; user-select: none; -webkit-user-drag: none; }
+.att-lb-stage img { transition: width .18s ease, height .18s ease; cursor: zoom-in; user-select: none; -webkit-user-drag: none; }
 .att-lb-stage img.zoomed { cursor: grab; transition: none; border-radius: 0; box-shadow: none; }
 .att-lb-stage iframe { width: min(980px, 100%); height: 100%; border: 0; border-radius: 10px; background: #fff; box-shadow: 0 24px 70px rgba(0,0,0,.55); }
 .att-lb-file { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 26px 34px; border-radius: 14px; background: rgba(8, 12, 24, .88); color: #cbd5e1; font-size: 13px; box-shadow: 0 24px 70px rgba(0,0,0,.55); }

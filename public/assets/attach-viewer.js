@@ -168,14 +168,24 @@
     const cs = getComputedStyle(stage);
     const aw = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const ah = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    const r = Math.min(aw / nw, ah / nh);
-    el.style.width = Math.floor(nw * r) + "px";
-    el.style.height = Math.floor(nh * r) + "px";
+    // Photos are never stretched past their real pixel size (that is what
+    // made small screenshots look blurry); videos still fill the window.
+    const r = Math.min(aw / nw, ah / nh, el.tagName === "IMG" ? 1 : Infinity);
+    el.dataset.bw = Math.floor(nw * r);
+    el.dataset.bh = Math.floor(nh * r);
+    el.style.width = el.dataset.bw + "px";
+    el.style.height = el.dataset.bh + "px";
+    if (el.tagName === "IMG") applyZoom();
   }
   function applyZoom() {
     const img = lb.querySelector(".att-lb-stage img");
     if (!img) return;
-    img.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+    // Zoom by re-laying-out the image at the bigger size (the browser
+    // re-samples the original file, so it stays sharp) instead of a CSS
+    // scale() of the already-drawn picture, which looked blurry.
+    const bw = Number(img.dataset.bw), bh = Number(img.dataset.bh);
+    if (bw && bh) { img.style.width = Math.round(bw * zoom) + "px"; img.style.height = Math.round(bh * zoom) + "px"; }
+    img.style.transform = `translate(${pan.x}px, ${pan.y}px)`;
     img.classList.toggle("zoomed", zoom > 1);
     lb.classList.toggle("att-lb-dark", zoom > 1);
     lb.querySelector('[data-lb="zoom"]').classList.toggle("on", zoom > 1);
