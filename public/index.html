@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=6d06b526" />
+<link rel="stylesheet" href="/assets/style.css?v=36ddba93" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -4431,44 +4431,203 @@ html[data-theme="light"] {
       const res = await window.AgentAuth.authFetch("/api/admin/offices");
       const data = await res.json();
       ipaFullOffices = data.ok ? data.offices : [];
-      ipaOfficesEditId = "";
+      ipaOfficesEditId = ipaFullOffices[0] ? ipaFullOffices[0].id : "";
+      ipaMergeFrom = null; ipaOfficeDraft = null; ipaDeleteBlocked = null;
       ipaRenderOfficesPopover();
       toggleIpaPopover("ipaOfficesPopover", true);
       toggleIpaPopover("ipaRecordPopover", false);
     }
 
+    // ---- Manage offices (redesigned 2026-11-01) -------------------------
+    // Office list (IP + account counts, DUPLICATE badge), editor with the
+    // accounts that log in from the office, "Merge into another office"
+    // (moves IPs, accounts and pending requests, then removes the old
+    // office), delete protection and a duplicate-name guard. The server
+    // enforces the same rules (functions/api/admin/offices.js).
+    let ipaMergeFrom = null;
+    let ipaMergeInto = null;
+    let ipaDeleteBlocked = null; // usernames that blocked the last delete attempt
+    let ipaOfficeDraft = null;   // { name, ips } while editing, so re-renders keep typed text
+    const ipaNormName = (n) => String(n || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+    const ipaOfficeById = (id) => ipaFullOffices.find((o) => o.id === id);
+    const ipaAccountsOf = (o) => (o && Array.isArray(o.accounts) ? o.accounts : []);
+    const ipaIsDupOffice = (o) => ipaFullOffices.some((x) => x.id !== o.id && ipaNormName(x.name) === ipaNormName(o.name));
+    const ipaPlural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
     function ipaRenderOfficesPopover() {
       const pop = document.getElementById("ipaOfficesPopover");
       const canEdit = ipaCanEdit();
-      const editing = ipaFullOffices.find((o) => o.id === ipaOfficesEditId);
-      const officeOptions = ipaFullOffices.map((o) => `<option value="${o.id}"${o.id === ipaOfficesEditId ? " selected" : ""}>${acctEsc(o.name)}</option>`).join("");
+      pop.classList.add("ipo-wide");
+      const groups = {};
+      ipaFullOffices.forEach((o) => { (groups[ipaNormName(o.name)] = groups[ipaNormName(o.name)] || []).push(o); });
+      const dupGroups = Object.values(groups).filter((g) => g.length > 1);
+      const banner = dupGroups.map((g) => {
+        const keep = g.slice().sort((a, b) => ipaAccountsOf(b).length - ipaAccountsOf(a).length)[0];
+        const other = g.find((o) => o.id !== keep.id);
+        return `<div class="ipo-dup">⚠️<div><b>${g.length} offices are named "${acctEsc(g[0].name)}".</b><br>Merge them so every account and IP lives in one office.</div>${canEdit ? `<button type="button" class="ipo-btn warn" data-ipo-quickmerge="${acctEsc(other.id)}|${acctEsc(keep.id)}">Merge now</button>` : ""}</div>`;
+      }).join("");
+      const list = ipaFullOffices.map((o) => `
+        <button type="button" class="ipo-item${o.id === ipaOfficesEditId ? " sel" : ""}" data-ipo-sel="${acctEsc(o.id)}">
+          <span class="ipo-item-nm"><b>${acctEsc(o.name)}</b><small>${ipaPlural((o.allowedIPs || []).length, "IP")} · ${ipaPlural(ipaAccountsOf(o).length, "account")}</small></span>
+          ${ipaIsDupOffice(o) ? '<span class="ipo-dupdot">DUPLICATE</span>' : ""}
+        </button>`).join("");
       pop.innerHTML = `
         <div class="ipa-popover-header">
           <p class="ipa-popover-title">Manage offices</p>
           <button type="button" class="modal-close-btn" id="ipaOfficesClose" title="Close" aria-label="Close">✕</button>
         </div>
-        <div class="field"><label>OFFICE</label>
-          <select id="ipaOfficePicker" ${canEdit ? "" : "disabled"}>
-            <option value="">+ New Office</option>${officeOptions}
-          </select>
-        </div>
-        <div class="field"><label>OFFICE NAME</label><input type="text" id="ipaOfficeName" value="${editing ? acctEsc(editing.name) : ""}" autocomplete="off" ${canEdit ? "" : "disabled"} /></div>
-        <div class="field"><label>ALLOWED IPS (ONE PER LINE)</label><textarea id="ipaOfficeIps" rows="5" placeholder="203.0.113.10" autocomplete="off" ${canEdit ? "" : "disabled"}>${editing ? (editing.allowedIPs || []).join("\n") : ""}</textarea></div>
-        ${canEdit ? `<div class="ipa-popover-actions">
-          ${editing ? `<button type="button" class="btn-secondary" id="ipaOfficeDelete">Delete office</button>` : ""}
-          <button type="button" class="btn-submit" id="ipaOfficeSave">Save office</button>
-        </div>` : `<p class="edit-modal-note">View only.</p>`}
-        <p class="edit-modal-note" id="ipaOfficeNote"></p>
-      `;
+        ${banner}
+        <div class="ipo-grid">
+          <div class="ipo-list">
+            <div class="ipo-list-h"><span>Offices</span>${canEdit ? '<button type="button" id="ipoNew">+ New office</button>' : ""}</div>
+            ${list || '<div class="ipo-empty">No offices yet.</div>'}
+          </div>
+          <div>
+            <div class="ipo-card" id="ipoEditor"></div>
+            <div id="ipoMerge"></div>
+          </div>
+        </div>`;
       document.getElementById("ipaOfficesClose").addEventListener("click", () => toggleIpaPopover("ipaOfficesPopover", false));
-      document.getElementById("ipaOfficePicker").addEventListener("change", (e) => {
-        ipaOfficesEditId = e.target.value;
+      pop.querySelectorAll("[data-ipo-sel]").forEach((b) => b.addEventListener("click", () => {
+        ipaOfficesEditId = b.dataset.ipoSel; ipaOfficeDraft = null; ipaDeleteBlocked = null; ipaMergeFrom = null;
+        ipaRenderOfficesPopover();
+      }));
+      pop.querySelectorAll("[data-ipo-quickmerge]").forEach((b) => b.addEventListener("click", () => {
+        const [from, into] = b.dataset.ipoQuickmerge.split("|");
+        ipaOfficesEditId = from; ipaMergeFrom = from; ipaMergeInto = into; ipaOfficeDraft = null; ipaDeleteBlocked = null;
+        ipaRenderOfficesPopover();
+        document.getElementById("ipoMerge")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }));
+      document.getElementById("ipoNew")?.addEventListener("click", () => {
+        ipaOfficesEditId = ""; ipaOfficeDraft = null; ipaDeleteBlocked = null; ipaMergeFrom = null;
         ipaRenderOfficesPopover();
       });
+      ipaRenderOfficeEditor();
+      ipaRenderMergePanel();
+    }
+
+    function ipaRenderOfficeEditor() {
+      const box = document.getElementById("ipoEditor");
+      if (!box) return;
+      const canEdit = ipaCanEdit();
+      const o = ipaOfficeById(ipaOfficesEditId);
+      const name = ipaOfficeDraft ? ipaOfficeDraft.name : (o ? o.name : "");
+      const ips = ipaOfficeDraft ? ipaOfficeDraft.ips : (o ? (o.allowedIPs || []).join("\n") : "");
+      const nameChanged = !o || ipaNormName(name) !== ipaNormName(o.name);
+      const clash = nameChanged && name.trim() ? ipaFullOffices.find((x) => (!o || x.id !== o.id) && ipaNormName(x.name) === ipaNormName(name)) : null;
+      const accts = ipaAccountsOf(o);
+      box.innerHTML = `
+        <div class="ipo-card-h"><b>${o ? "Edit office" : "New office"}</b><span class="ipo-chip">${o ? ipaPlural(accts.length, "account") + " assigned" : "not saved yet"}</span></div>
+        <div class="ipo-card-b">
+          <div class="field"><label>OFFICE NAME</label>
+            <input type="text" id="ipaOfficeName" value="${acctEsc(name)}" autocomplete="off" ${canEdit ? "" : "disabled"} />
+            ${clash ? `<p class="ipo-hint warn">⚠️ "${acctEsc(clash.name)}" already exists — use a different name, or merge into it instead.</p>` : ""}
+          </div>
+          <div class="field"><label>ALLOWED IPS (ONE PER LINE)</label><textarea id="ipaOfficeIps" rows="5" placeholder="203.0.113.10" autocomplete="off" ${canEdit ? "" : "disabled"}>${acctEsc(ips)}</textarea></div>
+          ${o ? `<div class="field"><label>ACCOUNTS THAT LOG IN FROM HERE</label>${accts.length ? `<div class="ipo-chips">${accts.map((u) => `<span class="ipo-chip">${acctEsc(u)}</span>`).join("")}</div>` : '<p class="ipo-hint">None</p>'}</div>` : ""}
+          ${canEdit ? `<div class="ipa-popover-actions ipo-actions">
+            ${o && ipaFullOffices.length > 1 ? '<button type="button" class="ipo-btn warn" id="ipoStartMerge">⇄ Merge into another office…</button>' : ""}
+            ${o ? '<button type="button" class="ipo-btn danger" id="ipaOfficeDelete">Delete</button>' : ""}
+            <button type="button" class="btn-submit" id="ipaOfficeSave" ${clash ? "disabled" : ""}>Save office</button>
+          </div>` : `<p class="edit-modal-note">View only.</p>`}
+          ${ipaDeleteBlocked && o ? `<div class="ipo-block"><b>Can't delete "${acctEsc(o.name)}" — ${ipaPlural(ipaDeleteBlocked.length, "account")} still ${ipaDeleteBlocked.length === 1 ? "logs" : "log"} in from it:</b> ${ipaDeleteBlocked.map(acctEsc).join(", ")}.<br>Deleting it would lock them out. Use <b>Merge into another office</b> instead — it moves the accounts and IPs for you.</div>` : ""}
+          <p class="edit-modal-note" id="ipaOfficeNote"></p>
+        </div>`;
+      const nameEl = document.getElementById("ipaOfficeName");
+      const ipsEl = document.getElementById("ipaOfficeIps");
+      const syncDraft = () => { ipaOfficeDraft = { name: nameEl.value, ips: ipsEl.value }; };
+      nameEl.addEventListener("input", () => {
+        syncDraft();
+        const pos = nameEl.selectionStart;
+        ipaRenderOfficeEditor();
+        const again = document.getElementById("ipaOfficeName");
+        again.focus(); again.setSelectionRange(pos, pos);
+      });
+      ipsEl.addEventListener("input", syncDraft);
       if (canEdit) {
         document.getElementById("ipaOfficeSave").addEventListener("click", ipaSaveOffice);
         document.getElementById("ipaOfficeDelete")?.addEventListener("click", ipaDeleteOffice);
+        document.getElementById("ipoStartMerge")?.addEventListener("click", () => {
+          const sameName = ipaFullOffices.find((x) => x.id !== o.id && ipaNormName(x.name) === ipaNormName(o.name));
+          ipaMergeFrom = o.id;
+          ipaMergeInto = (sameName || ipaFullOffices.find((x) => x.id !== o.id)).id;
+          ipaDeleteBlocked = null;
+          ipaRenderOfficeEditor();
+          ipaRenderMergePanel();
+          document.getElementById("ipoMerge")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
       }
+    }
+
+    function ipaRenderMergePanel() {
+      const box = document.getElementById("ipoMerge");
+      if (!box) return;
+      const A = ipaOfficeById(ipaMergeFrom);
+      const B = ipaOfficeById(ipaMergeInto);
+      if (!A || !B || !ipaCanEdit()) { box.innerHTML = ""; return; }
+      const label = (o) => o.name + (ipaIsDupOffice(o) ? ` · ${ipaPlural((o.allowedIPs || []).length, "IP")} · ${ipaPlural(ipaAccountsOf(o).length, "account")}` : "");
+      const options = ipaFullOffices.filter((o) => o.id !== A.id).map((o) => `<option value="${acctEsc(o.id)}"${o.id === B.id ? " selected" : ""}>${acctEsc(label(o))}</option>`).join("");
+      const aIps = A.allowedIPs || [], bIps = B.allowedIPs || [];
+      const newIps = aIps.filter((ip) => !bIps.includes(ip));
+      const dupIps = aIps.filter((ip) => bIps.includes(ip));
+      const pending = ((ipaData && ipaData.pending) || []).filter((p) => p.officeId === A.id);
+      const moving = ipaAccountsOf(A);
+      box.innerHTML = `
+        <div class="ipo-merge">
+          <div class="ipo-merge-h">⇄ Merge office</div>
+          <div class="ipo-flow">
+            <div class="ipo-box"><small>Merge (will be removed)</small><b>${acctEsc(A.name)}</b><span class="ipo-hint">${ipaPlural(aIps.length, "IP")} · ${ipaPlural(moving.length, "account")}</span></div>
+            <div class="ipo-arrow">→</div>
+            <div class="ipo-box"><small>Into (kept)</small><select id="ipoMergeInto">${options}</select></div>
+          </div>
+          <div class="ipo-sum">
+            <div class="ipo-sum-row"><span>IPs after merge</span><div>
+              <div class="ipo-chips">${bIps.map((ip) => `<span class="ipo-chip">${acctEsc(ip)}</span>`).join("")}${newIps.map((ip) => `<span class="ipo-chip move">+ ${acctEsc(ip)}</span>`).join("")}${dupIps.map((ip) => `<span class="ipo-chip dup">${acctEsc(ip)}</span>`).join("")}</div>
+              <p class="ipo-hint">Green = added from "${acctEsc(A.name)}" · crossed out = already in both, kept once</p></div></div>
+            <div class="ipo-sum-row"><span>Accounts moving</span><div>${moving.length ? `<div class="ipo-chips">${moving.map((u) => `<span class="ipo-chip move">${acctEsc(u)}</span>`).join("")}</div><p class="ipo-hint">They'll log in under "${acctEsc(B.name)}" — no one gets locked out or logged out</p>` : '<p class="ipo-hint">None</p>'}</div></div>
+            <div class="ipo-sum-row"><span>Pending IP requests</span><div>${pending.length ? `<div class="ipo-chips">${pending.map((p) => `<span class="ipo-chip move">${acctEsc(p.ip)}</span>`).join("")}</div><p class="ipo-hint">Moved to "${acctEsc(B.name)}" so they can still be approved</p>` : '<p class="ipo-hint">None</p>'}</div></div>
+          </div>
+          <div class="ipo-confirm">
+            <label><input type="checkbox" id="ipoMergeOk" /> I understand "${acctEsc(A.name)}" will be removed after merging</label>
+            <button type="button" class="ipo-btn" id="ipoMergeCancel">Cancel</button>
+            <button type="button" class="btn-submit" id="ipoMergeGo" disabled>Merge ${ipaPlural(moving.length, "account")} &amp; ${ipaPlural(newIps.length, "IP")}</button>
+          </div>
+          <p class="edit-modal-note" id="ipoMergeNote"></p>
+        </div>`;
+      document.getElementById("ipoMergeInto").addEventListener("change", (e) => { ipaMergeInto = e.target.value; ipaRenderMergePanel(); });
+      document.getElementById("ipoMergeOk").addEventListener("change", (e) => { document.getElementById("ipoMergeGo").disabled = !e.target.checked; });
+      document.getElementById("ipoMergeCancel").addEventListener("click", () => { ipaMergeFrom = null; ipaRenderMergePanel(); });
+      document.getElementById("ipoMergeGo").addEventListener("click", ipaRunMerge);
+    }
+
+    async function ipaRunMerge() {
+      const note = document.getElementById("ipoMergeNote");
+      const go = document.getElementById("ipoMergeGo");
+      go.disabled = true;
+      if (note) { note.textContent = "Merging…"; note.className = "edit-modal-note"; }
+      const res = await window.AgentAuth.authFetch("/api/admin/offices", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "merge", fromId: ipaMergeFrom, intoId: ipaMergeInto }),
+      });
+      const data = await res.json().catch(() => ({ ok: false, error: "Merge failed." }));
+      if (!data.ok) {
+        if (note) { note.textContent = data.error || "Merge failed."; note.className = "edit-modal-note err"; }
+        go.disabled = false;
+        return;
+      }
+      const intoName = data.office.name;
+      await ipaRefreshOfficesList();
+      ipaOfficesEditId = data.office.id; ipaMergeFrom = null; ipaOfficeDraft = null; ipaDeleteBlocked = null;
+      ipaRenderOfficesPopover();
+      ipaSetOfficeNote(`Merged into "${intoName}": ${ipaPlural((data.movedAccounts || []).length, "account")} and ${ipaPlural((data.addedIPs || []).length, "IP")} moved.`, "ok");
+      window.showToast?.(`Offices merged into "${intoName}".`, "ok");
+      await ipaReload();
+    }
+
+    async function ipaRefreshOfficesList() {
+      const res = await window.AgentAuth.authFetch("/api/admin/offices");
+      const data = await res.json().catch(() => ({ ok: false }));
+      if (data.ok) ipaFullOffices = data.offices;
     }
 
     function ipaSetOfficeNote(msg, cls) {
@@ -4481,7 +4640,8 @@ html[data-theme="light"] {
     async function ipaSaveOffice() {
       const name = document.getElementById("ipaOfficeName").value.trim();
       if (!name) return ipaSetOfficeNote("Office name is required.", "err");
-      const allowedIPs = document.getElementById("ipaOfficeIps").value.split("\n").map((s) => s.trim()).filter(Boolean);
+      const rawIps = document.getElementById("ipaOfficeIps").value.split("\n").map((s) => s.trim()).filter(Boolean);
+      const allowedIPs = rawIps.filter((ip, i) => rawIps.indexOf(ip) === i);
       const id = ipaOfficesEditId || undefined;
       ipaSetOfficeNote("Saving…");
       const res = await window.AgentAuth.authFetch("/api/admin/offices", {
@@ -4490,26 +4650,30 @@ html[data-theme="light"] {
       });
       const data = await res.json();
       if (!data.ok) return ipaSetOfficeNote(data.error || "Save failed.", "err");
-      ipaSetOfficeNote("Office saved.", "ok");
-      ipaOfficesEditId = data.office.id;
-      const idx = ipaFullOffices.findIndex((o) => o.id === data.office.id);
-      if (idx >= 0) ipaFullOffices[idx] = data.office; else ipaFullOffices.unshift(data.office);
+      ipaOfficesEditId = data.office.id; ipaOfficeDraft = null; ipaDeleteBlocked = null;
+      await ipaRefreshOfficesList();
       ipaRenderOfficesPopover();
+      ipaSetOfficeNote("Office saved.", "ok");
       await ipaReload();
     }
 
     async function ipaDeleteOffice() {
       if (!ipaOfficesEditId) return;
-      if (!confirm("Delete this office? Any accounts assigned to it will lose their office binding.")) return;
+      const o = ipaOfficeById(ipaOfficesEditId);
+      if (ipaAccountsOf(o).length) { ipaDeleteBlocked = ipaAccountsOf(o); ipaRenderOfficeEditor(); return; }
+      if (!confirm(`Delete office "${o ? o.name : ""}"? No accounts are assigned to it.`)) return;
       ipaSetOfficeNote("Deleting…");
       const res = await window.AgentAuth.authFetch("/api/admin/offices", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", id: ipaOfficesEditId }),
       });
       const data = await res.json();
-      if (!data.ok) return ipaSetOfficeNote(data.error || "Delete failed.", "err");
-      ipaFullOffices = ipaFullOffices.filter((o) => o.id !== ipaOfficesEditId);
-      ipaOfficesEditId = "";
+      if (!data.ok) {
+        if (Array.isArray(data.accounts) && data.accounts.length) { ipaDeleteBlocked = data.accounts; ipaRenderOfficeEditor(); return; }
+        return ipaSetOfficeNote(data.error || "Delete failed.", "err");
+      }
+      ipaOfficesEditId = ""; ipaOfficeDraft = null; ipaDeleteBlocked = null;
+      await ipaRefreshOfficesList();
       ipaRenderOfficesPopover();
       await ipaReload();
     }
