@@ -9,7 +9,9 @@
  *     Renders square thumbnails (photo, video with ▶, PDF icon) + an
  *     "Add more" box inside the dropzone. Clicking a thumbnail opens the
  *     viewer; × calls onRemove(index); the add box calls onOpenPicker().
- *   AttachUI.open(files, index)  — open the viewer directly.
+ *   AttachUI.open(files, index)  — open the viewer directly. `files` may be
+ *     File objects OR already-loaded items { url, name, type, size? }
+ *     (TG Reply Threads attachments, fetched from Telegram — 2026-11-02).
  *   AttachUI.release(file)       — free a file's preview URL (on remove).
  *
  * Idempotent: safe to load more than once (SPA navigation re-runs page
@@ -20,11 +22,13 @@
 
   const urlCache = new WeakMap(); // File -> object URL
   function urlFor(file) {
+    if (file && typeof file.url === "string" && !(file instanceof Blob)) return file.url; // pre-loaded item
     let u = urlCache.get(file);
     if (!u) { u = URL.createObjectURL(file); urlCache.set(file, u); }
     return u;
   }
   function release(file) {
+    if (!file || !(file instanceof Blob)) return;
     const u = urlCache.get(file);
     if (u) { URL.revokeObjectURL(u); urlCache.delete(file); }
   }
@@ -36,7 +40,7 @@
     return "file";
   }
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const mb = (b) => (b / 1048576).toFixed(1) + "MB";
+  const mb = (b) => (typeof b === "number" && b > 0 ? (b / 1048576).toFixed(1) + "MB" : "");
 
   function thumbInner(file) {
     const k = kindOf(file);
@@ -183,10 +187,10 @@
     } else {
       el = document.createElement("div");
       el.className = "att-lb-file";
-      el.innerHTML = `<i>📎</i><b>${esc(f.name)}</b><span>No preview for this file type</span>`;
+      el.innerHTML = `<i>📎</i><b>${esc(f.name)}</b><span>No preview for this file type</span><a class="att-lb-dl" href="${urlFor(f)}" download="${esc(f.name)}">⬇ Download</a>`;
     }
     stage.insertBefore(el, stage.firstChild);
-    lb.querySelector(".att-lb-name").innerHTML = `${esc(f.name)}<small>${cur + 1} / ${items.length} · ${mb(f.size)}</small>`;
+    lb.querySelector(".att-lb-name").innerHTML = `${esc(f.name)}<small>${cur + 1} / ${items.length}${mb(f.size) ? ` · ${mb(f.size)}` : ""}</small>`;
     lb.querySelector('[data-lb="zoom"]').style.display = k === "image" ? "" : "none";
     lb.querySelector('[data-lb="zoom"]').classList.remove("on");
     lb.querySelector(".att-lb-hint").textContent =
@@ -219,5 +223,5 @@
     document.documentElement.classList.remove("att-lb-lock");
   }
 
-  window.AttachUI = { renderInto, open, close, release, kindOf };
+  window.AttachUI = { renderInto, open, close, release, kindOf, urlFor };
 })();

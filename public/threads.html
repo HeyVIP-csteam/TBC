@@ -23,7 +23,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=e7aaf543" />
+<link rel="stylesheet" href="/assets/style.css?v=fe49db22" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -34,7 +34,7 @@ html[data-theme="light"] {
 <script src="/assets/presence-heartbeat.js?v=10aea858"></script>
 <script src="/assets/reply-sound.js?v=a889f48f"></script>
 <script src="/assets/announcement-banner.js?v=3ccef02f" defer></script>
-<script src="/assets/attach-viewer.js?v=2dfcbb78"></script>
+<script src="/assets/attach-viewer.js?v=19e03367"></script>
 <script src="/assets/schemas.js?v=e9192d65"></script>
 </head>
 <body class="threads-page">
@@ -2530,6 +2530,22 @@ html[data-theme="light"] {
       return attachmentCache.get(cacheKey);
     }
 
+    // 2026-11-02 — every attachment opens in the shared full-page viewer
+    // (assets/attach-viewer.js) — photo zoom, video playback, PDF reading —
+    // instead of downloading. Photos/videos show as thumbnails; PDFs and
+    // other files show as a file card. Clicking opens every loaded
+    // attachment of that same message/ticket, so ← → moves between them.
+    function attachGroupItems(slot) {
+      const group = slot.parentElement;
+      const slots = group ? Array.from(group.querySelectorAll(":scope > .inline-attach-slot")) : [slot];
+      const loaded = slots.filter((x) => x.__attItem);
+      return { items: loaded.map((x) => x.__attItem), index: Math.max(0, loaded.indexOf(slot)) };
+    }
+    function openAttachSlot(slot, fallback) {
+      if (!window.AttachUI) { fallback(); return; }
+      const { items, index } = attachGroupItems(slot);
+      if (items.length) window.AttachUI.open(items, index); else fallback();
+    }
     function loadInlineAttachments() {
       document.querySelectorAll(".inline-attach-slot[data-attachment-file]:not([data-filled])").forEach((slot) => {
         const fileId = slot.dataset.attachmentFile;
@@ -2538,31 +2554,46 @@ html[data-theme="light"] {
         slot.setAttribute("data-filled", "1");
         getAttachmentUrl(fileId, name, country).then(({ url, type }) => {
           if (!document.body.contains(slot)) return;
-          if (type.startsWith("video/")) {
-            slot.innerHTML = `<video src="${url}" controls class="inline-attach-media"></video>`;
-          } else if (type.startsWith("image/")) {
-            slot.innerHTML = `<img src="${url}" alt="${escapeAttr(name)}" class="inline-attach-media" />`;
+          const displayName = withExtension(name, type);
+          const isPdf = type === "application/pdf" || /\.pdf$/i.test(name);
+          const isVideo = type.startsWith("video/");
+          const isImage = type.startsWith("image/");
+          slot.__attItem = { url, name: displayName, type: isPdf ? "application/pdf" : type };
+          const open = () => openAttachSlot(slot, () => viewAttachment(fileId, name, country));
+          if (isVideo) {
+            slot.innerHTML = `<button type="button" class="inline-attach-thumb" title="Click to play"><video src="${url}#t=0.1" muted preload="metadata" playsinline class="inline-attach-media"></video><span class="att-play">▶</span><span class="att-kind">VIDEO</span></button>`;
+          } else if (isImage) {
+            slot.innerHTML = `<img src="${url}" alt="${escapeAttr(displayName)}" class="inline-attach-media" title="Click to view" />`;
+          } else if (isPdf) {
+            slot.innerHTML = fileCardHtml(displayName, "PDF");
           } else {
+            // Unknown type — try it as an image first (some photos arrive as
+            // generic documents); if the browser can't decode it, show a card.
             const img = document.createElement("img");
-            img.alt = name;
+            img.alt = displayName;
             img.className = "inline-attach-media";
             img.addEventListener("error", () => {
               if (!document.body.contains(slot)) return;
-              const downloadName = withExtension(name, type);
-              slot.innerHTML = `<a href="${url}" download="${escapeAttr(downloadName)}" class="inline-attach-file">📎 ${escapeHtml(downloadName)} — click to download</a>`;
+              slot.__attItem = { url, name: displayName, type: type || "application/octet-stream" };
+              slot.innerHTML = fileCardHtml(displayName, "FILE");
+              slot.querySelector(".inline-attach-card").addEventListener("click", open);
             }, { once: true });
+            img.addEventListener("load", () => { slot.__attItem.type = "image/" + (displayName.split(".").pop() || "png"); }, { once: true });
             slot.innerHTML = "";
             slot.appendChild(img);
             img.src = url;
           }
-          const media = slot.querySelector("img.inline-attach-media, video.inline-attach-media");
-          if (media) media.addEventListener("click", () => viewAttachment(fileId, name, country));
+          const target = slot.querySelector(".inline-attach-thumb, img.inline-attach-media, .inline-attach-card");
+          if (target) target.addEventListener("click", open);
         }).catch((err) => {
           if (!document.body.contains(slot)) return;
           if (err && err.name === "AbortError") { slot.removeAttribute("data-filled"); return; }
           slot.innerHTML = `<div class="inline-attach-error" title="${escapeAttr(String((err && err.message) || ""))}">⚠️ ${escapeHtml(String((err && err.message) || "Couldn't load this attachment."))}</div>`;
         });
       });
+    }
+    function fileCardHtml(displayName, label) {
+      return `<button type="button" class="inline-attach-card" title="Click to view ${escapeAttr(displayName)}"><span class="iac-ic${label === "PDF" ? "" : " iac-file"}">${label === "PDF" ? "📄" : "📎"}</span><span class="iac-t"><b>${escapeHtml(displayName)}</b><small>${label} · Click to view</small></span></button>`;
     }
 
     async function viewAttachment(fileId, name, country) {
