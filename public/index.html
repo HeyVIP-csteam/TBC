@@ -35,7 +35,7 @@ html[data-theme="light"] {
     linear-gradient(160deg, #dbe7fb 0%, #d9cef4 45%, #cdbdf2 75%, #c4b2ee 100%);
 }
 </style>
-<link rel="stylesheet" href="/assets/style.css?v=36ddba93" />
+<link rel="stylesheet" href="/assets/style.css?v=e7aaf543" />
 <link rel="stylesheet" href="/assets/toast.css?v=5779b14e" />
 <script src="/assets/toast.js?v=d9d84724"></script>
 <script src="/assets/starfield.js?v=b6e92821" defer></script>
@@ -333,7 +333,7 @@ html[data-theme="light"] {
     </div>
   </div>
 
-  <script src="/assets/schemas.js?v=6483a64a"></script>
+  <script src="/assets/schemas.js?v=e9192d65"></script>
   <script src="/assets/active-agents-modal.js?v=a4c5d7a2"></script>
   <script src="/assets/spa-shell.js?v=dd82eee8"></script>
   <script>
@@ -4524,7 +4524,6 @@ html[data-theme="light"] {
             ${clash ? `<p class="ipo-hint warn">⚠️ "${acctEsc(clash.name)}" already exists — use a different name, or merge into it instead.</p>` : ""}
           </div>
           <div class="field"><label>ALLOWED IPS (ONE PER LINE)</label><textarea id="ipaOfficeIps" rows="5" placeholder="203.0.113.10" autocomplete="off" ${canEdit ? "" : "disabled"}>${acctEsc(ips)}</textarea></div>
-          ${o ? `<div class="field"><label>ACCOUNTS THAT LOG IN FROM HERE</label>${accts.length ? `<div class="ipo-chips">${accts.map((u) => `<span class="ipo-chip">${acctEsc(u)}</span>`).join("")}</div>` : '<p class="ipo-hint">None</p>'}</div>` : ""}
           ${canEdit ? `<div class="ipa-popover-actions ipo-actions">
             ${o && ipaFullOffices.length > 1 ? '<button type="button" class="ipo-btn warn" id="ipoStartMerge">⇄ Merge into another office…</button>' : ""}
             ${o ? '<button type="button" class="ipo-btn danger" id="ipaOfficeDelete">Delete</button>' : ""}
@@ -4680,33 +4679,187 @@ html[data-theme="light"] {
 
     function ipaOpenRecord() {
       if (!ipaData) return;
+      iprState = { q: "", from: "", to: "", act: "All", open: {}, page: 1 }; // fresh filters each time it's opened
       ipaRenderRecordPopover();
       toggleIpaPopover("ipaRecordPopover", true);
       toggleIpaPopover("ipaOfficesPopover", false);
     }
 
+    // ---- Record (redesigned 2026-11-02) ---------------------------------
+    // Audit table: Date | Action | IP address | Office / Note | By, one
+    // uniform row per action (click to expand full details), search,
+    // action dropdown with live counts, From–To date filter, 25 per page.
+    // Reads the same ipaData.record list as before — display only.
+    const IPR_ACTIONS = {
+      "Approved": ["g", "✓"], "Manually Added": ["b", "+"], "Rejected": ["r", "✕"], "Removed": ["n", "−"],
+      "Blocked": ["r", "⛔"], "Unblocked": ["y", "↺"], "Office Merged": ["p", "⇄"],
+    };
+    const IPR_ROLE = { owner: "Owner", superadmin: "Super Admin", admin: "Admin", senior: "Senior", agent: "Agent" };
+    const IPR_PAGE = 25;
+    let iprState = { q: "", from: "", to: "", act: "All", open: {}, page: 1 };
+    const iprPad = (n) => String(n).padStart(2, "0");
+    const iprIsoDay = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${iprPad(d.getMonth() + 1)}-${iprPad(d.getDate())}`; };
+    const iprDate = (iso) => { const d = new Date(iso); return `${iprPad(d.getDate())}/${iprPad(d.getMonth() + 1)}/${d.getFullYear()}`; };
+    const iprTime = (iso) => { const d = new Date(iso); return `${iprPad(d.getHours())}:${iprPad(d.getMinutes())}`; };
+    const iprIps = (r) => String(r.ip || "").split(",").map((s) => s.trim()).filter((s) => s && s !== "—" && s !== "-");
+    const iprHasDetail = (r) => r.detail && r.detail !== "—" && r.detail !== "-";
+    const iprKey = (r, i) => r.id || `${r.ts}|${i}`;
+
+    function iprOfficeCell(r, full) {
+      if (r.action === "Office Merged") {
+        const [a, b] = String(r.detail || "").split("→").map((s) => (s || "").trim());
+        const n = iprIps(r).length;
+        return `${acctEsc(a)}<span class="ipr-arrow">→</span>${acctEsc(b)}${full ? "" : ` <span class="ipr-muted">· ${n ? `${n} IP${n === 1 ? "" : "s"} added` : "no new IPs"}</span>`}`;
+      }
+      if (r.action === "Blocked") return iprHasDetail(r) ? `${full ? "" : '<span class="ipr-muted">Reason: </span>'}${acctEsc(r.detail)}` : '<span class="ipr-muted">—</span>';
+      if (r.action === "Unblocked") return '<span class="ipr-muted">—</span>';
+      return iprHasDetail(r) ? acctEsc(r.detail) : (r.officeName ? acctEsc(r.officeName) : '<span class="ipr-muted">—</span>');
+    }
+
+    function iprFiltered(all, ignoreAct) {
+      const q = iprState.q.trim().toLowerCase();
+      return all.filter((r) => {
+        const day = iprIsoDay(r.ts);
+        if (iprState.from && day < iprState.from) return false;
+        if (iprState.to && day > iprState.to) return false;
+        if (!ignoreAct && iprState.act !== "All" && r.action !== iprState.act) return false;
+        if (q && ![r.ip, r.detail, r.officeName, r.by, r.action].join(" ").toLowerCase().includes(q)) return false;
+        return true;
+      });
+    }
+
     function ipaRenderRecordPopover() {
       const pop = document.getElementById("ipaRecordPopover");
+      pop.classList.add("ipr-wide");
+      const today = iprIsoDay(new Date().toISOString());
       pop.innerHTML = `
-        <div class="ipa-popover-header">
-          <p class="ipa-popover-title">🕒 Record</p>
+        <div class="ipr-head">
+          <div class="ipr-head-ic">🕒</div>
+          <div><p class="ipa-popover-title">Record</p><p class="ipr-sub">Every change to approved, pending and blocked IPs</p></div>
           <button type="button" class="modal-close-btn" id="ipaRecordClose" title="Close" aria-label="Close">✕</button>
         </div>
-        <div class="ipa-table-scroll ipa-record-scroll"><table class="ipa-table">
-          <thead><tr><th>IP ADDRESS</th><th>ACTION</th><th>BY</th><th>DETAIL</th><th>TIME</th></tr></thead>
-          <tbody>
-            ${ipaData.record.length ? ipaData.record.map((r) => `
-              <tr>
-                <td class="ipa-ip">${acctEsc(r.ip)}</td>
-                <td>${acctEsc(r.action)}</td>
-                <td>${acctEsc(ipaByLabel(r.byRole, r.by))}</td>
-                <td>${acctEsc(r.detail || "—")}</td>
-                <td>${ipaFormatDate(r.ts)}</td>
-              </tr>`).join("") : `<tr><td colspan="5" class="ipa-empty">No actions recorded yet.</td></tr>`}
-          </tbody>
-        </table></div>
-      `;
+        <div class="ipr-tools">
+          <label class="ipr-search"><span aria-hidden="true">🔍</span><input type="text" id="iprQ" placeholder="Search IP, office or person…" autocomplete="off" value="${acctEsc(iprState.q)}" /></label>
+          <div class="ipr-dd" id="iprDd"></div>
+          <div class="ipr-dates">
+            <label><span>From</span><input type="date" id="iprFrom" value="${iprState.from}" max="${iprState.to || today}" /></label>
+            <span class="ipr-dash">–</span>
+            <label><span>To</span><input type="date" id="iprTo" value="${iprState.to}" min="${iprState.from}" max="${today}" /></label>
+            <button type="button" id="iprClear" title="Clear dates" aria-label="Clear dates">✕</button>
+          </div>
+        </div>
+        <div class="ipr-list" id="iprList"></div>
+        <div class="ipr-foot"><span id="iprCount"></span><div class="ipr-pager" id="iprPager"></div></div>`;
       document.getElementById("ipaRecordClose").addEventListener("click", () => toggleIpaPopover("ipaRecordPopover", false));
+      document.getElementById("iprQ").addEventListener("input", (e) => { iprState.q = e.target.value; iprState.page = 1; iprRenderBody(); });
+      const fromEl = document.getElementById("iprFrom"), toEl = document.getElementById("iprTo");
+      fromEl.addEventListener("change", () => {
+        iprState.from = fromEl.value;
+        if (iprState.to && iprState.from > iprState.to) { iprState.to = iprState.from; toEl.value = iprState.from; }
+        toEl.min = iprState.from || ""; iprState.page = 1; iprRenderBody();
+      });
+      toEl.addEventListener("change", () => {
+        iprState.to = toEl.value;
+        if (iprState.from && iprState.to < iprState.from) { iprState.from = iprState.to; fromEl.value = iprState.to; }
+        fromEl.max = iprState.to || today; iprState.page = 1; iprRenderBody();
+      });
+      document.getElementById("iprClear").addEventListener("click", () => {
+        iprState.from = iprState.to = ""; fromEl.value = toEl.value = ""; fromEl.max = today; toEl.min = ""; iprState.page = 1; iprRenderBody();
+      });
+      const dd = document.getElementById("iprDd");
+      dd.addEventListener("click", (e) => {
+        if (e.target.closest(".ipr-dd-btn")) { dd.classList.toggle("open"); return; }
+        const opt = e.target.closest("[data-ipr-act]");
+        if (!opt) return;
+        iprState.act = opt.dataset.iprAct; iprState.page = 1; dd.classList.remove("open"); iprRenderBody();
+      });
+      if (!window.__iprDocWired) {
+        window.__iprDocWired = true;
+        document.addEventListener("click", (e) => { if (!e.target.closest("#iprDd")) document.getElementById("iprDd")?.classList.remove("open"); });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.getElementById("iprDd")?.classList.remove("open"); });
+      }
+      document.getElementById("iprList").addEventListener("click", (e) => {
+        const tr = e.target.closest("tr.ipr-ev");
+        if (!tr) return;
+        iprState.open[tr.dataset.key] = !iprState.open[tr.dataset.key];
+        iprRenderBody();
+      });
+      document.getElementById("iprPager").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-ipr-pg]");
+        if (!b || b.disabled) return;
+        iprState.page += Number(b.dataset.iprPg);
+        iprRenderBody();
+        document.getElementById("iprList").scrollTop = 0;
+      });
+      iprRenderBody();
+    }
+
+    function iprRenderBody() {
+      const all = (ipaData && ipaData.record) || [];
+      const base = iprFiltered(all, true);
+      const rows = iprFiltered(all, false);
+      const counts = { All: base.length };
+      base.forEach((r) => { counts[r.action] = (counts[r.action] || 0) + 1; });
+
+      // action dropdown
+      const dd = document.getElementById("iprDd");
+      const wasOpen = dd.classList.contains("open");
+      const cur = IPR_ACTIONS[iprState.act];
+      const actionNames = Array.from(new Set([...Object.keys(IPR_ACTIONS), ...all.map((r) => r.action)])).filter(Boolean);
+      const optHtml = (name, label) => `<button type="button" class="ipr-dd-opt${iprState.act === name ? " on" : ""}" data-ipr-act="${acctEsc(name)}"><span class="ipr-tick">${iprState.act === name ? "✓" : ""}</span>${name === "All" ? "" : `<span class="ipr-dot ipr-${(IPR_ACTIONS[name] || ["n"])[0]}"></span>`}<span class="ipr-lbl">${acctEsc(label)}</span><span class="ipr-cnt">${counts[name] || 0}</span></button>`;
+      dd.innerHTML = `
+        <button type="button" class="ipr-dd-btn" aria-haspopup="listbox"><span class="ipr-dot${cur ? ` ipr-${cur[0]}` : ""}"></span><span class="ipr-lbl">${iprState.act === "All" ? "All actions" : acctEsc(iprState.act)}</span><span class="ipr-cnt">${iprState.act === "All" ? counts.All : (counts[iprState.act] || 0)}</span><span class="ipr-chev">▼</span></button>
+        <div class="ipr-dd-panel" role="listbox">${optHtml("All", "All actions")}<div class="ipr-dd-sep"></div>${actionNames.filter((n) => counts[n] || iprState.act === n).map((n) => optHtml(n, n)).join("")}</div>`;
+      dd.classList.toggle("open", wasOpen);
+
+      // table
+      const pages = Math.max(1, Math.ceil(rows.length / IPR_PAGE));
+      if (iprState.page > pages) iprState.page = pages;
+      if (iprState.page < 1) iprState.page = 1;
+      const slice = rows.slice((iprState.page - 1) * IPR_PAGE, iprState.page * IPR_PAGE);
+      let html = "";
+      if (rows.length) {
+        html = `<table class="ipr-tbl"><colgroup><col class="c-date"><col class="c-act"><col class="c-ip"><col><col class="c-by"><col class="c-chev"></colgroup>
+          <thead><tr><th>Date</th><th>Action</th><th>IP address</th><th>Office / Note</th><th>By</th><th></th></tr></thead><tbody>`;
+        slice.forEach((r) => {
+          const key = iprKey(r, all.indexOf(r));
+          const open = !!iprState.open[key];
+          const a = IPR_ACTIONS[r.action] || ["n", "•"];
+          const list = iprIps(r);
+          const role = IPR_ROLE[r.byRole] || (r.byRole ? r.byRole.charAt(0).toUpperCase() + r.byRole.slice(1) : "");
+          const ipCell = list.length ? `<span class="ipr-mono">${acctEsc(list[0])}</span>${list.length > 1 ? `<span class="ipr-plus">+${list.length - 1}</span>` : ""}` : '<span class="ipr-muted">—</span>';
+          html += `<tr class="ipr-ev${open ? " open" : ""}" data-key="${acctEsc(key)}" title="${iprDate(r.ts)} ${iprTime(r.ts)} — click for details">
+            <td class="c-date">${iprDate(r.ts)}</td>
+            <td class="c-act"><span class="ipr-badge ipr-${a[0]}">${a[1]} ${acctEsc(r.action || "—")}</span></td>
+            <td class="c-ip">${ipCell}</td>
+            <td class="c-off">${iprOfficeCell(r, false)}</td>
+            <td class="c-by">${acctEsc(r.by || "—")}${role ? `<span class="ipr-role">${acctEsc(role)}</span>` : ""}</td>
+            <td class="c-chev"><span class="ipr-chev-r">›</span></td></tr>`;
+          if (open) {
+            const when = new Date(r.ts).toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+            const ipsHtml = list.length
+              ? `<div class="ipr-iplist">${list.map((x) => `<span class="ipr-mono">${acctEsc(x)}</span>`).join("")}</div>`
+              : `<span class="ipr-muted">${r.action === "Office Merged" ? "No new IPs — every IP was already allowed in the kept office" : "—"}</span>`;
+            html += `<tr class="ipr-detail"><td colspan="6"><div class="ipr-dgrid">
+              <span>When</span><div>${acctEsc(when)}</div>
+              <span>Action</span><div>${acctEsc(r.action || "—")}</div>
+              <span>IP address${list.length > 1 ? `es (${list.length})` : ""}</span><div>${ipsHtml}</div>
+              <span>${r.action === "Blocked" ? "Reason" : r.action === "Office Merged" ? "Offices" : "Office"}</span><div>${iprOfficeCell(r, true)}</div>
+              <span>By</span><div>${acctEsc(r.by || "—")}${role ? ` <span class="ipr-muted">(${acctEsc(role)})</span>` : ""}</div>
+            </div></td></tr>`;
+          }
+        });
+        html += "</tbody></table>";
+      }
+      document.getElementById("iprList").innerHTML = html || `<div class="ipr-empty">${all.length ? "No actions match these filters." : "No actions recorded yet."}</div>`;
+      const from = rows.length ? (iprState.page - 1) * IPR_PAGE + 1 : 0;
+      const to = Math.min(iprState.page * IPR_PAGE, rows.length);
+      document.getElementById("iprCount").textContent = rows.length
+        ? `Showing ${from}–${to} of ${rows.length}${rows.length !== all.length ? ` (filtered from ${all.length})` : ""}`
+        : "0 actions";
+      document.getElementById("iprPager").innerHTML = pages > 1
+        ? `<button type="button" data-ipr-pg="-1" ${iprState.page <= 1 ? "disabled" : ""}>‹ Prev</button><span>${iprState.page} / ${pages}</span><button type="button" data-ipr-pg="1" ${iprState.page >= pages ? "disabled" : ""}>Next ›</button>`
+        : "<span>Newest first</span>";
     }
 
     document.getElementById("ipaManageOfficesBtn").addEventListener("click", ipaOpenManageOffices);

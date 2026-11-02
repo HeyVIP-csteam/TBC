@@ -475,9 +475,10 @@
   const allowVideo = !!(module.attachments && module.attachments.allowVideo);
   if (module.attachments && module.attachments.accept) document.getElementById("fileInput").setAttribute("accept", module.attachments.accept);
   document.getElementById("attachLabel").textContent = `Supporting Screenshots (Max ${maxFiles})`;
-  document.getElementById("dzSub").textContent = allowVideo
+  const dzSubText = allowVideo
     ? `JPG, PNG, PDF, MP4/MOV video — Max ${maxFiles} files, ${maxSizeMB}MB each${maxTotalMB ? `, ${maxTotalMB}MB total` : ""}`
     : `JPG, PNG, PDF — Max ${maxFiles} files, ${maxSizeMB}MB each`;
+  document.getElementById("dzSub").textContent = dzSubText;
   if (allowVideo) document.getElementById("attachLabel").textContent = `Supporting Screenshots / Video (Max ${maxFiles})`;
 
   const dropzone = document.getElementById("dropzone");
@@ -485,7 +486,21 @@
   const fileListEl = document.getElementById("fileList");
   let files = []; // File objects
 
+  // 2026-11-02 — thumbnails inside the dropzone + click-to-view (photo
+  // zoom, video playback, PDF preview) via assets/attach-viewer.js, so the
+  // agent can check each file before submitting. Falls back to the old
+  // file-name chips if that script didn't load for any reason.
   function renderFileList() {
+    if (window.AttachUI) {
+      fileListEl.innerHTML = "";
+      window.AttachUI.renderInto(dropzone, files, {
+        max: maxFiles,
+        subText: dzSubText,
+        onRemove: (i) => { window.AttachUI.release(files[i]); files.splice(i, 1); renderFileList(); },
+        onOpenPicker: () => fileInput.click(),
+      });
+      return;
+    }
     fileListEl.innerHTML = files
       .map(
         (f, i) => `<div class="file-chip"><span class="name">${/^video\//.test(f.type || "") ? "🎬 " : ""}${f.name}${allowVideo ? ` <small style="opacity:.6">${(f.size / 1048576).toFixed(1)}MB</small>` : ""}</span><button type="button" data-i="${i}">&times;</button></div>`
@@ -502,9 +517,9 @@
   function addFiles(list) {
     const rejected = [];
     for (const f of list) {
-      if (files.length >= maxFiles) break;
+      if (files.length >= maxFiles) { rejected.push(`${f.name} (max ${maxFiles} files)`); continue; }
       if (f.size > maxSizeMB * 1024 * 1024) {
-        rejected.push(f.name);
+        rejected.push(`${f.name} (over ${maxSizeMB}MB)`);
         continue;
       }
       if (/^video\//.test(f.type || "") && !allowVideo) { rejected.push(f.name); continue; }
@@ -514,16 +529,20 @@
     renderFileList();
     const status = document.getElementById("statusMsg");
     if (rejected.length) {
-      status.textContent = `Skipped (over ${maxSizeMB}MB): ${rejected.join(", ")}`;
+      status.textContent = `Skipped: ${rejected.join(", ")}`;
       status.className = "status-msg err";
     }
   }
 
-  dropzone.addEventListener("click", () => fileInput.click());
-  dropzone.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") fileInput.click();
-  });
-  fileInput.addEventListener("change", () => addFiles(fileInput.files));
+  if (window.AttachUI) {
+    renderFileList(); // draws the empty state inside the dropzone; AttachUI handles its clicks/keys
+  } else {
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") fileInput.click();
+    });
+  }
+  fileInput.addEventListener("change", () => { addFiles(fileInput.files); fileInput.value = ""; });
 
   ["dragenter", "dragover"].forEach((evt) =>
     dropzone.addEventListener(evt, (e) => {
@@ -775,6 +794,7 @@
       form.reset();
       fields.forEach((f) => { if (f.defaultValue !== undefined) fieldEls[f.key].control.value = f.defaultValue; });
       brandSelect.selectedIndex = 0;
+      if (window.AttachUI) files.forEach((f) => window.AttachUI.release(f));
       files = [];
       renderFileList();
       refreshConditionals();

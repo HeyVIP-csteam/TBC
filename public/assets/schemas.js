@@ -75,7 +75,11 @@ const BRANDS = [
 // Every module gets the same attachment slot (screenshots/PDFs, shown as a
 // drag-and-drop + paste dropzone under its fields). Change `max` per module
 // if one of them shouldn't allow attachments.
-const DEFAULT_ATTACHMENTS = { max: 3, accept: "image/png,image/jpeg,application/pdf", maxSizeMB: 20 };
+// 2026-11-02 — unified for EVERY topic (was max 3, images/PDF only):
+// up to 5 files, photos/PDF/video, 20MB each, 30MB total. The total cap
+// exists because attachments travel inside one JSON request to
+// /api/submit; keep functions/api/submit.js's MAX_ATTACHMENTS in sync.
+const DEFAULT_ATTACHMENTS = { max: 5, accept: "image/png,image/jpeg,image/webp,application/pdf,video/mp4,video/quicktime,video/webm,.mov,.mp4", maxSizeMB: 20, maxTotalMB: 30, allowVideo: true };
 
 // A field can declare `showIf: { field: "<otherFieldKey>", oneOf: [...values] }`
 // to only appear when that other field currently holds one of those values —
@@ -559,7 +563,7 @@ const MODULES = [
     reporterLabel: "PIC",
     countries: ["INR"],
     ownerGated: true,
-    attachments: { max: 5, accept: "image/png,image/jpeg,image/webp,application/pdf,video/mp4,video/quicktime,video/webm,.mov,.mp4", maxSizeMB: 20, maxTotalMB: 30, allowVideo: true },
+    attachments: DEFAULT_ATTACHMENTS,
     fields: [
       { key: "issueType", label: "Issue Type", type: "select", required: true, emphasize: true, defaultValue: "Cyber Complaint", options: ["Cyber Complaint"] },
       { key: "username", label: "User Name", type: "text", required: true, placeholder: "Player username..." },
