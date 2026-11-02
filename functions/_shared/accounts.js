@@ -509,6 +509,54 @@ export async function saveOffice(env, { id, name, allowedIPs, ipMeta }) {
   return office;
 }
 
+// 2026-11-01 — office housekeeping (merge / delete protection / duplicate
+// names). Reads every account record directly (not listAccounts(), which
+// hides Owner rows) so a merge re-points literally every account.
+export function normalizeOfficeName(name) {
+  return String(name || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+}
+async function readAllAccountsRaw(env) {
+  const raw = await accountsStore(env).get(ACCOUNTS_INDEX_KEY);
+  const usernames = raw ? JSON.parse(raw) : [];
+  const rows = await Promise.all(usernames.map((u) => accountsStore(env).get(`account:${u}`)));
+  return rows.filter(Boolean).map((r) => JSON.parse(r));
+}
+/** { [officeId]: [username, ...] } — Owner accounts excluded (they never need an office). */
+export async function accountsByOffice(env) {
+  const map = {};
+  for (const a of await readAllAccountsRaw(env)) {
+    if (!a.officeId || a.role === "owner") continue;
+    (map[a.officeId] = map[a.officeId] || []).push(a.username);
+  }
+  return map;
+}
+/**
+ * Merge office `fromId` into `intoId`: union the IP lists (+ their
+ * "added by" metadata), re-point every account whose officeId is
+ * `fromId`, then delete `fromId`. Accounts keep their tokenVersion — the
+ * kept office allows every IP the old one did, so nobody is logged out.
+ * Pending IP requests are moved by the caller (ipAccess.js).
+ */
+export async function mergeOffices(env, fromId, intoId) {
+  if (!fromId || !intoId || fromId === intoId) throw new Error("Pick two different offices to merge.");
+  const [from, into] = await Promise.all([getOffice(env, fromId), getOffice(env, intoId)]);
+  if (!from) throw new Error("The office being merged no longer exists.");
+  if (!into) throw new Error("The office to merge into no longer exists.");
+  const addedIPs = (from.allowedIPs || []).filter((ip) => !(into.allowedIPs || []).includes(ip));
+  const allowedIPs = [...(into.allowedIPs || []), ...addedIPs];
+  const ipMeta = { ...(from.ipMeta || {}), ...(into.ipMeta || {}) };
+  for (const ip of Object.keys(ipMeta)) if (!allowedIPs.includes(ip)) delete ipMeta[ip];
+  const saved = await saveOffice(env, { id: into.id, name: into.name, allowedIPs, ipMeta });
+  const movedAccounts = [];
+  for (const a of await readAllAccountsRaw(env)) {
+    if (a.officeId !== fromId) continue;
+    await accountsStore(env).put(`account:${a.username}`, JSON.stringify({ ...a, officeId: into.id }));
+    movedAccounts.push(a.username);
+  }
+  await deleteOffice(env, fromId);
+  return { from, into: saved, addedIPs, movedAccounts };
+}
+
 export async function deleteOffice(env, id) {
   await accountsStore(env).delete(`office:${id}`);
   const raw = await accountsStore(env).get(OFFICES_INDEX_KEY);

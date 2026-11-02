@@ -127,6 +127,34 @@ async function removePending(env, { officeId, ip }) {
   return match;
 }
 
+// 2026-11-01 — office merge: re-point pending requests from one office to
+// another. A request for an IP the merged office already allows is dropped
+// (nothing left to approve); two requests for the same IP are combined.
+export async function movePendingIpRequests(env, { fromOfficeId, intoOffice }) {
+  const list = await readList(env, PENDING_KEY);
+  const allowed = new Set(intoOffice.allowedIPs || []);
+  let moved = 0;
+  const out = [];
+  for (const p of list) {
+    if (p.officeId !== fromOfficeId) { out.push(p); continue; }
+    if (allowed.has(p.ip)) continue;
+    const twin = list.find((q) => q.officeId === intoOffice.id && q.ip === p.ip);
+    if (twin) {
+      twin.attempts = (twin.attempts || 1) + (p.attempts || 1);
+      if ((p.lastAttemptAt || "") > (twin.lastAttemptAt || "")) { twin.lastAttemptAt = p.lastAttemptAt; twin.username = p.username || twin.username; }
+      moved++;
+      continue;
+    }
+    out.push({ ...p, officeId: intoOffice.id, officeName: intoOffice.name });
+    moved++;
+  }
+  await writeList(env, PENDING_KEY, out);
+  return moved;
+}
+export async function recordIpAccessEvent(env, entry) {
+  await appendRecord(env, entry);
+}
+
 export async function approveIpRequest(env, { officeId, ip, by, byRole, getOffice, saveOffice, setAccountLocked }) {
   const office = await getOffice(env, officeId);
   if (!office) throw new Error("Office not found.");
