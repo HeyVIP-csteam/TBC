@@ -134,6 +134,7 @@
       drag = { x: e.clientX - pan.x, y: e.clientY - pan.y, moved: false };
       e.preventDefault();
     });
+    window.addEventListener("resize", fitMedia);
     window.addEventListener("mousemove", (e) => {
       if (!drag) return;
       pan = { x: e.clientX - drag.x, y: e.clientY - drag.y };
@@ -154,11 +155,29 @@
       else if (e.key === "ArrowRight" && cur < items.length - 1) { cur++; show(); }
     }, true);
   }
+  // 2026-11-02 v2 — size photo / video to its real aspect ratio inside the
+  // stage so the (lightly dimmed) area around it stays see-through and a
+  // click there closes the viewer.
+  function fitMedia() {
+    if (!lb) return;
+    const stage = lb.querySelector(".att-lb-stage");
+    const el = stage.querySelector("img, video");
+    if (!el) return;
+    const nw = el.naturalWidth || el.videoWidth, nh = el.naturalHeight || el.videoHeight;
+    if (!nw || !nh) return;
+    const cs = getComputedStyle(stage);
+    const aw = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const ah = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const r = Math.min(aw / nw, ah / nh);
+    el.style.width = Math.floor(nw * r) + "px";
+    el.style.height = Math.floor(nh * r) + "px";
+  }
   function applyZoom() {
     const img = lb.querySelector(".att-lb-stage img");
     if (!img) return;
     img.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
     img.classList.toggle("zoomed", zoom > 1);
+    lb.classList.toggle("att-lb-dark", zoom > 1);
     lb.querySelector('[data-lb="zoom"]').classList.toggle("on", zoom > 1);
   }
   function setZoom(z) {
@@ -170,6 +189,7 @@
     const f = items[cur];
     if (!f) { close(); return; }
     zoom = 1; pan = { x: 0, y: 0 };
+    lb.classList.remove("att-lb-dark");
     const stage = lb.querySelector(".att-lb-stage");
     stage.querySelectorAll("img, video, iframe, .att-lb-file").forEach((n) => n.remove());
     const k = kindOf(f);
@@ -178,9 +198,10 @@
       el = document.createElement("img");
       el.src = urlFor(f); el.alt = f.name;
       el.addEventListener("click", () => setZoom(zoom > 1 ? 1 : 2));
+      el.addEventListener("load", fitMedia);
     } else if (k === "video") {
       el = document.createElement("video");
-      el.src = urlFor(f); el.controls = true; el.autoplay = true; el.playsInline = true;
+      el.addEventListener("loadedmetadata", fitMedia); el.src = urlFor(f); el.controls = true; el.autoplay = true; el.playsInline = true;
     } else if (k === "pdf") {
       el = document.createElement("iframe");
       el.src = urlFor(f); el.title = f.name;
@@ -190,6 +211,7 @@
       el.innerHTML = `<i>📎</i><b>${esc(f.name)}</b><span>No preview for this file type</span><a class="att-lb-dl" href="${urlFor(f)}" download="${esc(f.name)}">⬇ Download</a>`;
     }
     stage.insertBefore(el, stage.firstChild);
+    fitMedia();
     lb.querySelector(".att-lb-name").innerHTML = `${esc(f.name)}<small>${cur + 1} / ${items.length}${mb(f.size) ? ` · ${mb(f.size)}` : ""}</small>`;
     lb.querySelector('[data-lb="zoom"]').style.display = k === "image" ? "" : "none";
     lb.querySelector('[data-lb="zoom"]').classList.remove("on");
