@@ -18,7 +18,8 @@ import { resolveThreadsStore, resolveScreenshotsBucket } from "../_shared/countr
 // internally below via depositChannelModuleId(). Without this filter, a
 // crafted request with module:"deposit_sgpay" would sail through the
 // VALID_MODULES check and create a nonsense "Deposit — SGPay" ticket.
-const MAX_ATTACHMENTS = { cyber_complaint: 5 };
+// 2026-11-02 — every topic now allows 5 (see DEFAULT_ATTACHMENTS in public/assets/schemas.js).
+const MAX_ATTACHMENTS_DEFAULT = 5;
 const VALID_MODULES = Object.keys(MODULE_META).filter((id) => !DEPOSIT_CHANNEL_PSEUDO_MODULES.includes(id));
 
 // Top-level safety net. Everything below already handles its OWN expected
@@ -101,10 +102,8 @@ async function handleSubmit({ request, env, waitUntil }) {
   if (!reporter || !Array.isArray(fields)) {
     return json({ ok: false, error: "Missing reporter or fields." }, 400);
   }
-  // 2026-11-01 — per-module attachment cap, enforced server-side too (the
-  // form already limits it). Cyber Complaint allows 5; everything else
-  // keeps the existing 3.
-  const maxAttachments = MAX_ATTACHMENTS[moduleId] || 3;
+  // Attachment cap, enforced server-side too (the form already limits it).
+  const maxAttachments = MAX_ATTACHMENTS_DEFAULT;
   if (Array.isArray(attachments) && attachments.length > maxAttachments) {
     return json({ ok: false, error: `At most ${maxAttachments} attachments are allowed for ${MODULE_META[moduleId]?.name || moduleId}.` }, 400);
   }

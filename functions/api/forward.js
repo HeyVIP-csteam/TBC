@@ -374,7 +374,8 @@ async function sendCombinedAttachments({ botToken, route, text, fileIds, newAtta
   fileIds.forEach((fid) => media.push({ type: "photo", media: fid }));
   newAttachments.forEach((att, i) => {
     const isImage = looksLikeImage(att.type, att.name);
-    media.push({ type: isImage ? "photo" : "document", media: `attach://newfile${i}` });
+    const isVideo = !isImage && looksLikeVideo(att.type, att.name);
+    media.push({ type: isImage ? "photo" : isVideo ? "video" : "document", media: `attach://newfile${i}` });
   });
   media[0].caption = text;
   media[0].parse_mode = "HTML";
@@ -421,7 +422,7 @@ async function sendCombinedAttachments({ botToken, route, text, fileIds, newAtta
     // matters (recallRoot() needs to delete all of them, not just the
     // first/captioned one).
     messageIds: data.result.map((m) => m.message_id),
-    attachmentFileIds: data.result.map((m) => (m.photo?.[m.photo.length - 1] || m.document)?.file_id).filter(Boolean),
+    attachmentFileIds: data.result.map((m) => (m.photo?.[m.photo.length - 1] || m.video || m.document)?.file_id).filter(Boolean),
   };
 }
 
@@ -434,11 +435,18 @@ function looksLikeImage(type, name) {
   if ((type || "").startsWith("image/")) return true;
   return /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test(name || "");
 }
+// 2026-11-02 — videos (allowed on every topic now) go out with sendVideo
+// / as album "video" items so they play inline in Telegram.
+function looksLikeVideo(type, name) {
+  if ((type || "").startsWith("video/")) return true;
+  return /\.(mp4|mov|m4v|webm)$/i.test(name || "");
+}
 
 async function sendOneFreshUpload({ botToken, route, text, attachment }) {
   let { name, type, dataUrl } = attachment;
   let bytes = base64ToBytes(dataUrlToBase64(dataUrl));
   const isImage = looksLikeImage(type, name);
+  const isVideo = !isImage && looksLikeVideo(type, name);
   if (isImage) {
     const compressed = await compressImageForTelegram(bytes, { type, name });
     bytes = compressed.bytes;
@@ -446,8 +454,8 @@ async function sendOneFreshUpload({ botToken, route, text, attachment }) {
     name = compressed.name;
   }
   const blob = new Blob([bytes], { type: type || "application/octet-stream" });
-  const method = isImage ? "sendPhoto" : "sendDocument";
-  const field = isImage ? "photo" : "document";
+  const method = isImage ? "sendPhoto" : isVideo ? "sendVideo" : "sendDocument";
+  const field = isImage ? "photo" : isVideo ? "video" : "document";
 
   const form = new FormData();
   form.append("chat_id", route.chatId);
@@ -463,7 +471,7 @@ async function sendOneFreshUpload({ botToken, route, text, attachment }) {
   if (!data.ok) throw new Error(data.description || "unknown Telegram error");
   const fileId = isImage
     ? data.result.photo?.[data.result.photo.length - 1]?.file_id
-    : data.result.document?.file_id;
+    : (data.result.video || data.result.document)?.file_id;
   return { messageId: data.result.message_id, messageIds: [data.result.message_id], attachmentFileIds: fileId ? [fileId] : [] };
 }
 
@@ -533,6 +541,17 @@ async function sendOnePhotoOrDocument({ botToken, route, text, fileId }) {
     body: JSON.stringify({ ...basePayload, photo: fileId }),
   });
   let data = await res.json();
+  // Carried-over file that isn't a photo — try it as a video next (so a
+  // forwarded video still plays inline), then as a plain document.
+  if (!data.ok) {
+    const vres = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...basePayload, video: fileId }),
+    });
+    const vdata = await vres.json();
+    if (vdata.ok) return { messageId: vdata.result.message_id, messageIds: [vdata.result.message_id], attachmentFileIds: [vdata.result.video?.file_id].filter(Boolean) };
+  }
   if (!data.ok) {
     res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
       method: "POST",
