@@ -22,3 +22,14 @@
 - asset ?v= hashes refreshed (update-asset-versions.js)
 
 No backend / data changes.
+
+## Update (v2) — lightly dimmed, see-through viewer
+- The viewer backdrop is now light (35% dim) so the page stays visible behind
+  the attachment; it turns dark only while a photo is zoomed in.
+- Photos and videos are sized to their real aspect ratio (as big as the window
+  allows) and float with a shadow; PDFs open in a centered reader panel.
+- Clicking the see-through area around the file (or Esc) closes it.
+- File name, 🔍, ✕, hint and thumbnail strip sit on small dark chips so they
+  stay readable on any page.
+- Applies everywhere the viewer is used (TG Reply Threads, Issue Submission
+  forms, Forward modal). Files: assets/attach-viewer.js, assets/style.css.
