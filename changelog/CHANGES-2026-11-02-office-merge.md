@@ -10,7 +10,7 @@ Office 列表里出现两个「Colombo Outsource」。账号是用 Office 的内
 - **列表**：每个 Office 显示 IP 数、账号数；同名的标黄色 DUPLICATE。
 - **顶部提示**：有重名 Office 时提示，按 **Merge now** 直接进入合并
   （默认保留账号多的那个）。
-- **编辑区**：显示「哪些账号从这个 Office 登录」。
+- **编辑区**：Office 名称 + IP（账号名单只在合并和删除被挡下时显示）。
 - **⇄ Merge into another office…**：
   1. 两边 IP 合并到保留的 Office（重复的只留一份，"added by" 记录一起带过去）；
   2. 绑在被合并 Office 上的**所有**账号改绑到保留的 Office（包括列表里看不到的 Owner 账号）——
