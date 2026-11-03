@@ -42,3 +42,12 @@ No backend / data changes.
   to fit the window); zoom re-lays-out the image at the larger size so the
   browser re-samples the original file. Videos still fill the window.
 - Files: assets/attach-viewer.js, assets/style.css.
+
+## Fix (v4) — photos open big AND stay sharp
+- v3 opened small photos at their real size, which made a small receipt crop
+  pop up as a tiny box. Reverted: photos open as big as the window allows again.
+- Small photos are now re-drawn once at display size (2x steps, high-quality
+  smoothing + unsharp mask), at 2x resolution so one zoom step stays crisp.
+  Text and numbers on screenshots are much clearer than a plain browser stretch.
+  Large photos are untouched. Zoom re-lays-out (no CSS scale blur).
+- Files: assets/attach-viewer.js.
