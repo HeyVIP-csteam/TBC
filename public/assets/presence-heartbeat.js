@@ -27,6 +27,10 @@
  */
 (function () {
   if (!window.AgentAuth || !window.AgentAuth.getAuth()) return; // not logged in, nothing to track
+  // 2026-11-03 — the SPA shell re-runs page scripts on every navigation;
+  // without this guard each page switch stacked ANOTHER 3-minute timer.
+  if (window.__presenceHeartbeatStarted) return;
+  window.__presenceHeartbeatStarted = true;
 
   // CAPACITY (2026-08-21) — bumped from 15s to 3 minutes: this project
   // runs 24/7 (not 8h shifts), so heartbeat REQUEST volume scales with
@@ -78,11 +82,17 @@
 
   function sendHeartbeat() {
     if (!window.AgentAuth || !window.AgentAuth.getAuth()) return; // logged out mid-session
-    window.AgentAuth.authFetch("/api/presence/heartbeat", {
+    // 2026-11-03 — neutral URL (/ping): some ad-blocker filter lists block
+    // any request whose URL contains "heartbeat". Falls back to the old
+    // path if /ping isn't deployed yet.
+    const opts = () => ({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: currentStatus(), ...payloadBase }),
-    }).catch(() => {}); // best-effort — a dropped heartbeat just makes this tick a no-op, next one recovers
+    });
+    window.AgentAuth.authFetch("/api/presence/ping", opts())
+      .then((r) => { if (r && r.status === 404) return window.AgentAuth.authFetch("/api/presence/heartbeat", opts()); })
+      .catch(() => {}); // best-effort — a dropped heartbeat just makes this tick a no-op, next one recovers
   }
 
   // Immediately on load, and immediately again on every visibility flip
