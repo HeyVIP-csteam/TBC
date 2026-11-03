@@ -163,19 +163,88 @@
     const stage = lb.querySelector(".att-lb-stage");
     const el = stage.querySelector("img, video");
     if (!el) return;
-    const nw = el.naturalWidth || el.videoWidth, nh = el.naturalHeight || el.videoHeight;
+    // For a sharpened photo, size from the ORIGINAL dimensions so the
+    // sharpened copy never changes how big the photo is shown.
+    const nw = Number(el.dataset.ow) || el.naturalWidth || el.videoWidth;
+    const nh = Number(el.dataset.oh) || el.naturalHeight || el.videoHeight;
     if (!nw || !nh) return;
     const cs = getComputedStyle(stage);
     const aw = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const ah = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    // Photos are never stretched past their real pixel size (that is what
-    // made small screenshots look blurry); videos still fill the window.
-    const r = Math.min(aw / nw, ah / nh, el.tagName === "IMG" ? 1 : Infinity);
+    // Photo / video open as big as the window allows.
+    const r = Math.min(aw / nw, ah / nh);
     el.dataset.bw = Math.floor(nw * r);
     el.dataset.bh = Math.floor(nh * r);
     el.style.width = el.dataset.bw + "px";
     el.style.height = el.dataset.bh + "px";
-    if (el.tagName === "IMG") applyZoom();
+    if (el.tagName === "IMG") {
+      applyZoom();
+      if (!el.dataset.ow) { el.dataset.ow = nw; el.dataset.oh = nh; }
+      maybeSharpen(el);
+    }
+  }
+
+  // 2026-11-02 v4 — a small photo (e.g. a 400px receipt crop) stretched to
+  // fill the window looks soft. Instead of letting the browser stretch it,
+  // re-draw it once at the display size in high quality steps and apply a
+  // light unsharp mask, so text / numbers on screenshots stay crisp. Large
+  // photos are untouched. Runs once per opened photo, after it is shown.
+  let enhancedUrl = null;
+  function maybeSharpen(el) {
+    if (el.__sharpTried) return;
+    const ow = Number(el.dataset.ow), oh = Number(el.dataset.oh);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const maxZoomPx = Number(el.dataset.bw) * dpr * 2; // room for one 2x zoom
+    if (!ow || maxZoomPx < ow * 1.25) return; // big enough already
+    el.__sharpTried = true;
+    const srcUrl = el.src;
+    try {
+      let tw = Math.min(Math.round(maxZoomPx), 3200);
+      let th = Math.round(oh * tw / ow);
+      // step up 2x at a time (smoother than one big jump)
+      let c = document.createElement("canvas");
+      c.width = ow; c.height = oh;
+      c.getContext("2d").drawImage(el, 0, 0);
+      while (c.width * 2 < tw) {
+        const n = document.createElement("canvas");
+        n.width = c.width * 2; n.height = c.height * 2;
+        const g = n.getContext("2d");
+        g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
+        g.drawImage(c, 0, 0, n.width, n.height);
+        unsharp(g, n.width, n.height, 0.6); // keep edges crisp at each step
+        c = n;
+      }
+      const f = document.createElement("canvas");
+      f.width = tw; f.height = th;
+      const fg = f.getContext("2d");
+      fg.imageSmoothingEnabled = true; fg.imageSmoothingQuality = "high";
+      fg.drawImage(c, 0, 0, tw, th);
+      unsharp(fg, tw, th, 1.2);
+      f.toBlob((b) => {
+        if (!b || !el.isConnected || el.src !== srcUrl) return;
+        if (enhancedUrl) URL.revokeObjectURL(enhancedUrl);
+        enhancedUrl = URL.createObjectURL(b);
+        el.src = enhancedUrl;
+      }, "image/png");
+    } catch (e) { /* canvas blocked — keep the normal image */ }
+  }
+  // out = px + amount * (px - blur(px)),  blur = 3x3 [1 2 1; 2 4 2; 1 2 1] / 16
+  function unsharp(g, w, h, amount) {
+    const img = g.getImageData(0, 0, w, h), d = img.data, s = new Uint8ClampedArray(d);
+    const row = w * 4;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * row + x * 4;
+        for (let ch = 0; ch < 3; ch++) {
+          const p = i + ch;
+          const blur = (s[p - row - 4] + 2 * s[p - row] + s[p - row + 4] +
+            2 * s[p - 4] + 4 * s[p] + 2 * s[p + 4] +
+            s[p + row - 4] + 2 * s[p + row] + s[p + row + 4]) / 16;
+          d[p] = s[p] + amount * (s[p] - blur);
+        }
+      }
+    }
+    g.putImageData(img, 0, 0);
   }
   function applyZoom() {
     const img = lb.querySelector(".att-lb-stage img");
@@ -202,6 +271,7 @@
     lb.classList.remove("att-lb-dark");
     const stage = lb.querySelector(".att-lb-stage");
     stage.querySelectorAll("img, video, iframe, .att-lb-file").forEach((n) => n.remove());
+    if (enhancedUrl) { URL.revokeObjectURL(enhancedUrl); enhancedUrl = null; }
     const k = kindOf(f);
     let el;
     if (k === "image") {
