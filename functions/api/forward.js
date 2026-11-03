@@ -50,6 +50,7 @@ import { appendRowByColumns, writeRowForDate } from "../_shared/googleSheets.js"
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
 import { getThread, createThread, addForwardedToLink } from "../_shared/threads.js";
 import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry, isOwnerGatedModule } from "../_shared/accounts.js";
+import { presenceTouch } from "../_shared/presence.js";
 import { buildTicketMessage, buildTitleAndSummary, resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY } from "../_shared/messageBuilders.js";
 import { getRouteOverride } from "../_shared/routes.js";
 import { compressImageForTelegram } from "../_shared/telegramImageCompress.js";
@@ -65,7 +66,7 @@ export async function onRequestPost(context) {
   // Sheet write / createThread step. Registering the whole handler with
   // waitUntil lets it finish (up to ~30s after the disconnect).
   try {
-    const work = handlePost(context);
+    const work = handlePost({ ...context, waitUntil: context.waitUntil ? context.waitUntil.bind(context) : null });
     keepAlive(context, work);
     return await work;
   } catch (e) {
@@ -73,9 +74,10 @@ export async function onRequestPost(context) {
   }
 }
 
-async function handlePost({ request, env }) {
+async function handlePost({ request, env, waitUntil }) {
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
+  presenceTouch(env, account, request, waitUntil); // 2026-11-03 — counts as online
 
   const body = await request.json().catch(() => null);
   if (!body) return json({ ok: false, error: "Invalid JSON body." }, 400);

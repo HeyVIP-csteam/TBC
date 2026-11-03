@@ -108,6 +108,7 @@
  * the per-country TELEGRAM_BOT_TOKEN_<CODE> secrets ARE live-editable
  * there per-country, same as every other country Telegram feature.
  */
+import { presenceTouch } from "../../_shared/presence.js";
 import { getAccountWithOffice, verifyPassword, officeIpCheckPasses, getOffice, requestIP, setAccountLocked, issueToken } from "../../_shared/accounts.js";
 import { sendTelegramMessage } from "../../_shared/telegram.js";
 import { getSecurityAlertsRoute } from "../../_shared/routes.js";
@@ -348,6 +349,10 @@ async function handleLogin({ request, env, waitUntil }) {
 
   const successIp = requestIP(request) || "unknown";
   if (waitUntil) waitUntil(logActivity(env, { category: "Auth", action: "Login", agent: account.username, ip: successIp, detail: "Login succeeded" }));
+
+  // 2026-11-03 — a successful login marks the agent online in Active
+  // Agents right away (don't wait for the browser heartbeat).
+  presenceTouch(env, account, request, waitUntil);
 
   const token = await issueToken(env, account);
   return json({

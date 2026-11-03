@@ -179,9 +179,15 @@ export async function recordHeartbeat(kv, username, { status, device, browser, o
     // binding constant) — for the very first heartbeat ever recorded (no
     // `current`), there's nothing to measure elapsed time from yet, so
     // it just credits one heartbeat interval.
-    const creditSeconds = current
+    // 2026-11-03 — counting STARTS at login / first heartbeat: if the agent
+    // was offline before this (no record, or the last one timed out), or
+    // was inactive (hidden tab), this write only marks the start point and
+    // credits 0. Previously it credited up to 6 min that were never worked
+    // (e.g. logging in after a night off added 6 min straight away).
+    const wasOnline = current && current.status === "online" && deriveStatus(current, nowMs) === "online";
+    const creditSeconds = wasOnline
       ? Math.min(elapsedSinceWriteMs, HEARTBEAT_INTERVAL_MS * 2) / 1000
-      : HEARTBEAT_INTERVAL_MS / 1000;
+      : 0;
     daily.totalOnlineSeconds += creditSeconds;
     daily.lastActiveAt = nowIso;
     await kv.put(dailyKey(username, date), JSON.stringify(daily));
@@ -241,4 +247,73 @@ export async function getLastNDays(kv, username, n = 7) {
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 2026-11-03 — server-side presence from REAL actions.
+//
+// Problem: Active Agents relied ONLY on the browser heartbeat. An agent
+// whose browser never delivers it (ad-blocker / privacy extension
+// blocking a URL with "heartbeat" in it, an old cached page, a tab
+// opened in a way that never ran presence-heartbeat.js, …) showed
+// "Last seen —" and 0s online even while logging in, submitting tickets
+// and replying all day (reported for Joan, 11/03).
+//
+// Fix: login, ticket submit, Forward and thread actions (reply / solve /
+// edit …) now also mark the agent online server-side. These are things
+// a person only does while actually at the page, so they are counted as
+// "online". Background polling (thread list refresh) does NOT call this,
+// so an idle background tab can't fake online time.
+//
+// Uses the exact same storage + crediting as recordHeartbeat (time since
+// the previous write, capped), so heartbeat + actions never double-count.
+// Throttled: no write at all while the heartbeat is working; otherwise at
+// most one write per HEARTBEAT_INTERVAL_MS (3 min) per agent.
+// Never throws — presence must never break a submit/reply/login.
+// ---------------------------------------------------------------------------
+function uaInfo(ua) {
+  ua = String(ua || "");
+  let m, browser = "Unknown browser", os = "Unknown OS";
+  if ((m = ua.match(/Edg\/(\d+)/))) browser = `Edge ${m[1]}`;
+  else if ((m = ua.match(/OPR\/(\d+)/))) browser = `Opera ${m[1]}`;
+  else if ((m = ua.match(/Chrome\/(\d+)/)) && !/Chromium/.test(ua)) browser = `Chrome ${m[1]}`;
+  else if ((m = ua.match(/Firefox\/(\d+)/))) browser = `Firefox ${m[1]}`;
+  else if ((m = ua.match(/Version\/(\d+).*Safari/))) browser = `Safari ${m[1]}`;
+  if (/Windows NT/.test(ua)) os = "Windows";
+  else if (/Mac OS X/.test(ua) && !/iPhone|iPad/.test(ua)) os = "macOS";
+  else if (/Android/.test(ua)) os = "Android";
+  else if (/iPhone|iPad|iPod/.test(ua)) os = "iOS";
+  else if (/Linux/.test(ua)) os = "Linux";
+  const mobile = /Mobi|Android(?!.*Tablet)|iPhone|iPod/.test(ua) || (/Android|iPad|Tablet/.test(ua) && !/Windows NT/.test(ua));
+  return { device: mobile ? "mobile" : "desktop", browser: browser.slice(0, 40), os };
+}
+
+export async function touchPresenceFromAction(kv, username, request) {
+  try {
+    if (!kv || !username) return;
+    const current = await getCurrent(kv, username);
+    const nowMs = Date.now();
+    // Quota: if the agent is already Online and was written within the last
+    // heartbeat interval (3 min), the browser heartbeat is working — skip
+    // completely (1 KV read, 0 writes). Only agents whose heartbeat is NOT
+    // arriving get written here, at most once per 3 min.
+    if (current && current.status === "online" && deriveStatus(current, nowMs) === "online"
+      && nowMs - new Date(current.lastHeartbeat).getTime() < HEARTBEAT_INTERVAL_MS) return;
+    const info = uaInfo(request && request.headers ? request.headers.get("User-Agent") : "");
+    // Keep the device the browser heartbeat reported, if we have one —
+    // otherwise use what the User-Agent says.
+    const device = current?.device || info.device;
+    const browser = current?.browser || info.browser;
+    const os = current?.os || info.os;
+    await recordHeartbeat(kv, username, { status: "online", device, browser, os });
+  } catch (e) {
+    console.log("touchPresenceFromAction failed:", String((e && e.message) || e));
+  }
+}
+
+/** Fire-and-forget wrapper for request handlers. */
+export function presenceTouch(env, account, request, waitUntil) {
+  if (!env || !env.ACCOUNTS_KV || !account || !account.username) return;
+  const p = touchPresenceFromAction(env.ACCOUNTS_KV, account.username, request);
+  if (waitUntil) waitUntil(p); else p.catch(() => {});
 }

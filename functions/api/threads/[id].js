@@ -54,6 +54,7 @@ import {
   logDeletion, purgeOrphanIfStray,
 } from "../../_shared/threads.js";
 import { verifyRequest, canSeeBrand, canSeeCountry, canSeeModule, isOwnerGatedModule, requestIP, rankOf, ROLE_RANK } from "../../_shared/accounts.js";
+import { presenceTouch } from "../../_shared/presence.js";
 import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken } from "../../_shared/routing.js";
 import { isValidCountry, resolveThreadsStore } from "../../_shared/countries.js";
 import { updateRowByColumns } from "../../_shared/googleSheets.js";
@@ -175,6 +176,7 @@ export async function onRequestPost(context) {
 async function handleThreadAction({ request, env, params, waitUntil }) {
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
+  presenceTouch(env, account, request, waitUntil); // 2026-11-03 — reply/solve/edit counts as online
 
   const ip = requestIP(request);
   const logThread = (entry) => {

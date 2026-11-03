@@ -1,6 +1,7 @@
 import { BRANDS, RECORD_TO_SHEET, MODULE_META, SHEET_LAYOUT, MESSAGE_TEMPLATE, SCREENSHOT_R2_ENABLED, PROMOTION_SHEET_CONFIG, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken, DEPOSIT_CHANNEL_PSEUDO_MODULES, depositChannelModuleId } from "../_shared/routing.js";
 import { appendRowToSheet, appendRowByColumns, writeRowForDate, prewarmSheetsAccessToken } from "../_shared/googleSheets.js";
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
+import { presenceTouch } from "../_shared/presence.js";
 import { createThread, setThreadSheetRef } from "../_shared/threads.js";
 import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry } from "../_shared/accounts.js";
 import { getRouteOverride } from "../_shared/routes.js";
@@ -53,6 +54,7 @@ async function handleSubmit({ request, env, waitUntil }) {
   // stops an unauthenticated request hitting the API directly.
   const account = await verifyRequest(request, env);
   if (!account) return json({ ok: false, error: "Login required." }, 401);
+  presenceTouch(env, account, request, waitUntil); // 2026-11-03 — counts as online (Active Agents)
 
   let body;
   try {
