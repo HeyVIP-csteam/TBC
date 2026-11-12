@@ -3508,7 +3508,14 @@ html[data-theme="light"] {
         const countryPills = Array.from(document.querySelectorAll("#ap_countryGrid .brand-toggle-pill"));
         if (countryPills.length) {
           const selectedCountries = countryPills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.country);
-          payload.allowedCountries = selectedCountries.length === countryPills.length ? "all" : selectedCountries;
+          // 2026-11-12 FIX — only send "all" when EVERY currency in the
+          // system is offered AND selected. A PKR-only editor only sees
+          // the PKR pill; ticking it used to send "all", which the server
+          // reads as INR+PKR+PHP and rejects ("You can't grant access to
+          // INR, PHP…") — so delegated admins could never save anyone.
+          const allCodes = (typeof COUNTRY_CODES !== "undefined" && COUNTRY_CODES.length) ? COUNTRY_CODES : countryPills.map((p) => p.dataset.country);
+          const coversEveryCurrency = allCodes.every((c) => selectedCountries.includes(c));
+          payload.allowedCountries = coversEveryCurrency ? "all" : selectedCountries;
         }
         const pills = Array.from(document.querySelectorAll("#ap_brandGrid .brand-toggle-pill"));
         const selected = pills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.brand);
@@ -3907,7 +3914,11 @@ html[data-theme="light"] {
     function readCountryToggleSelection() {
       const pills = Array.from(document.querySelectorAll("#am_countryGrid .brand-toggle-pill"));
       const selected = pills.filter((p) => p.classList.contains("selected")).map((p) => p.dataset.country);
-      return { selected, allSelected: pills.length > 0 && selected.length === pills.length };
+      // 2026-11-12 FIX — "all" only when every currency in the system is
+      // selected (a single-currency creator ticking their only pill must
+      // send ["PKR"], not "all" = every currency, which the server rejects).
+      const allCodes = (typeof COUNTRY_CODES !== "undefined" && COUNTRY_CODES.length) ? COUNTRY_CODES : pills.map((p) => p.dataset.country);
+      return { selected, allSelected: pills.length > 0 && allCodes.every((c) => selected.includes(c)) };
     }
 
     // Rebuilds #am_brandGrid to show ONLY brands from currently-checked
