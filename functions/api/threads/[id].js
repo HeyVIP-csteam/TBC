@@ -48,6 +48,7 @@
  *   A thread outside an account's allowed brands 404s exactly like it
  *   doesn't exist, same as it's filtered out of the sidebar list.
  */
+import { readTelegramJson, logTelegramIssue } from "../../_shared/telegram.js";
 import {
   getThread, setSolved, softDeleteThread, appendMessage,
   updateRootText, updateThreadDetails, markRootRecalled, editMessageInThread, removeMessageFromThread,
@@ -338,6 +339,7 @@ async function handleThreadAction({ request, env, params, waitUntil }) {
       }
     } catch (e) {
       console.error(`[threads/[id].js] Reply send failed for thread ${thread.id}: ${String(e.message || e)}`);
+      logTelegramIssue(env, waitUntil, { agent: account.username, ip, action: "TG reply failed", brand: thread.brand, topic: `${thread.moduleName || thread.module} — ${thread.title || thread.id}`, step: attachments.length ? `Reply with ${attachments.length} attachment(s)` : "Reply text", error: String(e.message || e), outcome: "Reply NOT sent — may still be in the TG group", chatId: thread.chatId, topicId: thread.topicId });
       return json({ ok: false, error: String(e.message || e) }, 502);
     }
 
@@ -692,7 +694,7 @@ async function sendReplySingleWithCaption(botToken, thread, text, attachment, re
   if (text) form.append("caption", text);
 
   const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, { method: "POST", body: form });
-  const data = await res.json();
+  const data = await readTelegramJson(res);
   if (!data.ok) {
     // 2026-09-03 — same fallback as submit.js's sendSingleWithCaption():
     // Telegram's sendPhoto rejects extreme-aspect-ratio or oversized-
@@ -763,7 +765,7 @@ async function sendReplyMediaGroup(botToken, thread, text, attachments, replyId)
   }
 
   const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMediaGroup`, { method: "POST", body: form });
-  const data = await res.json();
+  const data = await readTelegramJson(res);
   if (!data.ok) {
     console.error(`[threads/[id].js] Reply sendMediaGroup rejected by Telegram (${attachments.length} attachment(s)): ${data.description || "unknown error"}`);
     throw new Error(data.description || "Telegram send failed.");

@@ -41,3 +41,52 @@ export async function sendTelegramMessage(botToken, { chatId, topicId, text }) {
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 2026-11-19 — safe reader for Telegram Bot API responses.
+// When Telegram (or the network between Cloudflare and Telegram) has a
+// hiccup, api.telegram.org can answer with a plain-text / HTML gateway
+// page such as "error code: 502" instead of JSON. `await res.json()` then
+// THROWS ("Unexpected token 'e' … is not valid JSON"), which skipped every
+// fallback and surfaced to the agent as a cryptic "Unexpected server
+// error". This returns a normal Telegram-style { ok:false, description }
+// instead, so the existing fallbacks / error messages work.
+// ---------------------------------------------------------------------------
+export async function readTelegramJson(res) {
+  const raw = await res.text().catch(() => "");
+  try {
+    const data = JSON.parse(raw);
+    if (data && typeof data === "object") return data;
+  } catch { /* not JSON — fall through */ }
+  const status = res.status || 0;
+  return {
+    ok: false,
+    error_code: status,
+    transient: status >= 500 || status === 429 || status === 0,
+    description: `Telegram is temporarily unavailable (HTTP ${status}${raw ? `: ${raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 60)}` : ""})`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 2026-11-20 — record Telegram send problems in Activity Logs (category
+// "Telegram") so they can be investigated later (Cloudflare's live log is
+// not stored). Written ONLY when something goes wrong — zero extra writes
+// on normal sends. Never throws.
+//   step:    "Album/photo" | "Text message" | "Forward" | "Reply"
+//   outcome: e.g. "Recovered — sent as text", "Ticket NOT saved in TBC"
+// ---------------------------------------------------------------------------
+export function logTelegramIssue(env, waitUntil, { agent, ip, action, brand, topic, step, error, outcome, chatId, topicId }) {
+  const parts = [
+    brand ? `Brand: ${brand}` : "",
+    topic ? `Topic: ${topic}` : "",
+    step ? `Step: ${step}` : "",
+    error ? `Telegram said: ${String(error).slice(0, 300)}` : "",
+    outcome ? `Result: ${outcome}` : "",
+    chatId ? `Group: ${chatId}${topicId ? ` / topic ${topicId}` : ""}` : "",
+  ].filter(Boolean);
+  const p = import("./activityLog.js")
+    .then(({ logActivity }) => logActivity(env, { category: "Telegram", action: action || "Telegram send problem", agent: agent || "unknown", ip: ip || "", detail: parts.join(" · ") }))
+    .catch(() => {});
+  if (waitUntil) { try { waitUntil(p); } catch { /* ignore */ } }
+  return p;
+}

@@ -45,6 +45,7 @@
  * addForwardedToLink()) — both rendered in threads.html as a small
  * clickable "↗️ Forwarded to/from ..." reference card.
  */
+import { readTelegramJson, logTelegramIssue } from "../_shared/telegram.js";
 import { BRANDS, MODULE_META, MESSAGE_TEMPLATE, PROMOTION_MESSAGE_TEMPLATE, RECORD_TO_SHEET, SHEET_LAYOUT, PROMOTION_SHEET_CONFIG, SCREENSHOT_R2_ENABLED, resolveBotToken } from "../_shared/routing.js";
 import { appendRowByColumns, writeRowForDate } from "../_shared/googleSheets.js";
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
@@ -219,6 +220,7 @@ async function handlePost({ request, env, waitUntil }) {
     tgResult = await sendCombinedAttachments({ botToken, route, text, fileIds, newAttachments: newAttachments || [] });
   } catch (e) {
     console.error(`[forward.js] Telegram send failed: ${String((e && e.message) || e)}`);
+    logTelegramIssue(env, waitUntil, { agent: account.username, ip: request.headers.get("CF-Connecting-IP") || "", action: "TG forward failed", brand: BRANDS[brandId]?.name || brandId, topic: meta.name, step: "Forward", error: String((e && e.message) || e), outcome: "Forward NOT sent — may still be in the TG group", chatId: route.chatId, topicId: route.topicId });
     return json({ ok: false, error: `Telegram send failed: ${String((e && e.message) || e)}` }, 502);
   }
   // Fallback link resolveColumnValues() reaches for when THIS module
@@ -400,7 +402,7 @@ async function sendCombinedAttachments({ botToken, route, text, fileIds, newAtta
   }
 
   const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMediaGroup`, { method: "POST", body: form });
-  const data = await res.json();
+  const data = await readTelegramJson(res);
   if (!data.ok) {
     console.error(`[forward.js] sendMediaGroup rejected by Telegram (${fileIds.length} carried-over + ${newAttachments.length} new): ${data.description || "unknown error"}`);
     // Most likely cause: one of the carried-over file_ids isn't
@@ -469,7 +471,7 @@ async function sendOneFreshUpload({ botToken, route, text, attachment }) {
   }
 
   const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, { method: "POST", body: form });
-  const data = await res.json();
+  const data = await readTelegramJson(res);
   if (!data.ok) throw new Error(data.description || "unknown Telegram error");
   const fileId = isImage
     ? data.result.photo?.[data.result.photo.length - 1]?.file_id
@@ -496,7 +498,7 @@ function base64ToBytes(base64) {
 // uploadBytesToR2 below) instead of streamed to a browser.
 async function downloadTelegramFile(botToken, fileId) {
   const infoRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(fileId)}`);
-  const info = await infoRes.json();
+  const info = await readTelegramJson(infoRes);
   if (!info.ok) throw new Error(info.description || "Telegram couldn't resolve this file.");
   const filePath = info.result.file_path;
   const fileRes = await fetch(`https://api.telegram.org/file/bot${botToken}/${filePath}`);

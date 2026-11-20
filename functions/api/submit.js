@@ -1,9 +1,10 @@
 import { BRANDS, RECORD_TO_SHEET, MODULE_META, SHEET_LAYOUT, MESSAGE_TEMPLATE, SCREENSHOT_R2_ENABLED, PROMOTION_SHEET_CONFIG, PROMOTION_MESSAGE_TEMPLATE, resolveBotToken, DEPOSIT_CHANNEL_PSEUDO_MODULES, depositChannelModuleId } from "../_shared/routing.js";
+import { readTelegramJson, logTelegramIssue } from "../_shared/telegram.js";
 import { appendRowToSheet, appendRowByColumns, writeRowForDate, prewarmSheetsAccessToken } from "../_shared/googleSheets.js";
 import { uploadAttachmentToR2, screenshotUrl } from "../_shared/r2.js";
 import { presenceTouch } from "../_shared/presence.js";
 import { createThread, setThreadSheetRef } from "../_shared/threads.js";
-import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry } from "../_shared/accounts.js";
+import { verifyRequest, canSeeBrand, canSeeModule, canSeeCountry, requestIP } from "../_shared/accounts.js";
 import { getRouteOverride } from "../_shared/routes.js";
 import { getIssueSheetOverride, resolveWriteTab, promotionModuleId } from "../_shared/issueSubmissionSheets.js";
 import { resolveColumnValues, resolveSheetLayout, formatDateDDMMYYYY, buildTicketMessage, buildTitleAndSummary } from "../_shared/messageBuilders.js";
@@ -273,6 +274,9 @@ async function handleSubmit({ request, env, waitUntil }) {
 
   let tgResult;
   const attachmentErrors = [];
+  // 2026-11-20 — Activity Logs (category "Telegram") on any send problem.
+  const tgLogBase = { agent: account.username, ip: requestIP(request), brand: `${brand.name} (${brand.country})`, topic: meta.name, chatId: route.chatId, topicId: route.topicId };
+  const logTg = (entry) => logTelegramIssue(env, waitUntil, { ...tgLogBase, ...entry });
   try {
     tgResult = await sendTelegramWithAttachments({ botToken, route, text, attachments: attachments || [] });
   } catch (e) {
@@ -283,8 +287,24 @@ async function handleSubmit({ request, env, waitUntil }) {
     console.error(`[submit.js] Attachment send failed, falling back to text-only message: ${String(e.message || e)}`);
     attachmentErrors.push(String(e.message || e));
     const fallback = await sendTelegramMessage({ botToken, route, text });
+    logTg({
+      action: fallback.ok ? "TG send failed — recovered" : "TG send failed — ticket not saved",
+      step: (attachments || []).length ? `Album/photo (${attachments.length} file${attachments.length > 1 ? "s" : ""})` : "Text message",
+      error: String(e.message || e) + (fallback.ok ? "" : ` | text fallback: ${fallback.error}`),
+      outcome: fallback.ok
+        ? "Sent as text-only message (screenshots missing); saved in TBC + sheet"
+        : "NOT saved in TBC / sheet — may still be in the TG group",
+    });
     if (!fallback.ok) {
-      return json({ ok: false, error: `Telegram send failed: ${fallback.error}` }, 502);
+      // 2026-11-19 — Telegram's gateway can answer 502 even though the
+      // message WAS delivered (seen in production: album appeared in the
+      // group, TBC got "error code: 502"). So never claim "not posted":
+      // tell the agent to check the group first, to avoid both a lost
+      // ticket and an untracked duplicate.
+      const msg = fallback.transient
+        ? `Telegram didn't confirm the send (${fallback.error}). It was NOT saved in TBC / the sheet, but it MAY already be in the TG group. Check the group first: if the ticket is there, delete it there, then submit again here so TBC tracks it; if it isn't there, just submit again.`
+        : `Telegram send failed: ${fallback.error}`;
+      return json({ ok: false, error: msg }, 502);
     }
     tgResult = { messageId: fallback.messageId, messageIds: [fallback.messageId], attachmentLinks: [], attachmentFileIds: [] };
   }
@@ -433,14 +453,23 @@ async function sendTelegramMessage({ botToken, route, text }) {
   };
   if (route.topicId) payload.message_thread_id = route.topicId;
 
-  const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json();
+  // 2026-11-19 — no automatic retry on purpose (decided 2026-11-20: first
+  // find the real cause via Activity Logs → 📡 Telegram, then decide).
+  // A network error / non-JSON reply is turned into a normal failure
+  // instead of crashing the whole request.
+  let data;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    data = await readTelegramJson(res);
+  } catch (e) {
+    data = { ok: false, transient: true, description: `Could not reach Telegram (${String(e && e.message || e)})` };
+  }
   if (!data.ok) {
-    return { ok: false, error: data.description || "unknown Telegram error" };
+    return { ok: false, error: data.description || "unknown Telegram error", transient: !!data.transient };
   }
   return { ok: true, messageId: data.result.message_id };
 }
@@ -585,7 +614,7 @@ async function sendSingleWithCaption({ botToken, route, text, attachment, forceD
   }
 
   const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, { method: "POST", body: form });
-  const data = await res.json();
+  const data = await readTelegramJson(res);
   if (!data.ok) {
     // 2026-09-03 — Telegram's sendPhoto rejects images with an extreme
     // aspect ratio (over ~20:1) or width+height above 10000px with
@@ -653,7 +682,7 @@ async function sendMediaGroup({ botToken, route, text, attachments }) {
   }
 
   const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMediaGroup`, { method: "POST", body: form });
-  const data = await res.json();
+  const data = await readTelegramJson(res);
   if (!data.ok) {
     console.error(`[submit.js] sendMediaGroup rejected by Telegram (${attachments.length} attachment(s)): ${data.description || "unknown error"}`);
     throw new Error(data.description || "unknown Telegram error");
